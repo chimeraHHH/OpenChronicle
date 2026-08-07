@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-candidate"
+description = "Enables the get_candidate command without any pre-configured scope."
+commands.allow = ["get_candidate"]
+
+[[permission]]
+identifier = "deny-get-candidate"
+description = "Denies the get_candidate command without any pre-configured scope."
+commands.deny = ["get_candidate"]

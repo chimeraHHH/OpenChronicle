@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-trace-provenance"
+description = "Enables the trace_provenance command without any pre-configured scope."
+commands.allow = ["trace_provenance"]
+
+[[permission]]
+identifier = "deny-trace-provenance"
+description = "Denies the trace_provenance command without any pre-configured scope."
+commands.deny = ["trace_provenance"]

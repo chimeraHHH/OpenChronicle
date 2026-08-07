@@ -1,0 +1,1 @@
+{"main-review":{"identifier":"main-review","description":"Least-privilege access for the single trusted OpenChronicle review window.","local":true,"windows":["main"],"permissions":["desktop-read","desktop-review","core:event:allow-listen","core:event:allow-unlisten"],"platforms":["macOS"]}}

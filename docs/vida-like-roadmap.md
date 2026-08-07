@@ -92,6 +92,10 @@ duplicate reduction, and a seven-day soak without data corruption.
 - [x] One canonical, revisioned, evidence-backed Daily Wrap per local day and timezone.
 - [x] CLI review inbox, source tracing, Daily Wrap generation/read commands, and daemon worker.
 - [ ] Native desktop shell for permissions, pause/exclusions, source drawer, and review inbox.
+  The capability-scoped Tauri/React source slice and one-shot Python bridge are
+  implemented on the desktop-shell branch. This stays open until the bridge is
+  bundled self-contained and a signed/notarized macOS build passes TCC,
+  accessibility, pause-latency, and adversarial source-drawer validation.
 - [ ] Provenance-aware compaction and deterministic supersede proposals.
 
 The implemented backend contract, threat boundaries, and known limitations are
@@ -175,7 +179,8 @@ action needs a verified postcondition.
 4. Capture policy, redaction, and retention.
 5. Provenance spine and memory candidates. **Implemented on the Stage 1 branch.**
 6. Daily Wrap vertical slice. **Implemented on the Stage 1 branch.**
-7. Native review inbox, permissions shell, and source drawer.
+7. Native review inbox, permissions shell, and source drawer. **Source slice
+   implemented; signed macOS release validation remains.**
 
 Generic planning, connectors, and action execution intentionally start only
 after the earlier gates pass.

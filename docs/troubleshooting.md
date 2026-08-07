@@ -40,6 +40,36 @@ If the tree is `{}` or tiny across the board, open System Settings → Privacy &
 
 Second most common cause: **`ax_depth` too shallow for Electron apps.** See [capture.md](capture.md#ax-depth-the-1-footgun).
 
+## Desktop review shell cannot reach the local bridge
+
+Symptom: the Tauri shell reports that the desktop bridge is missing,
+unavailable, malformed, too large, or timed out.
+
+For a repository debug build, install the project into its local environment
+and confirm the fixed entry point exists:
+
+```bash
+uv sync --all-extras
+test -x .venv/bin/openchronicle-desktop-bridge
+printf '%s\n' '{"version":1,"operation":"snapshot","params":{"timeline_limit":0,"candidate_limit":0,"wrap_limit":0}}' \
+  | .venv/bin/openchronicle-desktop-bridge
+```
+
+The bridge must emit exactly one JSON response line and no captured content on
+stderr. Release builds do not search shell `PATH` and do not honor the debug
+override; the executable must be shipped beside the app or at a documented
+fixed install path. The current source slice deliberately does not bundle that
+sidecar, so an unsigned source build is not a release artifact.
+
+If pause/review reports a version conflict, refresh before retrying. Do not
+bypass it: the conflict is the compare-and-set fence preventing a stale window
+from overwriting a newer proposal or capture state. A changed permanent-forget
+preview must be reviewed again because its transitive deletion closure changed.
+If the desktop reports that the purge closure is unverifiable, repair or remove
+the affected local Markdown entry with the damaged provenance frame, rebuild the
+index, and request a fresh preview; the safe behavior is to retain data rather
+than claim that an incomplete deletion succeeded.
+
 ## No event-daily entries appearing
 
 Entries land in `~/.openchronicle/memory/event-YYYY-MM-DD.md` at session boundaries. Silence usually means one of three things.

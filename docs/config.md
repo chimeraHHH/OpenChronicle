@@ -135,6 +135,10 @@ Tuning notes:
   the current memory stages and currently cover the primary display rather than
   only the verified window. Enable them only for an explicit, non-sensitive
   debugging or future vision workflow.
+- **Desktop privacy view.** The Stage 1 shell displays these effective rules and
+  retention values read-only. It intentionally does not rewrite `config.toml`;
+  safe editing still requires a comment-preserving, allowlisted, etag-bound
+  settings service. Pause/resume is the only immediate privacy mutation.
 - **`ax_depth`.** Native Cocoa apps are fine at 20. Electron apps (Claude Desktop, VS Code, Slack, Notion) put user content past layer 20 — stay at 100 unless you're CPU-constrained.
 - **`debounce_seconds`.** Lower = more captures during typing; higher = fewer near-duplicates.
 - **`same_window_dedup_seconds`.** When the user types for a long time in the same document, this is the knob that decides how frequently you re-capture the same (bundle, window) pair. Focus changes always bypass this.

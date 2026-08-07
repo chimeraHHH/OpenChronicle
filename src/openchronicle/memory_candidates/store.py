@@ -225,6 +225,41 @@ def list_candidates(
     return [_to_candidate(row) for row in rows]
 
 
+def list_review_snapshot(conn: sqlite3.Connection, *, limit: int = 100) -> list[MemoryCandidate]:
+    """Prioritize actionable inbox rows, then append newest review history."""
+    if limit < 1 or limit > 1000:
+        raise ValueError("limit must be in [1, 1000]")
+    actionable = conn.execute(
+        """
+        SELECT * FROM memory_candidates
+         WHERE status IN ('pending', 'conflict', 'applying')
+         ORDER BY CASE status
+                    WHEN 'pending' THEN 0
+                    WHEN 'conflict' THEN 1
+                    ELSE 2
+                  END,
+                  created_at, id
+         LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    remaining = limit - len(actionable)
+    history = (
+        conn.execute(
+            """
+            SELECT * FROM memory_candidates
+             WHERE status IN ('accepted', 'rejected')
+             ORDER BY updated_at DESC, id
+             LIMIT ?
+            """,
+            (remaining,),
+        ).fetchall()
+        if remaining
+        else []
+    )
+    return [_to_candidate(row) for row in [*actionable, *history]]
+
+
 def active_conflicts(
     conn: sqlite3.Connection,
     *,
@@ -383,9 +418,7 @@ def put_tombstone(
     )
 
 
-def list_tombstones(
-    conn: sqlite3.Connection, *, kind: str | None = None
-) -> list[PurgeTombstone]:
+def list_tombstones(conn: sqlite3.Connection, *, kind: str | None = None) -> list[PurgeTombstone]:
     if kind is None:
         rows = conn.execute(
             "SELECT * FROM purge_tombstones ORDER BY requested_at, kind, path, artifact_id"
@@ -443,9 +476,7 @@ def set_tombstone_error(
     )
 
 
-def is_tombstoned(
-    conn: sqlite3.Connection, *, kind: str, artifact_id: str, path: str = ""
-) -> bool:
+def is_tombstoned(conn: sqlite3.Connection, *, kind: str, artifact_id: str, path: str = "") -> bool:
     row = conn.execute(
         """
         SELECT 1 FROM purge_tombstones

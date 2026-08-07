@@ -89,7 +89,12 @@ class DayContext:
         ]
         for record in sorted(
             self.records,
-            key=lambda item: (item.start_time, item.evidence.kind, item.evidence.path, item.evidence.id),
+            key=lambda item: (
+                item.start_time,
+                item.evidence.kind,
+                item.evidence.path,
+                item.evidence.id,
+            ),
         ):
             material.append(
                 json.dumps(
@@ -120,7 +125,12 @@ class ContextService:
         records.extend(self._event_records(start_utc, end_utc, zone, gaps))
         records.extend(self._session_records(start_utc, end_utc, gaps))
         records.sort(
-            key=lambda item: (item.start_time, item.evidence.kind, item.evidence.path, item.evidence.id)
+            key=lambda item: (
+                item.start_time,
+                item.evidence.kind,
+                item.evidence.path,
+                item.evidence.id,
+            )
         )
         records, dropped = _bound_records(records)
         if dropped:
@@ -148,12 +158,19 @@ class ContextService:
             policy_digest=_policy_digest(self.cfg),
         )
 
+    def evidence_allowed(
+        self,
+        subject: EvidenceRef,
+        *,
+        embedded_sources: list[EvidenceRef] | None = None,
+    ) -> bool:
+        """Return whether current capture policy permits a derived source."""
+        return self._derived_allowed(subject, embedded_sources=embedded_sources)
+
     def _timeline_records(
         self, start_utc: datetime, end_utc: datetime, gaps: list[str]
     ) -> list[ContextRecord]:
-        rows = self.conn.execute(
-            "SELECT * FROM timeline_blocks ORDER BY start_time, id"
-        ).fetchall()
+        rows = self.conn.execute("SELECT * FROM timeline_blocks ORDER BY start_time, id").fetchall()
         excluded_names = {name.casefold() for name in self.cfg.capture.excluded_app_names}
         records: list[ContextRecord] = []
         for row in rows:
@@ -168,9 +185,9 @@ class ContextService:
             if not _intersects(start, end, start_utc, end_utc):
                 continue
             clean_apps = [str(app) for app in apps] if isinstance(apps, list) else []
-            if any(app.casefold() in excluded_names for app in clean_apps) or not self._derived_allowed(
-                EvidenceRef(kind="timeline_block", id=row["id"])
-            ):
+            if any(
+                app.casefold() in excluded_names for app in clean_apps
+            ) or not self._derived_allowed(EvidenceRef(kind="timeline_block", id=row["id"])):
                 gaps.append(f"excluded_timeline_block:{row['id']}")
                 continue
             clean_entries = [str(entry).strip() for entry in entries if str(entry).strip()]
@@ -207,9 +224,7 @@ class ContextService:
         for path in files_store.list_memory_files():
             if not path.name.startswith("event-"):
                 continue
-            if candidate_store.is_tombstoned(
-                self.conn, kind="memory_file", artifact_id=path.name
-            ):
+            if candidate_store.is_tombstoned(self.conn, kind="memory_file", artifact_id=path.name):
                 gaps.append(f"purging_memory_file:{path.name}")
                 continue
             parsed = files_store.read_file(path)
@@ -225,12 +240,8 @@ class ContextService:
                 if not entry.provenance_valid:
                     gaps.append(f"invalid_event_provenance:{path.name}#{entry.id}")
                     continue
-                if not entries_store.dependency_sources_are_live(
-                    self.conn, entry.evidence_refs
-                ):
-                    gaps.append(
-                        f"stale_event_provenance:{path.name}#{entry.id}"
-                    )
+                if not entries_store.dependency_sources_are_live(self.conn, entry.evidence_refs):
+                    gaps.append(f"stale_event_provenance:{path.name}#{entry.id}")
                     continue
                 timestamp = _parse_local_timestamp(entry.timestamp, zone)
                 if timestamp is None:
@@ -238,9 +249,7 @@ class ContextService:
                 instant = timestamp.astimezone(UTC)
                 if not start_utc <= instant < end_utc:
                     continue
-                entry_ref = EvidenceRef(
-                    kind="memory_entry", id=entry.id, path=path.name
-                )
+                entry_ref = EvidenceRef(kind="memory_entry", id=entry.id, path=path.name)
                 if not self._derived_allowed(entry_ref, embedded_sources=entry.evidence_refs):
                     gaps.append(f"excluded_or_unverifiable_event_entry:{path.name}#{entry.id}")
                     continue
@@ -306,10 +315,7 @@ class ContextService:
             )
             if expected_observation_id != observation.id:
                 return False
-            if (
-                observation.content_hash
-                and observation_digest(data) != observation.content_hash
-            ):
+            if observation.content_hash and observation_digest(data) != observation.content_hash:
                 return False
             decision = privacy_policy.evaluate_window(
                 self.cfg.capture,
@@ -351,9 +357,7 @@ class ContextService:
                         kind="session",
                         id=row["id"],
                         timestamp=start.isoformat(),
-                        content_hash=content_digest(
-                            json.dumps(session_payload, sort_keys=True)
-                        ),
+                        content_hash=content_digest(json.dumps(session_payload, sort_keys=True)),
                     ),
                     start_time=start.isoformat(),
                     end_time=end.isoformat() if end else "",
@@ -403,9 +407,7 @@ def _policy_digest(cfg: Config) -> str:
         "allowed_bundle_ids": sorted(cfg.capture.allowed_bundle_ids),
         "excluded_bundle_ids": sorted(cfg.capture.excluded_bundle_ids),
         "excluded_app_names": sorted(cfg.capture.excluded_app_names),
-        "excluded_window_title_patterns": sorted(
-            cfg.capture.excluded_window_title_patterns
-        ),
+        "excluded_window_title_patterns": sorted(cfg.capture.excluded_window_title_patterns),
         "deny_unknown_windows": cfg.capture.deny_unknown_windows,
     }
     return hashlib.sha256(
@@ -487,7 +489,4 @@ def _even_sample(records: list[ContextRecord], limit: int) -> list[ContextRecord
         return list(records)
     if limit == 1:
         return [records[len(records) // 2]]
-    return [
-        records[index * (len(records) - 1) // (limit - 1)]
-        for index in range(limit)
-    ]
+    return [records[index * (len(records) - 1) // (limit - 1)] for index in range(limit)]

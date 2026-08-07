@@ -1,0 +1,22 @@
+[[set]]
+identifier = "desktop-read"
+description = "Bounded, local-only reads for the trusted review window."
+permissions = [
+  "allow-get-snapshot",
+  "allow-get-candidate",
+  "allow-preview-forget-candidate",
+  "allow-get-daily-wrap",
+  "allow-trace-provenance",
+  "allow-resolve-evidence",
+]
+
+[[set]]
+identifier = "desktop-review"
+description = "Explicit, candidate-scoped review and capture-pause mutations."
+permissions = [
+  "allow-edit-candidate",
+  "allow-approve-candidate",
+  "allow-reject-candidate",
+  "allow-forget-candidate",
+  "allow-set-capture-paused",
+]

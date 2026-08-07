@@ -11,6 +11,11 @@ build/
 .ruff_cache/
 .mypy_cache/
 
+# Desktop shell
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+
 # Editors / OS
 .DS_Store
 .idea/

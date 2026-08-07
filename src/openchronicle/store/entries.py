@@ -52,16 +52,19 @@ def _ensure_prefix(path_name: str) -> str:
 
 
 def create_file(
-    conn: sqlite3.Connection, *, name: str, description: str, tags: list[str]
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    description: str,
+    tags: list[str],
+    owner_candidate_id: str | None = None,
 ) -> Path:
     require_autocommit(conn)
     if not description.strip():
         raise ValueError("description is required")
     prefix = _ensure_prefix(name)
     path = files_mod.memory_path(name)
-    if candidate_store.is_tombstoned(
-        conn, kind="memory_file", artifact_id=path.name
-    ):
+    if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=path.name):
         raise RuntimeError(f"{path.name} is pending permanent purge")
     # Lock around the exists-check + write so two concurrent classifiers
     # deciding to create the same file don't both pass the check and have
@@ -71,6 +74,12 @@ def create_file(
             raise FileExistsError(f"{path.name} already exists")
 
         fm = files_mod.default_frontmatter(description=description, tags=tags)
+        if owner_candidate_id is not None:
+            files_mod.mark_candidate_owned(
+                fm,
+                candidate_id=owner_candidate_id,
+                path_name=path.name,
+            )
         files_mod.write_file(path, fm, body="")
         fts.upsert_file(
             conn,
@@ -154,9 +163,7 @@ def _append_entry(
     path = files_mod.memory_path(name)
     if not path.exists():
         raise FileNotFoundError(f"{path.name} does not exist; call create_file first")
-    if candidate_store.is_tombstoned(
-        conn, kind="memory_file", artifact_id=path.name
-    ):
+    if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=path.name):
         raise RuntimeError(f"{path.name} is pending permanent purge")
     prefix = _ensure_prefix(name)
 
@@ -190,18 +197,12 @@ def _append_entry(
     # write — both writes claim "+1 entry" but only one entry survives
     # while the FTS index keeps both, leaving file/index inconsistent.
     with files_mod.store_write_lock(), files_mod.file_lock(path):
-        if candidate_store.is_tombstoned(
-            conn, kind="memory_file", artifact_id=path.name
-        ):
+        if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=path.name):
             raise RuntimeError(f"{path.name} is pending permanent purge")
         post = frontmatter.load(path)
         if requested_id is not None:
             existing = next(
-                (
-                    entry
-                    for entry in files_mod._parse_entries(post.content)
-                    if entry.id == entry_id
-                ),
+                (entry for entry in files_mod._parse_entries(post.content) if entry.id == entry_id),
                 None,
             )
             if existing is not None:
@@ -235,9 +236,7 @@ def _append_entry(
                 if evidence_refs is not None:
                     provenance_store.replace_sources(
                         conn,
-                        subject=EvidenceRef(
-                            kind="memory_entry", id=entry_id, path=path.name
-                        ),
+                        subject=EvidenceRef(kind="memory_entry", id=entry_id, path=path.name),
                         sources=evidence_refs,
                     )
                 fts.upsert_file(
@@ -258,9 +257,7 @@ def _append_entry(
 
         current = post.content.rstrip()
         new_block = (
-            f"\n\n{heading}\n{rendered_body}\n"
-            if current
-            else f"{heading}\n{rendered_body}\n"
+            f"\n\n{heading}\n{rendered_body}\n" if current else f"{heading}\n{rendered_body}\n"
         )
         post.content = current + new_block
         post.metadata["entry_count"] = int(post.metadata.get("entry_count", 0)) + 1
@@ -271,8 +268,12 @@ def _append_entry(
             est_tokens = len(post.content) // 4
             if est_tokens > soft_limit_tokens and not post.metadata.get("needs_compact"):
                 post.metadata["needs_compact"] = True
-                logger.info("flagged %s for compact (est %d tokens > %d)",
-                            path.name, est_tokens, soft_limit_tokens)
+                logger.info(
+                    "flagged %s for compact (est %d tokens > %d)",
+                    path.name,
+                    est_tokens,
+                    soft_limit_tokens,
+                )
 
         files_mod.atomic_write_text(path, frontmatter.dumps(post) + "\n")
 
@@ -324,15 +325,12 @@ def delete_entry(conn: sqlite3.Connection, *, name: str, entry_id: str) -> bool:
     path = files_mod.memory_path(name)
     removed = False
     with files_mod.store_write_lock(), files_mod.file_lock(path):
+        _require_regular_memory_path(path)
         post = frontmatter.load(path) if path.exists() else None
         if post is not None:
             matches = list(files_mod.ENTRY_HEADING_RE.finditer(post.content))
             target_index = next(
-                (
-                    index
-                    for index, match in enumerate(matches)
-                    if match.group("id") == entry_id
-                ),
+                (index for index, match in enumerate(matches) if match.group("id") == entry_id),
                 None,
             )
             if target_index is not None:
@@ -355,22 +353,164 @@ def delete_entry(conn: sqlite3.Connection, *, name: str, entry_id: str) -> bool:
         provenance_store.delete_subject(conn, subject)
         provenance_store.delete_source_edges(conn, subject)
         if post is not None:
-            prefix = _ensure_prefix(name)
-            fts.upsert_file(
-                conn,
-                fts.FileRow(
-                    path=path.name,
-                    prefix=prefix,
-                    description=str(post.metadata.get("description", "")),
-                    tags=" ".join(post.metadata.get("tags", []) or []),
-                    status=str(post.metadata.get("status", "active")),
-                    entry_count=int(post.metadata.get("entry_count", 0)),
-                    created=str(post.metadata.get("created", "")),
-                    updated=str(post.metadata.get("updated", "")),
-                    needs_compact=1 if post.metadata.get("needs_compact") else 0,
-                ),
-            ),
+            if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=path.name):
+                # Do not resurrect candidate-derived file metadata in the
+                # crash gap between deleting the final entry and unlinking its
+                # candidate-owned container.
+                conn.execute("DELETE FROM files WHERE path=?", (path.name,))
+            else:
+                _upsert_file_projection(conn, path=path, post=post)
     return removed
+
+
+def require_regular_purge_entry_path(conn: sqlite3.Connection, *, name: str) -> None:
+    """Fail closed if a purge entry path is a symlink or non-regular file.
+
+    Purge calls this for every planned entry path before it mutates any Daily
+    Wrap or Markdown derivative. ``delete_entry`` repeats the same check while
+    holding the rewrite locks, closing the external-editor TOCTOU window for
+    each actual Markdown mutation.
+    """
+    require_autocommit(conn)
+    path = files_mod.memory_path(name)
+    with files_mod.store_write_lock(), files_mod.file_lock(path):
+        _require_regular_memory_path(path)
+
+
+def _require_regular_memory_path(path: Path) -> None:
+    if path.is_symlink():
+        raise RuntimeError("memory purge path changed to a symlink")
+    if path.exists() and not path.is_file():
+        raise RuntimeError("memory purge path is no longer a regular file")
+
+
+def finalize_candidate_owned_file(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    owner_candidate_id: str,
+    template_digest: str,
+    delete_if_empty: bool,
+) -> bool:
+    """Delete or sanitize one verified candidate-created container.
+
+    A file that still has unrelated entries or freeform body is retained, but
+    candidate-derived description/tags and both owner markers are replaced by
+    deterministic safe metadata. A missing path is an idempotent deletion.
+    The caller keeps a ``memory_file`` tombstone active through verification.
+    """
+    require_autocommit(conn)
+    path = files_mod.memory_path(name)
+    with files_mod.store_write_lock(), files_mod.file_lock(path):
+        if path.is_symlink():
+            raise RuntimeError("candidate-owned memory path changed to a symlink")
+        if not path.exists():
+            conn.execute("DELETE FROM files WHERE path=?", (path.name,))
+            return True
+        if not path.is_file():
+            raise RuntimeError("candidate-owned memory path is no longer a regular file")
+        try:
+            post = frontmatter.load(path)
+            fm = dict(post.metadata)
+        except Exception as exc:
+            raise RuntimeError("candidate-owned memory file is no longer readable") from exc
+
+        parsed_entries = files_mod._parse_entries(post.content)
+        surviving_tags = sorted({tag for entry in parsed_entries for tag in entry.tags})
+        ownership_is_current = (
+            files_mod.candidate_file_owner(fm, path_name=path.name) == owner_candidate_id
+            and fm.get(files_mod.CANDIDATE_FILE_TEMPLATE_DIGEST_KEY) == template_digest
+        )
+        already_sanitized = files_mod.candidate_file_is_sanitized(
+            fm,
+            surviving_tags=surviving_tags,
+            entry_count=len(parsed_entries),
+        )
+        if not ownership_is_current and not already_sanitized:
+            raise RuntimeError("candidate-owned memory file metadata changed after preview")
+        if already_sanitized:
+            _upsert_file_projection(conn, path=path, post=post)
+            return False
+
+        if delete_if_empty and not post.content.strip():
+            path.unlink()
+            # Persist the unlink just as atomic_write_text persists its rename.
+            with contextlib.suppress(OSError):
+                dir_fd = os.open(path.parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            conn.execute("DELETE FROM files WHERE path=?", (path.name,))
+            return True
+
+        post.metadata.pop(files_mod.CANDIDATE_FILE_OWNER_KEY, None)
+        post.metadata.pop(files_mod.CANDIDATE_FILE_TEMPLATE_DIGEST_KEY, None)
+        post.metadata["description"] = files_mod.SANITIZED_CANDIDATE_FILE_DESCRIPTION
+        post.metadata["tags"] = surviving_tags
+        post.metadata["entry_count"] = len(parsed_entries)
+        post.metadata["updated"] = files_mod.today()
+        files_mod.atomic_write_text(path, frontmatter.dumps(post) + "\n")
+        _upsert_file_projection(conn, path=path, post=post)
+        return False
+
+
+def require_candidate_owned_file(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    owner_candidate_id: str,
+    template_digest: str,
+    planned_entry_ids: set[str],
+) -> None:
+    """Fail before purge rewrites if the reviewed owned path was replaced."""
+    require_autocommit(conn)
+    path = files_mod.memory_path(name)
+    with files_mod.store_write_lock(), files_mod.file_lock(path):
+        if path.is_symlink():
+            raise RuntimeError("candidate-owned memory path changed to a symlink")
+        if not path.exists():
+            return
+        if not path.is_file():
+            raise RuntimeError("candidate-owned memory path is no longer a regular file")
+        try:
+            post = frontmatter.load(path)
+            fm = dict(post.metadata)
+        except Exception as exc:
+            raise RuntimeError("candidate-owned memory file is no longer readable") from exc
+
+        ownership_is_current = (
+            files_mod.candidate_file_owner(fm, path_name=path.name) == owner_candidate_id
+            and fm.get(files_mod.CANDIDATE_FILE_TEMPLATE_DIGEST_KEY) == template_digest
+        )
+        parsed_entries = files_mod._parse_entries(post.content)
+        surviving_tags = sorted({tag for entry in parsed_entries for tag in entry.tags})
+        already_sanitized = files_mod.candidate_file_is_sanitized(
+            fm,
+            surviving_tags=surviving_tags,
+            entry_count=len(parsed_entries),
+        ) and not any(entry.id in planned_entry_ids for entry in parsed_entries)
+        if not ownership_is_current and not already_sanitized:
+            raise RuntimeError("candidate-owned memory file metadata changed after preview")
+
+
+def _upsert_file_projection(
+    conn: sqlite3.Connection, *, path: Path, post: frontmatter.Post
+) -> None:
+    fts.upsert_file(
+        conn,
+        fts.FileRow(
+            path=path.name,
+            prefix=_ensure_prefix(path.name),
+            description=str(post.metadata.get("description", "")),
+            tags=" ".join(post.metadata.get("tags", []) or []),
+            status=str(post.metadata.get("status", "active")),
+            entry_count=int(post.metadata.get("entry_count", 0)),
+            created=str(post.metadata.get("created", "")),
+            updated=str(post.metadata.get("updated", "")),
+            needs_compact=1 if post.metadata.get("needs_compact") else 0,
+        ),
+    )
 
 
 def supersede_entry(
@@ -407,9 +547,7 @@ def _supersede_entry_locked(
     path = files_mod.memory_path(name)
     if not path.exists():
         raise FileNotFoundError(path.name)
-    if candidate_store.is_tombstoned(
-        conn, kind="memory_file", artifact_id=path.name
-    ):
+    if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=path.name):
         raise RuntimeError(f"{path.name} is pending permanent purge")
     body = new_content.strip()
     files_mod.validate_entry_body(body)
@@ -418,9 +556,7 @@ def _supersede_entry_locked(
         raise ValueError("supersede reason contains a reserved entry heading")
     if "-->" in clean_reason or files_mod.PROVENANCE_MARKER_RE.search(clean_reason):
         raise ValueError("supersede reason contains a reserved comment marker")
-    if tags is not None and any(
-        not tag or any(char.isspace() for char in tag) for tag in tags
-    ):
+    if tags is not None and any(not tag or any(char.isspace() for char in tag) for tag in tags):
         raise ValueError("entry tags must be non-empty and contain no whitespace")
 
     # Same shape as append_entry: read-modify-write on a markdown file
@@ -428,9 +564,7 @@ def _supersede_entry_locked(
     # readers from seeing a state where the file has the new entry but
     # FTS still doesn't (or vice versa).
     with files_mod.store_write_lock(), files_mod.file_lock(path):
-        if candidate_store.is_tombstoned(
-            conn, kind="memory_file", artifact_id=path.name
-        ):
+        if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=path.name):
             raise RuntimeError(f"{path.name} is pending permanent purge")
         parsed = files_mod.read_file(path)
         target = next((e for e in parsed.entries if e.id == old_entry_id), None)
@@ -493,10 +627,7 @@ def _supersede_entry_locked(
         )
 
         # 3) Append the new entry at the end
-        new_block = (
-            f"\n\n{new_heading}\n{body}\n"
-            f"{provenance_comment}\n"
-        )
+        new_block = f"\n\n{new_heading}\n{body}\n{provenance_comment}\n"
         if not text.endswith("\n"):
             text += "\n"
         text += new_block
@@ -555,13 +686,9 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
             conn.execute("DELETE FROM provenance_edges WHERE subject_kind='memory_entry'")
             file_count = 0
             entry_count = 0
-            pending_entries: list[
-                tuple[Path, str, files_mod.ParsedEntry]
-            ] = []
+            pending_entries: list[tuple[Path, str, files_mod.ParsedEntry]] = []
             for path in files_mod.list_memory_files():
-                if candidate_store.is_tombstoned(
-                    conn, kind="memory_file", artifact_id=path.name
-                ):
+                if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=path.name):
                     continue
                 try:
                     prefix = _ensure_prefix(path.name)
@@ -627,9 +754,7 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
                     )
                     provenance_store.record_sources(
                         conn,
-                        subject=EvidenceRef(
-                            kind="memory_entry", id=e.id, path=path.name
-                        ),
+                        subject=EvidenceRef(kind="memory_entry", id=e.id, path=path.name),
                         sources=e.evidence_refs,
                     )
                     rebuilt_hashes[(path.name, e.id)] = content_digest(e.body)
@@ -652,16 +777,12 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
         return file_count, entry_count
 
 
-def _require_live_dependency_sources(
-    conn: sqlite3.Connection, sources: list[EvidenceRef]
-) -> None:
+def _require_live_dependency_sources(conn: sqlite3.Connection, sources: list[EvidenceRef]) -> None:
     if not dependency_sources_are_live(conn, sources):
         raise ValueError("entry provenance dependency is missing or changed")
 
 
-def dependency_sources_are_live(
-    conn: sqlite3.Connection, sources: list[EvidenceRef]
-) -> bool:
+def dependency_sources_are_live(conn: sqlite3.Connection, sources: list[EvidenceRef]) -> bool:
     return _dependency_sources_are_live_recursive(
         conn,
         sources,
@@ -716,9 +837,7 @@ def _dependency_sources_are_live_recursive(
             except Exception:  # noqa: BLE001 - corrupt dependencies fail closed
                 cache[cache_key] = False
                 return False
-            entry = next(
-                (item for item in parsed.entries if item.id == source.id), None
-            )
+            entry = next((item for item in parsed.entries if item.id == source.id), None)
             if (
                 entry is None
                 or not entry.provenance_valid
@@ -740,9 +859,7 @@ def _dependency_sources_are_live_recursive(
             if not live:
                 return False
         if source.kind == "memory_candidate" and (
-            candidate_store.is_tombstoned(
-                conn, kind="memory_candidate", artifact_id=source.id
-            )
+            candidate_store.is_tombstoned(conn, kind="memory_candidate", artifact_id=source.id)
             or candidate_store.get(conn, source.id) is None
         ):
             return False
@@ -755,14 +872,13 @@ def _rebuild_dependency_sources_are_live(
     rebuilt_hashes: dict[tuple[str, str], str],
 ) -> bool:
     for source in sources:
-        if source.kind == "memory_entry" and rebuilt_hashes.get(
-            (source.path, source.id)
-        ) != source.content_hash:
+        if (
+            source.kind == "memory_entry"
+            and rebuilt_hashes.get((source.path, source.id)) != source.content_hash
+        ):
             return False
         if source.kind == "memory_candidate" and (
-            candidate_store.is_tombstoned(
-                conn, kind="memory_candidate", artifact_id=source.id
-            )
+            candidate_store.is_tombstoned(conn, kind="memory_candidate", artifact_id=source.id)
             or candidate_store.get(conn, source.id) is None
         ):
             return False

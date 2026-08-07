@@ -1,0 +1,513 @@
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const tauri = vi.hoisted(() => ({
+  invoke: vi.fn(),
+  listen: vi.fn(async () => () => undefined),
+}));
+
+vi.mock("@tauri-apps/api/core", () => ({ invoke: tauri.invoke }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: tauri.listen }));
+
+import { App } from "../App";
+import { desktopApi } from "../api";
+import { SourceDrawer } from "../components/SourceDrawer";
+import "../styles.css";
+import {
+  bridgeCandidateGet,
+  bridgeCandidateMutation,
+  bridgeResolvedEvidence,
+  bridgeSnapshot,
+  bridgeWrapGet,
+  candidateDetail,
+  candidateSummary,
+  forgetPreview,
+  maliciousText,
+  provenanceTrace,
+  resolvedEvidence,
+  snapshot,
+  wrapDetail,
+  wrapSummary,
+} from "./fixtures";
+
+function commandResult(command: string) {
+  if (command === "get_snapshot") return bridgeSnapshot();
+  if (command === "get_candidate") return bridgeCandidateGet();
+  if (command === "get_daily_wrap") return bridgeWrapGet();
+  if (command === "trace_provenance") return provenanceTrace;
+  if (command === "resolve_evidence") return bridgeResolvedEvidence();
+  if (command === "preview_forget_candidate") return forgetPreview;
+  if (command === "forget_candidate") return { candidate_id: "cand-1", removed_entry: true, removed_file_count: 1, invalidated_wrap_ids: ["daily-wrap-1"] };
+  if (command === "set_capture_paused") return { paused: true, changed: true };
+  if (command === "edit_candidate" || command === "approve_candidate" || command === "reject_candidate") {
+    return bridgeCandidateMutation();
+  }
+  throw new Error(`Unexpected command: ${command}`);
+}
+
+beforeEach(() => {
+  tauri.invoke.mockReset();
+  tauri.listen.mockClear();
+  tauri.invoke.mockImplementation(async (command: string) => commandResult(command));
+});
+
+describe("trusted console", () => {
+  it("keeps programmatically focused page landmarks free of a full-page outline", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    const main = screen.getByRole("main");
+    main.focus();
+
+    expect(main).toHaveFocus();
+    expect(getComputedStyle(main).outlineStyle).toBe("none");
+  });
+
+  it("states the narrow pause semantics and sends a request-wrapped CAS command", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Overview" })).toBeInTheDocument();
+    expect(
+      screen.getByText(/Pausing stops only new desktop captures.*already queued locally/is),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Pause new capture" }));
+
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("set_capture_paused", {
+        request: { expected_state: false, paused: true },
+      }),
+    );
+    expect(tauri.invoke.mock.calls.some(([command]) => command === "approve_candidate")).toBe(false);
+  });
+
+  it("allows capture to resume while the daemon health is degraded", async () => {
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") {
+        return bridgeSnapshot(snapshot({
+          daemon: { state: "degraded", health: "stale", pid: 1234, uptime: "2h" },
+          capture: {
+            paused: true,
+            state: "paused",
+            last_capture_at: "2026-08-08T09:00:00+08:00",
+            last_app: "Code",
+          },
+        }));
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Resume new capture" })).toBeEnabled();
+  });
+
+  it("does not let an older inbox refresh overwrite a newer capture snapshot", async () => {
+    const user = userEvent.setup();
+    let snapshotReads = 0;
+    let releaseOlderSnapshot: ((value: ReturnType<typeof bridgeSnapshot>) => void) | undefined;
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") {
+        snapshotReads += 1;
+        if (snapshotReads === 1) return bridgeSnapshot();
+        if (snapshotReads === 2) {
+          return new Promise<ReturnType<typeof bridgeSnapshot>>((resolve) => {
+            releaseOlderSnapshot = resolve;
+          });
+        }
+        return bridgeSnapshot(snapshot({
+          capture: {
+            paused: true,
+            state: "paused",
+            last_capture_at: "2026-08-08T09:59:30+08:00",
+            last_app: "Code",
+          },
+        }));
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect((await screen.findAllByText("Decided to keep the trusted boundary.")).length).toBeGreaterThanOrEqual(2);
+    await user.click(screen.getByRole("button", { name: "Save reviewed memory" }));
+    await waitFor(() => expect(snapshotReads).toBe(2));
+
+    await user.click(screen.getByRole("button", { name: "Overview" }));
+    await user.click(screen.getByRole("button", { name: "Pause new capture" }));
+    expect(await screen.findByRole("button", { name: "Resume new capture" })).toBeInTheDocument();
+
+    releaseOlderSnapshot?.(bridgeSnapshot());
+    await waitFor(() => expect(snapshotReads).toBe(3));
+    expect(screen.getByRole("button", { name: "Resume new capture" })).toBeInTheDocument();
+  });
+
+  it("renders prompt, HTML, and bidi source text inertly in the source drawer", async () => {
+    const user = userEvent.setup();
+    const summary = candidateSummary({ content_preview: maliciousText });
+    const detail = candidateDetail({ content: maliciousText });
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") {
+        return bridgeSnapshot(snapshot({ candidates: [summary] }));
+      }
+      if (command === "get_candidate") return bridgeCandidateGet(detail);
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect((await screen.findAllByText(maliciousText)).length).toBeGreaterThanOrEqual(2);
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector("script")).toBeNull();
+    expect(document.querySelector("a[href='x']")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "View sources" }));
+    const drawer = await screen.findByRole("dialog", { name: "Proposal sources" });
+    expect(await within(drawer).findByText(maliciousText)).toBeInTheDocument();
+    expect(within(drawer).getAllByText(maliciousText)[0]?.closest("bdi")).not.toBeNull();
+    expect((await within(drawer).findByText("current")).closest(".status-badge")).toHaveClass(
+      "status-badge--positive",
+    );
+    expect(document.querySelector("img")).toBeNull();
+    expect(document.querySelector("a")).toHaveClass("skip-link");
+    expect(tauri.invoke.mock.calls.some(([command]) => command === "approve_candidate")).toBe(false);
+  });
+
+  it("disables direct approval for a conflicting proposal", async () => {
+    const user = userEvent.setup();
+    const summary = candidateSummary({ status: "conflict" });
+    const detail = candidateDetail({ status: "conflict" });
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") {
+        return bridgeSnapshot(snapshot({
+          candidates: [summary],
+          review_counts: { pending: 0, conflict: 1, applying: 0, accepted: 0, rejected: 0 },
+        }));
+      }
+      if (command === "get_candidate") return bridgeCandidateGet(detail);
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect(await screen.findByRole("heading", { name: "Conflicting memory needs resolution" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save reviewed memory" })).toBeDisabled();
+  });
+
+  it("offers an idempotent resume action for an interrupted applying proposal", async () => {
+    const user = userEvent.setup();
+    const summary = candidateSummary({ status: "applying" });
+    const detail = candidateDetail({ status: "applying" });
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") {
+        return bridgeSnapshot(snapshot({
+          candidates: [summary],
+          review_counts: { pending: 0, conflict: 0, applying: 1, accepted: 0, rejected: 0 },
+        }));
+      }
+      if (command === "get_candidate") return bridgeCandidateGet(detail);
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect(await screen.findByRole("heading", { name: "A previous save needs to resume" })).toBeInTheDocument();
+    expect(screen.getByLabelText("1 need review")).toBeInTheDocument();
+    const resume = screen.getByRole("button", { name: "Resume saving memory" });
+    expect(resume).toBeEnabled();
+    await user.click(resume);
+
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("approve_candidate", {
+        request: { candidate_id: "cand-1", expected_version: 3 },
+      }),
+    );
+  });
+
+  it("clears the old proposal before a newly selected proposal fails to load", async () => {
+    const user = userEvent.setup();
+    const firstSummary = candidateSummary({ id: "cand-a", content_preview: "A preview" });
+    const secondSummary = candidateSummary({ id: "cand-b", content_preview: "B preview" });
+    tauri.invoke.mockImplementation(async (command: string, args?: { request?: { candidate_id?: string } }) => {
+      if (command === "get_snapshot") {
+        return bridgeSnapshot(snapshot({
+          candidates: [firstSummary, secondSummary],
+          review_counts: { pending: 2, conflict: 0, applying: 0, accepted: 0, rejected: 0 },
+        }));
+      }
+      if (command === "get_candidate" && args?.request?.candidate_id === "cand-a") {
+        return bridgeCandidateGet(candidateDetail({ id: "cand-a", content: "A detail only" }));
+      }
+      if (command === "get_candidate" && args?.request?.candidate_id === "cand-b") {
+        throw { code: "NOT_FOUND", message: "B detail unavailable" };
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect(await screen.findByText("A detail only")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /B preview/ }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("B detail unavailable");
+    expect(screen.queryByText("A detail only")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save reviewed memory" })).not.toBeInTheDocument();
+  });
+
+  it("surfaces a CAS conflict, reloads, and never overwrites silently", async () => {
+    const user = userEvent.setup();
+    let detailReads = 0;
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") return bridgeSnapshot();
+      if (command === "get_candidate") {
+        detailReads += 1;
+        return bridgeCandidateGet(candidateDetail({ version: detailReads === 1 ? 3 : 4, content: detailReads === 1 ? "Old proposal" : "Changed elsewhere" }));
+      }
+      if (command === "edit_candidate") {
+        throw { code: "VERSION_CONFLICT", message: "candidate version changed" };
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    await screen.findByText("Old proposal");
+    await user.click(screen.getByRole("button", { name: "Edit proposal" }));
+    const textarea = screen.getByRole("textbox", { name: "Memory text" });
+    await user.clear(textarea);
+    await user.type(textarea, "My reviewed text");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(
+      await screen.findByText(/changed since you opened it.*No change was applied/is),
+    ).toBeInTheDocument();
+    expect(await screen.findByText("Changed elsewhere")).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenCalledWith("edit_candidate", {
+      request: expect.objectContaining({ candidate_id: "cand-1", expected_version: 3 }),
+    });
+  });
+
+  it("preserves direct evidence after a mutation response that omits evidence", async () => {
+    const user = userEvent.setup();
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "edit_candidate") {
+        return bridgeCandidateMutation(candidateDetail({ content: "Reviewed proposal", version: 4 }));
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect(await screen.findByText("1 direct source(s)")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Edit proposal" }));
+    const textarea = screen.getByRole("textbox", { name: "Memory text" });
+    await user.clear(textarea);
+    await user.type(textarea, "Reviewed proposal");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(await screen.findByText("Changes saved to the proposal. Nothing was added to durable memory.")).toBeInTheDocument();
+    expect(screen.getByText("1 direct source(s)")).toBeInTheDocument();
+    expect(tauri.invoke.mock.calls.filter(([command]) => command === "get_candidate")).toHaveLength(1);
+  });
+
+  it("shows partial coverage and last-known-good without mutation actions", async () => {
+    const user = userEvent.setup();
+    const summary = wrapSummary({ status: "failed", coverage_status: "partial", revision: 2 });
+    const detail = wrapDetail({
+      status: "failed",
+      coverage_status: "partial",
+      revision: 2,
+      last_error: "TimeoutError: generation failed",
+      output: {
+        ...wrapDetail().output!,
+        status: "partial",
+        coverage_gaps: ["timeline_not_covered_through_day_end"],
+      },
+    });
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") return bridgeSnapshot(snapshot({ daily_wraps: [summary] }));
+      if (command === "get_daily_wrap") return bridgeWrapGet(detail);
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Daily Wrap" }));
+    expect(await screen.findByRole("heading", { name: "Showing the last successful revision" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Partial coverage" })).toBeInTheDocument();
+    expect(screen.getByText(/not up to date/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /accept/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /ignore/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /send/i })).not.toBeInTheDocument();
+  });
+
+  it("labels retained output as last-published while a new Daily Wrap is running", async () => {
+    const user = userEvent.setup();
+    const summary = wrapSummary({ status: "running", revision: 1 });
+    const detail = wrapDetail({ status: "running", revision: 1 });
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") return bridgeSnapshot(snapshot({ daily_wraps: [summary] }));
+      if (command === "get_daily_wrap") return bridgeWrapGet(detail);
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Daily Wrap" }));
+    expect(await screen.findByRole("heading", { name: "Showing the last published revision" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Generation is in progress" })).toBeInTheDocument();
+  });
+
+  it("binds permanent forget to the reviewed plan digest and delegates final confirmation", async () => {
+    const user = userEvent.setup();
+    const confirmSpy = vi.spyOn(window, "confirm");
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect((await screen.findAllByText("Decided to keep the trusted boundary.")).length).toBeGreaterThanOrEqual(2);
+    await user.click(screen.getByRole("button", { name: "Review permanent forget…" }));
+
+    expect(await screen.findByRole("heading", { name: "Deletion impact" })).toBeInTheDocument();
+    expect(screen.getByText(/Original captures and timeline sources may remain/i)).toBeInTheDocument();
+    expect(screen.getByText("candidate-created.md").closest("bdi")).not.toBeNull();
+    expect(screen.getByText("entry-1").closest("bdi")).not.toBeNull();
+    expect(screen.getByText("daily-wrap-1").closest("bdi")).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Continue to system confirmation" }));
+
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("forget_candidate", {
+        request: {
+          candidate_id: "cand-1",
+          expected_version: 3,
+          plan_digest: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        },
+      }),
+    );
+    expect(confirmSpy).not.toHaveBeenCalled();
+  });
+
+  it("locks proposal navigation while a deletion preview is being prepared", async () => {
+    const user = userEvent.setup();
+    let releasePreview: ((value: typeof forgetPreview) => void) | undefined;
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "preview_forget_candidate") {
+        return new Promise<typeof forgetPreview>((resolve) => {
+          releasePreview = resolve;
+        });
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect((await screen.findAllByText("Decided to keep the trusted boundary.")).length).toBeGreaterThanOrEqual(2);
+    await user.click(screen.getByRole("button", { name: "Review permanent forget…" }));
+
+    expect(screen.getByRole("button", { name: "Accepted" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "All" })).toBeDisabled();
+    releasePreview?.(forgetPreview);
+    expect(await screen.findByRole("heading", { name: "Deletion impact" })).toBeInTheDocument();
+  });
+
+  it("keeps the deletion preview after USER_CANCELLED without showing an error", async () => {
+    const user = userEvent.setup();
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "forget_candidate") {
+        throw { code: "USER_CANCELLED", message: "cancelled in native confirmation" };
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect((await screen.findAllByText("Decided to keep the trusted boundary.")).length).toBeGreaterThanOrEqual(2);
+    await user.click(screen.getByRole("button", { name: "Review permanent forget…" }));
+    await screen.findByRole("heading", { name: "Deletion impact" });
+    await user.click(screen.getByRole("button", { name: "Continue to system confirmation" }));
+
+    expect(await screen.findByText("System confirmation was cancelled. Nothing was deleted.")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Deletion impact" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("invalidates a stale purge preview and requires a fresh impact review", async () => {
+    const user = userEvent.setup();
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "forget_candidate") {
+        throw { code: "STALE_PURGE_PLAN", message: "purge closure changed" };
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    expect((await screen.findAllByText("Decided to keep the trusted boundary.")).length).toBeGreaterThanOrEqual(2);
+    await user.click(screen.getByRole("button", { name: "Review permanent forget…" }));
+    await screen.findByRole("heading", { name: "Deletion impact" });
+    await user.click(screen.getByRole("button", { name: "Continue to system confirmation" }));
+
+    expect(await screen.findByText(/deletion impact changed.*Nothing was deleted/is)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Deletion impact" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Review permanent forget…" })).toBeInTheDocument();
+  });
+
+  it("closes the non-modal source drawer with Escape and restores focus", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Review" }));
+    const sourceButton = await screen.findByRole("button", { name: "View sources" });
+    sourceButton.focus();
+    await user.click(sourceButton);
+    expect(await screen.findByRole("dialog", { name: "Proposal sources" })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Proposal sources" })).not.toBeInTheDocument();
+    expect(sourceButton).toHaveFocus();
+  });
+
+  it("does not attribute a previous subject's sources when the next trace fails", async () => {
+    tauri.invoke.mockImplementation(async (command: string, args?: { request?: { artifact_id?: string } }) => {
+      if (command === "trace_provenance" && args?.request?.artifact_id === "subject-a") {
+        return {
+          subject: { kind: "memory_candidate", id: "subject-a" },
+          direct_sources: [
+            {
+              kind: "timeline_block",
+              id: "source-a",
+              timestamp: "A-only source timestamp",
+              availability: "available",
+              integrity: "current",
+            },
+          ],
+          trace: [],
+        };
+      }
+      if (command === "trace_provenance" && args?.request?.artifact_id === "subject-b") {
+        throw { code: "NOT_FOUND", message: "B trace unavailable" };
+      }
+      if (command === "resolve_evidence") return bridgeResolvedEvidence();
+      return commandResult(command);
+    });
+    const view = render(
+      <SourceDrawer
+        api={desktopApi}
+        onClose={() => undefined}
+        subject={{ kind: "memory_candidate", id: "subject-a", label: "A sources" }}
+      />,
+    );
+
+    expect(await screen.findByText("A-only source timestamp")).toBeInTheDocument();
+    view.rerender(
+      <SourceDrawer
+        api={desktopApi}
+        onClose={() => undefined}
+        subject={{ kind: "memory_candidate", id: "subject-b", label: "B sources" }}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("B trace unavailable");
+    expect(screen.queryByText("A-only source timestamp")).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "B sources" })).toBeInTheDocument();
+  });
+});
