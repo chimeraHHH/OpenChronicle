@@ -123,6 +123,11 @@ class ClassifierConfig:
     # terminal classifier still runs at session end over any trailing
     # window that this tick hasn't covered. Clamped to >= 5 minutes.
     interval_minutes: int = 30
+    # Durable outbox retry poll and minimum worker lease. The worker renews
+    # before/after every provider call and raises the lease to one full call
+    # budget, so a healthy multi-tool round remains fenced without duplicates.
+    retry_seconds: int = 60
+    lease_seconds: int = 300
 
 
 @dataclass
@@ -319,6 +324,8 @@ daily_tick_minute = 55     # local-time minute for the daily safety-net tick
 
 [classifier]
 interval_minutes = 30      # durable-fact extraction cadence inside active sessions (min 5)
+retry_seconds = 60         # durable failed/expired delivery poll (1..3600)
+lease_seconds = 300        # minimum lease; auto-raised and renewed per provider call
 
 [memory]
 auto_dormant_days = 30

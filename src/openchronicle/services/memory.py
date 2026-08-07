@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import frontmatter
@@ -98,6 +99,7 @@ class MemoryService:
         conflict_key: str = "",
         producer_run_key: str = "",
         proposal_slot: int = 0,
+        transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
     ) -> MemoryCandidate:
         with _review_operation_lock():
             return self._propose_candidate_locked(
@@ -110,6 +112,7 @@ class MemoryService:
                 conflict_key=conflict_key,
                 producer_run_key=producer_run_key,
                 proposal_slot=proposal_slot,
+                transaction_guard=transaction_guard,
             )
 
     def _propose_candidate_locked(
@@ -124,6 +127,7 @@ class MemoryService:
         conflict_key: str,
         producer_run_key: str,
         proposal_slot: int,
+        transaction_guard: Callable[[sqlite3.Connection], None] | None,
     ) -> MemoryCandidate:
         target_path = _normalize_target_path(target_path)
         normalized_content = _normalize_content(content)
@@ -159,6 +163,8 @@ class MemoryService:
         candidate_id = "mc-" + idempotency_key[:24]
         self.conn.execute("BEGIN IMMEDIATE")
         try:
+            if transaction_guard is not None:
+                transaction_guard(self.conn)
             if candidate_store.is_tombstoned(
                 self.conn, kind="memory_file", artifact_id=target_path
             ):

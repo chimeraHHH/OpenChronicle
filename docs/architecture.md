@@ -28,6 +28,7 @@ flowchart LR
     subgraph memory [Memory Layer]
         direction TB
         ED[(event-YYYY-MM-DD.md)]
+        JOBS[(classifier_jobs<br/>durable outbox)]
         CLF["Classifier · LLM<br/>tool-call loop · 30 m tick + terminal"]
         CAND[(memory_candidates<br/>review inbox)]
         REVIEW["Trusted local review<br/>edit · approve · reject · forget"]
@@ -35,6 +36,7 @@ flowchart LR
         WRAP[(Daily Wrap<br/>opt-in · revisioned)]
         CMP["Compact · LLM<br/>on-demand"]
         ED --> CLF --> CAND --> REVIEW --> MF
+        JOBS <--> CLF
         ED --> WRAP
         BLOCKS --> WRAP
         MF -. read / rewrite .-> CMP
@@ -72,6 +74,7 @@ sequenceDiagram
     participant SM as Session mgr
     participant TL as Timeline tick
     participant R as S2 reducer
+    participant JOB as Classifier outbox
     participant CLF as Classifier
     participant DB as SQLite + memory/
     participant MCP as MCP / agent
@@ -92,19 +95,24 @@ sequenceDiagram
     R->>DB: read blocks · LLM · append [flush] entry
     R->>SM: advance flush_end
 
-    Note over CLF,DB: classifier tick · every 30 min
-    CLF->>DB: read event-daily (tagged sid:)<br/>+ timeline_blocks in window (grounding)
-    CLF->>DB: LLM tool-call loop → stage grounded candidates
-    CLF->>SM: advance classified_end
+    Note over SM,JOB: classifier cadence · default 30 min of proven flush coverage
+    SM->>JOB: request/coalesce periodic job through flush_end
+    JOB->>CLF: claim frozen window + token/expiry lease
+    CLF->>DB: read exact covered entries<br/>+ timeline_blocks; bind evidence digest
+    CLF->>JOB: renew around provider calls
+    CLF->>DB: lease/source-fenced candidate proposals
+    CLF->>JOB: explicit typed commit/skip receipt
+    JOB->>SM: atomically finalize classified_end + succeeded
 
     Note over CLF,DB: later, explicit trusted local review
     DB->>DB: revalidate evidence → deterministic Markdown write
 
     Note over SM,CLF: on_session_end<br/>(idle / soft-cut / timeout / shutdown / 23:55)
     SM->>R: terminal reduce (full trailing range)
-    R->>DB: final entry
-    R-->>CLF: on_done callback
-    CLF->>DB: classify trailing window
+    R->>DB: deterministic final entry or durable zero-block proof
+    R->>SM: mark reduced + exact-entry/typed-empty intent
+    SM-->>JOB: callback or recovery scan requests terminal job
+    JOB->>CLF: claim exact-entry delivery
 
     Note over MCP,DB: any time
     MCP->>DB: FTS search / list / read
@@ -121,13 +129,13 @@ Defined in `src/openchronicle/daemon.py`.
 | `timeline` | Every 60s scans closed wall-clock windows (default 1 min), runs the `timeline` LLM stage for populated windows, and records the inspected interval `[processed_from, processed_through)` (bucket-end proof `(processed_from, processed_through]`) across populated and proven-empty windows. A cold start backfills retained captures/pending sessions in bounded pages. Cleans buffer files only behind the valid upper bound. |
 | `session` | Every `session.tick_seconds` (default 30), calls `SessionManager.check_cuts()` so idle-gap and timeout cuts fire even when the dispatcher is quiet. |
 | `flush` | Every `session.flush_minutes` (default 5, clamped to 5-min floor), runs the reducer incrementally over the active session's newly closed timeline blocks (~5 of them at defaults) and appends `[flush]`-tagged partial entries to today's event-daily. |
-| `classifier-tick` | Every `classifier.interval_minutes` (default 30, min 5), runs the classifier over any event-daily entries appended since the session's `classified_end` bookmark. Silent no-op when no new entries have landed. |
+| `classifier-tick` | Polls every 5–60 seconds. When an active session has at least `classifier.interval_minutes` (default 30, min 5) of unclassified, durably flushed coverage, requests/coalesces a periodic job through `flush_end`; also recovers terminal intents and drains committed, pending, expired-running, and due-failed jobs. |
 | `pending-reducer` | Every 60s retries durable `ended`/due-`failed` rows. A terminal callback that beats the timeline producer remains `ended` until its final bucket lies inside the producer's durable coverage range. |
 | `daily-safety-net` | Once per local day at `reducer.daily_tick_hour:minute` (default 23:55), force-ends the currently-open session and reduces every stranded `ended`/`failed` session row — the "we survived a crash or midnight rollover" safety net. |
 | `daily-wrap` | Opt-in worker (disabled by default). After the configured post-midnight time, synthesizes the previous IANA-local day, retries/rechecks within the late-data grace window, and revises one canonical grounded wrap. Provider calls run on cancellable dedicated daemon threads; shutdown revokes the matching lease without waiting for a stuck provider. |
 | `mcp` | Hosts the Reader MCP server inside the daemon. Exponential backoff on crash. |
 
-The session cutter itself doesn't have a dedicated task — it runs inline on every persisted, non-duplicate watcher or heartbeat capture via the `pre_capture_hook` wired in `daemon.py`. Session-end callbacks spawn the reducer on a daemon thread; if the final timeline bucket is still pending, the durable row stays queued for `pending-reducer`. A successful terminal write then fires the classifier over the trailing window. Each session's progress on both stages is bookkept on its sessions row: `flush_end` for the reducer, `classified_end` for the classifier.
+The session cutter itself does not have a dedicated task — it runs inline on every persisted, non-duplicate watcher or heartbeat capture via the `pre_capture_hook` wired in `daemon.py`. Session-end callbacks spawn the reducer on a daemon thread; if the final timeline bucket is still pending, the durable row stays queued for `pending-reducer`. A successful terminal write persists its exact entry identity and an owed-classification bit before any callback. The callback accelerates outbox recovery but is not required for correctness. `flush_end` proves reducer materialization; `classified_end` records only finalized, contiguous classifier coverage.
 
 The daemon also holds a private singleton file lease for its entire lifetime.
 CLI `status`/`stop` trust `.pid` only while that lease is held, so a PID reused
@@ -138,6 +146,58 @@ memory purge tombstones. This recovery is independent of Daily Wrap enablement.
 `--capture-only` is a strict no-model ingestion/debug mode: it disables the
 timeline, reducer/flush, classifier, and MCP paths. Capture, session bookkeeping,
 and the daily safety-net still run so session rows land on disk.
+
+## Classifier delivery transaction boundary
+
+The reducer and scheduler only request coverage. `classifier_jobs` is the
+authoritative delivery state machine:
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: deterministic request
+    pending --> running: claim fresh lease token
+    running --> running: renew before/after provider call
+    running --> failed: unreceipted error + backoff
+    failed --> running: due retry, same job/run key
+    running --> running: expired lease reclaimed with new token
+    running --> committed: typed commit-or-skip receipt
+    committed --> succeeded: atomic bookmark finalization
+    succeeded --> pending: contiguous periodic follow-up, when requested
+```
+
+Only one active delivery exists per session. A periodic request is limited by
+the session's durable `flush_end`; a terminal request is tied to the exact
+deterministic final reducer entry ID/path. Claiming freezes the execution
+window. New periodic coverage accumulates in `requested_end` and becomes a
+contiguous follow-up after the frozen window succeeds.
+
+There is one narrow no-entry terminal case. The reducer must first persist a
+typed zero-block proof after durable timeline coverage, and the classifier
+cursor must already cover any reducer flush prefix. Only then may the job carry
+`allow_empty` and publish the mutation-free `EMPTY_TERMINAL_SKIP`
+(`proven_empty_terminal`) receipt. Missing or ambiguous terminal evidence is not
+a successful no-op.
+
+The lease token is a mutation fence, not just a liveness hint. Candidate
+proposal and receipt transactions require the matching, unexpired token. The
+first evidence snapshot is bound by a digest over the file, window, evidence
+identities, and content hashes; proposal and commit transactions revalidate
+that digest, provenance/source liveness, and pending-purge state. A changed
+source or stale worker fails closed.
+
+Reducer output has an earlier generation fence as well: explicit cleanup bumps
+the reducer content generation under the review-operation lock. A reducer that
+started from the old generation cannot later publish its Markdown entry and
+session progress into the cleaned state.
+
+The `committed` row contains a validated, byte-bounded receipt with a boolean
+commit marker, summary, written/created identifiers, canonical candidate IDs,
+and the single typed empty-terminal proof when no commit occurred. It is
+persisted before progress moves.
+Finalization advances `classified_end` and marks `succeeded` atomically, or can
+be replayed after restart without another model call. This makes local delivery
+effects replay-safe; it does not make provider calls exactly-once and it does
+not approve candidates. See [writer.md](writer.md#durable-delivery-state-machine).
 
 ## The session boundary
 
@@ -159,7 +219,7 @@ restart, the next session, or the configured maximum duration.
 ├── config.toml               # single source of truth for runtime config
 ├── .pid                      # daemon PID; absence ⇒ stopped
 ├── .paused                   # sentinel — capture skips while present
-├── index.db                  # SQLite WAL; projections, provenance, candidates, wraps
+├── index.db                  # SQLite WAL; projections, provenance, classifier outbox, candidates, wraps
 ├── capture-buffer/           # S1-enriched {iso8601}.json captures
 ├── memory/
 │   ├── index.md              # auto-generated overview
@@ -223,6 +283,8 @@ src/openchronicle/
 ├── writer/
 │   ├── agent.py              # CLI entry: catch up pending sessions + classify
 │   ├── session_reducer.py    # S2: session → event-YYYY-MM-DD.md entry
+│   ├── classifier_jobs.py    # Durable outbox, lease fence, receipt/finalize state
+│   ├── classifier_delivery.py # Request recovery and due-job worker
 │   ├── classifier.py         # Proposes grounded durable facts for review
 │   ├── tools.py              # classifier read/search/propose/commit boundary
 │   ├── compact.py            # Per-file compaction with fact-preservation check
@@ -256,7 +318,7 @@ apps/desktop/
 
 - **Compression first, review before durable memory.** S1 → Timeline → S2 is a deterministic funnel with bounded prompt size at each step. The classifier can only stage evidence-linked candidates; a trusted local approval revalidates source hashes before materializing Markdown.
 - **Session as the natural unit.** A "session" — a bounded chunk of focused work — is what humans remember. Cutting on idle / app-switch / timeout produces event-daily entries with accurate time ranges, which solves the v1 problem of long sessions being under-reported after the first append.
-- **Periodic classifier, bookmarked.** The classifier fires on a 30-min interval during each active session, then attempts one last trailing-window pass at session end. Each successful pass advances `classified_end`, reducing repeat work while long sessions remain open. Crash scheduling is best-effort and has both duplicate-work and missed-terminal-pass windows, so classifier tools deduplicate against existing memory and the bookmark is not an exactly-once contract.
+- **Durable classifier delivery.** The 30-minute cadence requests only coverage proven by reducer `flush_end`; terminal reduction persists an exact-entry intent. A lease-fenced SQLite outbox binds deterministic jobs and evidence snapshots, receipts the explicit tool commit before atomically advancing `classified_end`, and recovers lost callbacks or post-commit crashes. Provider calls may repeat before a receipt, but stale workers cannot publish and stable proposal identities make local replay safe.
 - **Daily event files.** `event-YYYY-MM-DD.md` sorts alphabetically by day. Weekly files from v1 are left untouched — they stay searchable via FTS.
 - **One process, many tasks.** Avoids IPC overhead and keeps `index.db` single-writer in practice. SQLite WAL gives the MCP reader what it needs.
 - **MCP inside the daemon.** External MCP clients get a stable localhost URL instead of spawning a fresh stdio subprocess per session.
