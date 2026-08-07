@@ -86,11 +86,18 @@ duplicate reduction, and a seven-day soak without data corruption.
 
 ### Stage 1 — memory product and Daily Wrap
 
-- Shared `ContextService` and `MemoryService` behind typed local IPC.
-- Evidence references from observation through activity and durable memory.
-- Memory candidate review, conflicts, editing, and true forget/purge.
-- Desktop shell with permissions, pause, exclusions, source drawer, and review inbox.
-- One idempotent, evidence-backed Daily Wrap per day.
+- [x] Shared typed `ContextService` and `MemoryService`, with read-only MCP adapters.
+- [x] Evidence references from observation through activity and durable memory.
+- [x] Review-first classifier, candidate conflicts/editing/approval, and crash-resumable purge.
+- [x] One canonical, revisioned, evidence-backed Daily Wrap per local day and timezone.
+- [x] CLI review inbox, source tracing, Daily Wrap generation/read commands, and daemon worker.
+- [ ] Native desktop shell for permissions, pause/exclusions, source drawer, and review inbox.
+- [ ] Provenance-aware compaction and deterministic supersede proposals.
+
+The implemented backend contract, threat boundaries, and known limitations are
+documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1
+is not complete until the native review/source-drawer shell is built and its
+privacy UX is validated on a signed macOS build.
 
 ### Stage 2 — Suggest and Prepare
 
@@ -166,8 +173,9 @@ action needs a verified postcondition.
 2. Runtime/session/model-call reliability.
 3. Observation identity, event fidelity, atomic private persistence.
 4. Capture policy, redaction, and retention.
-5. Provenance spine and memory candidates.
-6. Daily Wrap vertical slice.
+5. Provenance spine and memory candidates. **Implemented on the Stage 1 branch.**
+6. Daily Wrap vertical slice. **Implemented on the Stage 1 branch.**
+7. Native review inbox, permissions shell, and source drawer.
 
 Generic planning, connectors, and action execution intentionally start only
 after the earlier gates pass.

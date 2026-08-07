@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from ..logger import get
+from ..memory_candidates import store as candidate_store
+from ..provenance.models import EvidenceRef, content_digest
+from ..services.memory import MemoryService
 from ..store import entries as entries_mod
 from ..store import files as files_mod
 from ..store import fts
@@ -21,29 +24,84 @@ class CommitState:
     written_ids: list[str] = field(default_factory=list)
     created_paths: list[str] = field(default_factory=list)
     flagged_compact: list[str] = field(default_factory=list)
+    candidate_ids: list[str] = field(default_factory=list)
+    allowed_evidence: dict[str, EvidenceRef] = field(default_factory=dict)
+    producer_run_key: str = ""
+    next_proposal_slot: int = 0
 
 
 # ─── tool implementations ────────────────────────────────────────────────
 
-def tool_read_memory(conn: sqlite3.Connection, *, path: str, tail_n: int = 10) -> dict[str, Any]:
-    p = files_mod.memory_path(path)
-    if not p.exists():
+def tool_read_memory(
+    conn: sqlite3.Connection,
+    *,
+    path: str,
+    tail_n: int = 10,
+    state: CommitState | None = None,
+) -> dict[str, Any]:
+    if isinstance(tail_n, bool) or not isinstance(tail_n, int) or not 1 <= tail_n <= 20:
+        return {"error": "tail_n must be an integer in [1, 20]"}
+    if path.strip().startswith("event-"):
+        return {"error": "classifier retrieval cannot open event-daily files"}
+    try:
+        p = files_mod.memory_path(path)
+    except ValueError:
         return {"error": f"file not found: {path}"}
-    parsed = files_mod.read_file(p)
-    tail = parsed.entries[-tail_n:] if tail_n > 0 else parsed.entries
-    return {
-        "path": path,
-        "description": parsed.description,
-        "tags": parsed.tags,
-        "status": parsed.status,
-        "entry_count": parsed.entry_count,
-        "updated": parsed.updated,
-        "entries": [
-            {"id": e.id, "timestamp": e.timestamp, "tags": e.tags, "body": e.body,
-             "superseded_by": e.superseded_by}
-            for e in tail
-        ],
-    }
+    with files_mod.store_write_lock(), files_mod.file_lock(p):
+        if candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=p.name
+        ):
+            return {"error": f"file not found: {path}"}
+        if not p.exists():
+            return {"error": f"file not found: {path}"}
+        parsed = files_mod.read_file(p)
+        if candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=p.name
+        ):
+            return {"error": f"file not found: {path}"}
+        if any(not entry.provenance_valid for entry in parsed.entries):
+            return {"error": f"invalid provenance frame in {path}"}
+        visible = [
+            entry
+            for entry in parsed.entries
+            if not candidate_store.is_tombstoned(
+                conn, kind="memory_entry", artifact_id=entry.id, path=p.name
+            )
+            and entries_mod.dependency_sources_are_live(
+                conn, entry.evidence_refs
+            )
+        ]
+        tail = visible[-tail_n:]
+        entries: list[dict[str, Any]] = []
+        for entry in tail:
+            ref = EvidenceRef(
+                kind="memory_entry",
+                id=entry.id,
+                path=p.name,
+                timestamp=entry.timestamp,
+                content_hash=content_digest(entry.body),
+            )
+            if state is not None:
+                state.allowed_evidence[ref.key] = ref
+            entries.append(
+                {
+                    "id": entry.id,
+                    "timestamp": entry.timestamp,
+                    "tags": entry.tags,
+                    "body": entry.body,
+                    "superseded_by": entry.superseded_by,
+                    "evidence_token": ref.key,
+                }
+            )
+        return {
+            "path": p.name,
+            "description": parsed.description,
+            "tags": parsed.tags,
+            "status": parsed.status,
+            "entry_count": len(visible),
+            "updated": parsed.updated,
+            "entries": entries,
+        }
 
 
 def tool_search_memory(
@@ -52,17 +110,129 @@ def tool_search_memory(
     query: str,
     top_k: int = 5,
     include_superseded: bool = False,
+    state: CommitState | None = None,
 ) -> dict[str, Any]:
-    hits = fts.search(
-        conn, query=query, top_k=top_k, include_superseded=include_superseded
-    )
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 20:
+        return {"error": "top_k must be an integer in [1, 20]"}
+    with files_mod.store_write_lock():
+        hits = fts.search(
+            conn,
+            query=query,
+            path_patterns=[
+                f"{prefix}*"
+                for prefix in files_mod.VALID_PREFIXES
+                if prefix != "event-"
+            ],
+            top_k=top_k,
+            include_superseded=include_superseded,
+        )
+        results: list[dict[str, Any]] = []
+        parsed_by_path: dict[str, files_mod.ParsedFile | None] = {}
+        for hit in hits:
+            if candidate_store.is_tombstoned(
+                conn, kind="memory_file", artifact_id=hit.path
+            ):
+                continue
+            if candidate_store.is_tombstoned(
+                conn, kind="memory_entry", artifact_id=hit.id, path=hit.path
+            ):
+                continue
+            if hit.path not in parsed_by_path:
+                try:
+                    parsed_by_path[hit.path] = files_mod.read_file(
+                        files_mod.memory_path(hit.path)
+                    )
+                except (FileNotFoundError, ValueError):
+                    parsed_by_path[hit.path] = None
+            parsed = parsed_by_path[hit.path]
+            if parsed is None:
+                continue
+            current = next(
+                (entry for entry in parsed.entries if entry.id == hit.id), None
+            )
+            if (
+                current is None
+                or not current.provenance_valid
+                or not entries_mod.dependency_sources_are_live(
+                    conn, current.evidence_refs
+                )
+                or content_digest(current.body) != content_digest(hit.content)
+            ):
+                continue
+            ref = EvidenceRef(
+                kind="memory_entry",
+                id=hit.id,
+                path=hit.path,
+                timestamp=hit.timestamp,
+                content_hash=content_digest(current.body),
+            )
+            if state is not None:
+                state.allowed_evidence[ref.key] = ref
+            results.append(
+                {
+                    "id": hit.id,
+                    "path": hit.path,
+                    "timestamp": hit.timestamp,
+                    "content": current.body,
+                    "rank": hit.rank,
+                    "evidence_token": ref.key,
+                }
+            )
     return {
         "query": query,
-        "results": [
-            {"id": h.id, "path": h.path, "timestamp": h.timestamp,
-             "content": h.content, "rank": h.rank}
-            for h in hits
-        ],
+        "results": results,
+    }
+
+
+def tool_propose_memory_candidate(
+    conn: sqlite3.Connection,
+    *,
+    kind: str,
+    path: str,
+    content: str,
+    tags: list[str],
+    evidence_tokens: list[str],
+    confidence: float | None,
+    conflict_key: str,
+    soft_limit_tokens: int,
+    state: CommitState,
+) -> dict[str, Any]:
+    proposal_slot = state.next_proposal_slot
+    if path.strip().startswith("event-"):
+        return {"error": "event-daily is reducer-owned and cannot receive candidates"}
+    if not evidence_tokens:
+        return {"error": "at least one evidence token is required"}
+    evidence: list[EvidenceRef] = []
+    for token in evidence_tokens:
+        ref = state.allowed_evidence.get(str(token))
+        if ref is None:
+            return {"error": f"unknown or unobserved evidence token: {token}"}
+        evidence.append(ref)
+    try:
+        candidate = MemoryService(
+            conn, soft_limit_tokens=soft_limit_tokens
+        ).propose_candidate(
+            kind=kind,
+            target_path=path,
+            content=content,
+            tags=tags,
+            evidence=evidence,
+            confidence=confidence,
+            conflict_key=conflict_key,
+            producer_run_key=state.producer_run_key,
+            proposal_slot=proposal_slot,
+        )
+    except (ValueError, FileNotFoundError) as exc:
+        return {"error": str(exc)}
+    state.next_proposal_slot += 1
+    if candidate.id not in state.candidate_ids:
+        state.candidate_ids.append(candidate.id)
+    return {
+        "ok": True,
+        "candidate_id": candidate.id,
+        "status": candidate.status,
+        "review_required": True,
+        "proposal_slot": proposal_slot,
     }
 
 
@@ -133,6 +303,10 @@ def tool_flag_compact(
     entries_mod.require_autocommit(conn)
     p = files_mod.memory_path(path)
     with files_mod.store_write_lock(), files_mod.file_lock(p):
+        if candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=p.name
+        ):
+            return {"error": f"file not found: {path}"}
         if not p.exists():
             return {"error": f"file not found: {path}"}
         files_mod._update_frontmatter_unlocked(p, {"needs_compact": True})
@@ -160,7 +334,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string", "description": "e.g. 'project-openchronicle.md'"},
-                    "tail_n": {"type": "integer", "default": 10},
+                    "tail_n": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "default": 10,
+                    },
                 },
                 "required": ["path"],
             },
@@ -175,7 +354,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string"},
-                    "top_k": {"type": "integer", "default": 5},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "default": 5,
+                    },
                     "include_superseded": {"type": "boolean", "default": False},
                 },
                 "required": ["query"],
@@ -270,6 +454,88 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 TOOL_NAMES = {t["function"]["name"] for t in TOOL_SCHEMAS}
 
 
+CLASSIFIER_TOOL_SCHEMAS: list[dict[str, Any]] = [
+    TOOL_SCHEMAS[0],
+    TOOL_SCHEMAS[1],
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_memory_candidate",
+            "description": (
+                "Stage one grounded durable-memory proposal for human review. "
+                "This never writes Markdown directly."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "description": "fact, preference, decision, person, project, tool, or topic",
+                    },
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
+                    "evidence_tokens": {
+                        "type": "array",
+                        "items": {"type": "string", "pattern": "^ev-[a-f0-9]+$"},
+                        "minItems": 1,
+                        "maxItems": 20,
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "conflict_key": {
+                        "type": "string",
+                        "description": "Stable subject/property key used to surface contradictions.",
+                    },
+                },
+                "required": ["kind", "path", "content", "tags", "evidence_tokens"],
+            },
+        },
+    },
+    TOOL_SCHEMAS[-1],
+]
+CLASSIFIER_TOOL_NAMES = {
+    tool["function"]["name"] for tool in CLASSIFIER_TOOL_SCHEMAS
+}
+
+
+def dispatch_classifier(
+    name: str,
+    args: dict[str, Any],
+    *,
+    conn: sqlite3.Connection,
+    soft_limit_tokens: int,
+    state: CommitState,
+) -> dict[str, Any]:
+    if name == "read_memory":
+        return tool_read_memory(
+            conn, path=args["path"], tail_n=args.get("tail_n", 10), state=state
+        )
+    if name == "search_memory":
+        return tool_search_memory(
+            conn,
+            query=args["query"],
+            top_k=args.get("top_k", 5),
+            include_superseded=args.get("include_superseded", False),
+            state=state,
+        )
+    if name == "propose_memory_candidate":
+        return tool_propose_memory_candidate(
+            conn,
+            kind=str(args.get("kind") or "fact"),
+            path=str(args.get("path") or ""),
+            content=str(args.get("content") or ""),
+            tags=list(args.get("tags") or []),
+            evidence_tokens=[str(token) for token in args.get("evidence_tokens") or []],
+            confidence=args.get("confidence"),
+            conflict_key=str(args.get("conflict_key") or ""),
+            soft_limit_tokens=soft_limit_tokens,
+            state=state,
+        )
+    if name == "commit":
+        return tool_commit(state, summary=args.get("summary", ""))
+    return {"error": f"unknown classifier tool: {name}"}
+
+
 def dispatch(
     name: str,
     args: dict[str, Any],
@@ -279,13 +545,16 @@ def dispatch(
     state: CommitState,
 ) -> dict[str, Any]:
     if name == "read_memory":
-        return tool_read_memory(conn, path=args["path"], tail_n=args.get("tail_n", 10))
+        return tool_read_memory(
+            conn, path=args["path"], tail_n=args.get("tail_n", 10), state=state
+        )
     if name == "search_memory":
         return tool_search_memory(
             conn,
             query=args["query"],
             top_k=args.get("top_k", 5),
             include_superseded=args.get("include_superseded", False),
+            state=state,
         )
     if name == "append":
         return tool_append(

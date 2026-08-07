@@ -14,6 +14,7 @@ import frontmatter
 
 from ..config import Config
 from ..logger import get
+from ..memory_candidates import store as candidate_store
 from ..prompts import load as load_prompt
 from ..store import entries as entries_mod
 from ..store import files as files_mod
@@ -52,12 +53,46 @@ def compact_file(cfg: Config, conn: sqlite3.Connection, *, name: str) -> Compact
     # Markdown/FTS mutation. Release both during the slow LLM call; writeback
     # re-acquires them and rejects a stale rewrite below.
     with files_mod.store_write_lock(), files_mod.file_lock(path):
+        if candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=path.name
+        ):
+            return CompactResult(
+                name, False, 0, 0, 0, 0, 0.0, "file pending permanent purge"
+            )
         try:
             original = path.read_text()
         except FileNotFoundError:
             return CompactResult(name, False, 0, 0, 0, 0, 0.0, "file missing")
+        parsed_original = files_mod.read_file(path)
     before_unique = _unique_tokens(original)
     before_tokens = len(original) // 4
+    invalid = [entry for entry in parsed_original.entries if not entry.provenance_valid]
+    projected = conn.execute(
+        """
+        SELECT 1 FROM provenance_edges
+         WHERE subject_kind='memory_entry' AND subject_path=? LIMIT 1
+        """,
+        (path.name,),
+    ).fetchone()
+    if invalid or projected or any(
+        entry.provenance_present or entry.evidence_refs
+        for entry in parsed_original.entries
+    ):
+        reason = (
+            "invalid provenance frame; refusing compaction"
+            if invalid
+            else "provenance-bearing entries require a provenance-aware compactor"
+        )
+        return CompactResult(
+            name,
+            False,
+            before_tokens,
+            before_tokens,
+            len(before_unique),
+            len(before_unique),
+            1.0,
+            reason,
+        )
 
     system = load_prompt("compact.md")
     user = (
@@ -118,6 +153,19 @@ def compact_file(cfg: Config, conn: sqlite3.Connection, *, name: str) -> Compact
     # can take tens of seconds; reducers/classifiers may append while it runs.
     # Overwriting after a stale read would silently drop those new entries.
     with files_mod.store_write_lock(), files_mod.file_lock(path):
+        if candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=path.name
+        ):
+            return CompactResult(
+                name,
+                False,
+                before_tokens,
+                before_tokens,
+                len(before_unique),
+                len(before_unique),
+                1.0,
+                "file pending permanent purge",
+            )
         try:
             current = path.read_text()
         except FileNotFoundError:

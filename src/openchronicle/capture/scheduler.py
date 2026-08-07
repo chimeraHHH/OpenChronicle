@@ -315,6 +315,7 @@ def _index_capture(file_stem: str, out: dict[str, Any]) -> None:
             fts_store.insert_capture(
                 conn,
                 id=file_stem,
+                observation_id=str(out.get("observation_id") or ""),
                 timestamp=out.get("timestamp", ""),
                 app_name=meta.get("app_name") or "",
                 bundle_id=meta.get("bundle_id") or "",

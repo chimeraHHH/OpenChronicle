@@ -18,8 +18,10 @@ from . import paths
 from .capture import scheduler as capture_scheduler
 from .config import Config
 from .logger import get
+from .services.memory import MemoryService
 from .session import tick as session_tick
 from .store import files as store_files
+from .store import fts
 from .timeline import tick as timeline_tick
 
 logger = get("openchronicle.daemon")
@@ -142,6 +144,14 @@ async def _run(
                 removed_memory_temps,
                 capture_temp_stats["deleted"],
             )
+        # An authorized forget may have crashed after its deny-read
+        # tombstones committed but before Markdown was removed. Recovery is a
+        # core privacy invariant, so it must run even when the opt-in Daily
+        # Wrap worker is disabled (the default) and before MCP is exposed.
+        with fts.cursor() as conn:
+            MemoryService(
+                conn, soft_limit_tokens=effective_cfg.writer.soft_limit_tokens
+            ).resume_pending_purges()
         # SessionManager observes every capture-worthy event and fires the
         # reducer via its on_session_end callback. Built even when
         # capture_only is true so session rows still land on disk.
@@ -171,6 +181,15 @@ async def _run(
             tasks.append(
                 asyncio.create_task(timeline_tick.run_forever(effective_cfg), name="timeline")
             )
+            if effective_cfg.daily_wrap.enabled:
+                from .daily_wrap import worker as daily_wrap_worker
+
+                tasks.append(
+                    asyncio.create_task(
+                        daily_wrap_worker.run_forever(effective_cfg),
+                        name="daily-wrap",
+                    )
+                )
             # Both loops intentionally return immediately when the reducer is
             # disabled. Do not supervise tasks that are configured not to run:
             # an early normal return is otherwise indistinguishable from a

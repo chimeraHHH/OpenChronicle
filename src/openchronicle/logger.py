@@ -1,4 +1,4 @@
-"""Logging setup — three separate sinks (writer / compact / capture) + console."""
+"""Logging setup with rotating component sinks and an optional console."""
 
 from __future__ import annotations
 
@@ -47,6 +47,7 @@ def setup(*, console: bool = True, verbose: bool = False) -> None:
     _sink("openchronicle.capture", "capture.log", level=level)
     _sink("openchronicle.timeline", "timeline.log", level=level)
     _sink("openchronicle.session", "session.log", level=level)
+    _sink("openchronicle.daily_wrap", "daily-wrap.log", level=level)
     _sink("openchronicle.daemon", "daemon.log", level=level)
     _sink("openchronicle.mcp", "daemon.log", level=level)
 

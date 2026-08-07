@@ -25,6 +25,7 @@ class WriterRunResult:
     reduced: int = 0
     classified: int = 0
     written_ids: list[str] = field(default_factory=list)
+    candidate_ids: list[str] = field(default_factory=list)
     summaries: list[str] = field(default_factory=list)
 
 
@@ -59,6 +60,7 @@ def run(cfg: Config) -> WriterRunResult:
         if cr.committed:
             result.classified += 1
             result.written_ids.extend(cr.written_ids)
+            result.candidate_ids.extend(cr.candidate_ids)
             if cr.summary:
                 result.summaries.append(cr.summary)
     return result

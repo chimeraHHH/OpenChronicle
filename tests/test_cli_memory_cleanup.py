@@ -5,11 +5,38 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from openchronicle import cli
+from openchronicle.daily_wrap import store as daily_wrap_store
+from openchronicle.mcp import server as mcp_server
+from openchronicle.memory_candidates import store as candidate_store
+from openchronicle.provenance.models import EvidenceRef, timeline_block_digest
+from openchronicle.services.memory import MemoryService
 from openchronicle.store import entries as entries_mod
 from openchronicle.store import files as files_mod
 from openchronicle.store import fts
+
+
+def _seed_timeline_source(conn, block_id: str) -> EvidenceRef:
+    start = "2026-04-21T10:00:00+00:00"
+    end = "2026-04-21T10:01:00+00:00"
+    conn.execute(
+        """
+        INSERT INTO timeline_blocks(
+            id, start_time, end_time, timezone, entries, apps_used,
+            capture_count, created_at
+        ) VALUES (?, ?, ?, 'UTC', '[]', '[]', 0, ?)
+        """,
+        (block_id, start, end, end),
+    )
+    return EvidenceRef(
+        kind="timeline_block",
+        id=block_id,
+        content_hash=timeline_block_digest(
+            start=start, end=end, entries=[], apps=[]
+        ),
+    )
 
 
 def test_clean_memory_serializes_with_concurrent_create(
@@ -125,6 +152,41 @@ def test_clean_memory_keeps_markdown_if_index_clear_cannot_start(
         ).fetchone()[0] == 1
 
 
+def test_clean_memory_unlink_failure_stays_hidden_from_read_and_rebuild(
+    ac_root: Path, monkeypatch
+) -> None:
+    name = "topic-private-unlink.md"
+    marker = "MEMORY_UNLINK_PRIVATE_MARKER"
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn, name=name, description="private", tags=["topic"]
+        )
+        entries_mod.append_entry(conn, name=name, content=marker, tags=["topic"])
+    path = files_mod.memory_path(name)
+    real_unlink = Path.unlink
+
+    def fail_target(target: Path, *args, **kwargs) -> None:
+        if target == path:
+            raise PermissionError("immutable memory")
+        real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_target)
+    with pytest.raises(RuntimeError, match="memory cleanup incomplete"):
+        cli._clean_memory()
+
+    assert path.exists()
+    with fts.cursor() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 0
+        assert candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=name
+        )
+        assert mcp_server._read_memory(conn, path=name) == {
+            "error": f"file not found: {name}"
+        }
+        entries_mod.rebuild_index(conn)
+        assert mcp_server._search(conn, query=marker)["results"] == []
+
+
 def test_clean_memory_removes_crash_orphan_temp(ac_root: Path) -> None:
     name = "topic-orphan-temp.md"
     with fts.cursor() as conn:
@@ -142,3 +204,114 @@ def test_clean_memory_removes_crash_orphan_temp(ac_root: Path) -> None:
     assert cli._clean_memory() == (2, 1)
     assert not path.exists()
     assert not orphan.exists()
+
+
+def test_clean_memory_clears_candidates_wraps_and_provenance(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        source = _seed_timeline_source(conn, "tlb-clean")
+        entries_mod.create_file(
+            conn, name="project-clean.md", description="private", tags=["project"]
+        )
+        candidate = MemoryService(conn).propose_candidate(
+            kind="fact",
+            target_path="project-clean.md",
+            content="PRIVATE_CANDIDATE_PAYLOAD",
+            tags=["private"],
+            evidence=[source],
+        )
+        claim = daily_wrap_store.claim(
+            conn,
+            local_date="2026-04-21",
+            timezone="UTC",
+            scope="default",
+            window_start_utc="2026-04-21T00:00:00+00:00",
+            window_end_utc="2026-04-22T00:00:00+00:00",
+            workflow_version=1,
+            coverage_status="partial",
+            input_digest="clean-digest",
+            lease_token="clean-lease",
+        )
+        daily_wrap_store.complete(
+            conn,
+            wrap_id=claim.row.id,
+            lease_token="clean-lease",
+            input_digest="clean-digest",
+            coverage_status="partial",
+            output={
+                "completed": [],
+                "progressed": [],
+                "open": [],
+                "blocked": [],
+                "needs_review": [],
+            },
+            sources=[source],
+        )
+        assert candidate.id
+
+    cli._clean_memory()
+    with fts.cursor() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM daily_wrap_revisions").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM provenance_edges").fetchone()[0] == 0
+
+
+def test_clean_timeline_invalidates_wraps_and_conflicts_pending_candidates(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        source = _seed_timeline_source(conn, "tlb-delete")
+        candidate = MemoryService(conn).propose_candidate(
+            kind="fact",
+            target_path="project-clean.md",
+            content="Timeline-derived candidate.",
+            tags=["project"],
+            evidence=[source],
+        )
+        claim = daily_wrap_store.claim(
+            conn,
+            local_date="2026-04-21",
+            timezone="UTC",
+            scope="default",
+            window_start_utc="2026-04-21T00:00:00+00:00",
+            window_end_utc="2026-04-22T00:00:00+00:00",
+            workflow_version=1,
+            coverage_status="ready",
+            input_digest="timeline-clean",
+            lease_token="timeline-clean",
+        )
+        daily_wrap_store.complete(
+            conn,
+            wrap_id=claim.row.id,
+            lease_token="timeline-clean",
+            input_digest="timeline-clean",
+            coverage_status="ready",
+            output={
+                "completed": [],
+                "progressed": [],
+                "open": [],
+                "blocked": [],
+                "needs_review": [],
+            },
+            sources=[source],
+        )
+
+    result = CliRunner().invoke(cli.app, ["clean", "timeline", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert "1 timeline block(s)" in result.output
+    assert "1 Daily Wrap(s)" in result.output
+    assert "1 wrap revision(s)" in result.output
+    assert "1 dependent pending/conflict candidate(s)" in result.output
+    with fts.cursor() as conn:
+        updated = MemoryService(conn).get_candidate(candidate.id)
+        assert updated is not None
+        assert updated.status == "conflict"
+        assert "explicitly deleted" in updated.last_error
+        assert conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0] == 0
+        assert conn.execute(
+            """
+            SELECT COUNT(*) FROM provenance_edges
+             WHERE subject_kind='timeline_block' OR source_kind='timeline_block'
+            """
+        ).fetchone()[0] == 0

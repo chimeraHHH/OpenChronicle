@@ -179,6 +179,16 @@ def _resolved_limits(model_cfg: Any) -> tuple[float, int]:
     return float(timeout), retries
 
 
+def call_budget_seconds(cfg: Config, stage: str) -> float:
+    """Conservative wall-clock budget for one fully retried provider call."""
+    timeout, retries = _resolved_limits(cfg.model_for(stage))
+    backoff = sum(
+        min(_RETRY_BACKOFF_SECONDS * (2**attempt), _MAX_RETRY_BACKOFF_SECONDS)
+        for attempt in range(retries)
+    )
+    return timeout * (retries + 1) + backoff + 30.0
+
+
 def _mock_response(stage: str, messages, tools, json_mode):
     """Minimal stub for offline tests. Customize via OPENCHRONICLE_LLM_MOCK_JSON."""
     override = os.environ.get("OPENCHRONICLE_LLM_MOCK_JSON")

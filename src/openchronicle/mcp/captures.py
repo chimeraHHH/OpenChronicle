@@ -17,6 +17,8 @@ from typing import Any
 
 from .. import paths
 from ..capture import filenames
+from ..capture import store_lock as capture_store
+from ..memory_candidates import store as candidate_store
 from ..store import fts as fts_store
 
 
@@ -73,6 +75,7 @@ def _format_response(path: Path, data: dict[str, Any], include_screenshot: bool)
     shot = data.get("screenshot") or {}
     out: dict[str, Any] = {
         "timestamp": data.get("timestamp"),
+        "observation_id": data.get("observation_id"),
         "file": path.name,
         "app_name": meta.get("app_name"),
         "bundle_id": meta.get("bundle_id"),
@@ -102,6 +105,25 @@ def read_recent_capture(
     include_screenshot: bool = False,
     max_age_minutes: int = 15,
 ) -> dict[str, Any] | None:
+    """Return one capture while serialized with cleanup and capture writes."""
+    with capture_store.capture_store_lock():
+        return _read_recent_capture_locked(
+            at=at,
+            app_name=app_name,
+            window_title_substring=window_title_substring,
+            include_screenshot=include_screenshot,
+            max_age_minutes=max_age_minutes,
+        )
+
+
+def _read_recent_capture_locked(
+    *,
+    at: str | None = None,
+    app_name: str | None = None,
+    window_title_substring: str | None = None,
+    include_screenshot: bool = False,
+    max_age_minutes: int = 15,
+) -> dict[str, Any] | None:
     """Return the capture that best matches the given time + filters.
 
     ``at`` None → newest matching capture overall.
@@ -112,12 +134,21 @@ def read_recent_capture(
         return None
 
     target: datetime | None = _parse_at(at) if at else None
+    with fts_store.cursor() as conn:
+        hidden_files = {
+            tombstone.artifact_id
+            for tombstone in candidate_store.list_tombstones(
+                conn, kind="capture_file"
+            )
+        }
 
     # Parse before sorting: lexicographic wall-clock order is wrong during a
     # daylight-saving fallback (01:59-04:00 is older than 01:00-05:00).
     stems: list[tuple[datetime, Path]] = []
     for path in buf.iterdir():
         if not path.is_file() or path.suffix != ".json":
+            continue
+        if path.name in hidden_files:
             continue
         timestamp = _parse_stem(path.stem)
         if timestamp is not None:
@@ -163,6 +194,25 @@ def search_captures(
     app_name: str | None = None,
     limit: int = 10,
 ) -> list[dict[str, Any]]:
+    """Search capture projections while serialized with destructive cleanup."""
+    with capture_store.capture_store_lock():
+        return _search_captures_locked(
+            query=query,
+            since=since,
+            until=until,
+            app_name=app_name,
+            limit=limit,
+        )
+
+
+def _search_captures_locked(
+    *,
+    query: str,
+    since: str | None = None,
+    until: str | None = None,
+    app_name: str | None = None,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
     """BM25 + snippet search over the S1 FTS index.
 
     Returns light-weight hits. Follow up with
@@ -189,6 +239,7 @@ def search_captures(
             "snippet": h.snippet,
             "rank": h.rank,
             "file_stem": h.id,
+            "observation_id": h.observation_id,
             "focused_role": h.focused_role,
             "focused_value_preview": (h.focused_value or "")[:200],
         }
@@ -221,7 +272,7 @@ def _recent_timeline_blocks(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT start_time, end_time, entries, apps_used, capture_count
+        SELECT id, start_time, end_time, entries, apps_used, capture_count
           FROM timeline_blocks
          ORDER BY end_time DESC
          LIMIT ?
@@ -240,6 +291,7 @@ def _recent_timeline_blocks(
             apps = []
         out.append(
             {
+                "id": r["id"],
                 "start_time": r["start_time"],
                 "end_time": r["end_time"],
                 "entries": entries,
@@ -252,6 +304,23 @@ def _recent_timeline_blocks(
 
 
 def current_context(
+    *,
+    app_filter: str | None = None,
+    headline_limit: int = 5,
+    fulltext_limit: int = 3,
+    timeline_limit: int = 8,
+) -> dict[str, Any]:
+    """Build current context while serialized with destructive cleanup."""
+    with capture_store.capture_store_lock():
+        return _current_context_locked(
+            app_filter=app_filter,
+            headline_limit=headline_limit,
+            fulltext_limit=fulltext_limit,
+            timeline_limit=timeline_limit,
+        )
+
+
+def _current_context_locked(
     *,
     app_filter: str | None = None,
     headline_limit: int = 5,
@@ -288,6 +357,7 @@ def current_context(
                     "focused_value": r.focused_value,
                     "visible_text": visible,
                     "file_stem": r.id,
+                    "observation_id": r.observation_id,
                 }
             )
         timeline = _recent_timeline_blocks(conn, timeline_limit)
@@ -302,6 +372,7 @@ def current_context(
                 "window_title": r.window_title,
                 "focused_role": r.focused_role,
                 "file_stem": r.id,
+                "observation_id": r.observation_id,
             }
         )
 

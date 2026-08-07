@@ -23,6 +23,8 @@ from ..capture.ax_models import ax_tree_to_markdown
 from ..config import Config
 from ..logger import get
 from ..prompts import load as load_prompt
+from ..provenance import store as provenance_store
+from ..provenance.models import EvidenceRef, observation_digest
 from ..writer import llm as llm_mod
 from . import store
 
@@ -271,7 +273,8 @@ def produce_block_for_window(
     parsed_captures: list[tuple[Path, dict]] | None = None,
 ) -> store.TimelineBlock | None:
     """Build one block. Returns ``None`` if the window is empty or already done."""
-    if store.has_window(conn, start, end):
+    existing = store.get_window(conn, start, end)
+    if existing is not None:
         logger.debug(
             "timeline: window %s → %s already has a block", start.isoformat(), end.isoformat()
         )
@@ -338,7 +341,16 @@ def produce_block_for_window(
         apps_used=apps_used,
         capture_count=capture_count,
     )
-    store.insert(conn, block)
+    conn.execute("SAVEPOINT timeline_block_provenance")
+    try:
+        block, created = store.insert_or_get(conn, block)
+        if created:
+            _record_block_sources(conn, block, parsed, inside_savepoint=True)
+        conn.execute("RELEASE SAVEPOINT timeline_block_provenance")
+    except BaseException:
+        conn.execute("ROLLBACK TO SAVEPOINT timeline_block_provenance")
+        conn.execute("RELEASE SAVEPOINT timeline_block_provenance")
+        raise
     logger.info(
         "timeline: stored block %s — %s → %s (%d entries, %d captures, apps=%s)",
         block.id,
@@ -349,6 +361,46 @@ def produce_block_for_window(
         ", ".join(apps_used),
     )
     return block
+
+
+def _record_block_sources(
+    conn,
+    block: store.TimelineBlock,
+    parsed: list[tuple[Path, dict]],
+    *,
+    inside_savepoint: bool = False,
+) -> None:
+    sources: list[EvidenceRef] = []
+    for path, data in parsed:
+        observation_id = str(data.get("observation_id") or f"legacy:{path.stem}")
+        sources.append(
+            EvidenceRef(
+                kind="observation",
+                id=observation_id,
+                path=path.name,
+                timestamp=str(data.get("timestamp") or ""),
+                content_hash=observation_digest(data),
+            )
+        )
+    if inside_savepoint:
+        provenance_store.replace_sources(
+            conn,
+            subject=EvidenceRef(kind="timeline_block", id=block.id),
+            sources=sources,
+        )
+        return
+    conn.execute("SAVEPOINT timeline_block_provenance_repair")
+    try:
+        provenance_store.replace_sources(
+            conn,
+            subject=EvidenceRef(kind="timeline_block", id=block.id),
+            sources=sources,
+        )
+        conn.execute("RELEASE SAVEPOINT timeline_block_provenance_repair")
+    except BaseException:
+        conn.execute("ROLLBACK TO SAVEPOINT timeline_block_provenance_repair")
+        conn.execute("RELEASE SAVEPOINT timeline_block_provenance_repair")
+        raise
 
 
 def _heuristic_entries(parsed: list[tuple[Path, dict]]) -> list[str]:

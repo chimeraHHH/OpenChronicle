@@ -32,6 +32,9 @@ api_key_env = "OPENAI_API_KEY"
 [models.classifier]   # durable-fact extraction via tool calls
 # Accuracy-sensitive; a weak model here poisons dedup.
 
+[models.daily_wrap]   # grounded day synthesis; JSON-only and no tools
+# Accuracy-sensitive; unsupported items are rejected by deterministic validation.
+
 [models.compact]      # file compaction — accuracy matters
 # e.g. same as classifier
 ```
@@ -51,7 +54,8 @@ Stage → purpose:
 |---|---|---|
 | `timeline` | every 60s while captures exist | Normalizes a short (default 1-min) capture window into a list of activity records with authored text preserved verbatim. |
 | `reducer` | active-session flushes + session end + due retry/safety net | Turns a session's timeline blocks into time-ranged event-daily entries. |
-| `classifier` | periodic active-session passes + terminal catch-up | Reads event-daily entries + context and extracts durable facts into user-/project-/tool-/topic-/person-/org- files via a tool-call loop. |
+| `classifier` | periodic active-session passes + terminal catch-up | Reads event-daily entries + context and stages evidence-linked candidates; it cannot write Markdown. |
+| `daily_wrap` | post-midnight or explicit CLI run | Produces a bounded, evidence-backed JSON review with no tools. |
 | `compact` | after commits that flag files | Rewrites a fat file; rejects if >5% noun-phrase loss. |
 
 ### Fully local with Ollama
@@ -77,13 +81,16 @@ model = "ollama/qwen2.5:14b"            # compresses a whole session — precisi
 [models.classifier]
 model = "ollama/qwen2.5:14b"            # tool-calling; weak models here poison dedup
 
+[models.daily_wrap]
+model = "ollama/qwen2.5:14b"            # strict grounded JSON synthesis
+
 [models.compact]
 model = "ollama/qwen2.5:14b"            # match classifier or stronger
 ```
 
 Things to check before trusting a local setup:
 
-- **Tool-calling support is required for the classifier.** It drives `append` / `create` / `supersede` through a function-call loop. `qwen2.5`, `llama3.1`, `mistral-nemo` and `command-r` all work; small Llama-3.2 and Phi variants are unreliable.
+- **Tool-calling support is required for the classifier.** It can read/search and call `propose_memory_candidate`; approval is a separate trusted local operation. `qwen2.5`, `llama3.1`, `mistral-nemo` and `command-r` are typical tool-capable choices; small variants are often unreliable.
 - **JSON mode is required for `timeline` and `reducer`.** They pass `response_format={"type":"json_object"}`, which litellm forwards to Ollama as `format: "json"`. If the model ignores it and returns prose, both stages will log parse errors — pick a bigger model.
 - **Context window.** Timeline blocks are 1-min, reducer flushes consume ~5 blocks, a 2-hour session can stack ~24 blocks. Set Ollama's `num_ctx` to ≥ 16 k for `timeline`, ≥ 32 k for `reducer` / `classifier`. Tiny defaults (2–4 k) will silently truncate.
 - **Leave `api_key_env` empty.** If you keep the default `"OPENAI_API_KEY"` and don't have one exported, litellm complains even though Ollama wouldn't use it.
@@ -182,7 +189,7 @@ daily_tick_hour = 23             # local-time hour for the daily safety-net tick
 daily_tick_minute = 55
 ```
 
-Setting `enabled = false` disables both the S2 reducer and the classifier. Sessions still close and persist to the `sessions` table, but no event-daily entries or classifier writes land — useful for capture-only debugging.
+Setting `enabled = false` disables both the S2 reducer and the classifier. Sessions still close and persist to the `sessions` table, but no event-daily entries or classifier candidates land — useful for capture-only debugging.
 
 ## `[classifier]`
 
@@ -191,7 +198,7 @@ Setting `enabled = false` disables both the S2 reducer and the classifier. Sessi
 interval_minutes = 30           # durable-fact extraction cadence inside active sessions (min 5)
 ```
 
-While a session is active, the classifier wakes up every `interval_minutes` and extracts durable facts from event-daily entries written since its last pass. The terminal reduce (at session end) attempts one more classifier pass over whatever trailing window the tick didn't reach. Successful passes advance the session's `classified_end` bookmark to avoid repeat work during normal operation. Crash scheduling is best-effort: work may repeat if tool writes land before the bookmark, and the terminal pass may be missed if the process dies after reducer completion. Classifier tools must deduplicate against existing memory; `classified_end` is not an exactly-once guarantee.
+While a session is active, the classifier wakes up every `interval_minutes` and proposes durable facts from event-daily entries written since its last pass. The terminal reduce (at session end) attempts one more pass over whatever trailing window the tick did not reach. Successful passes advance `classified_end`. A stable run key plus proposal slot makes crash replay idempotent even when provider wording changes. Proposals remain pending until explicit local review; classifier tools cannot mutate Markdown.
 
 Values `< 5` are clamped to 5 to keep LLM cost bounded. Pair with `[session] flush_minutes`: the reducer flushes at a higher frequency than the classifier, so a classifier tick always has fresh entries to look at.
 
@@ -216,6 +223,27 @@ auto_dormant_days = 30           # files untouched this long are marked dormant 
 ```
 
 Dormant files don't show in `list_memories` by default. Pass `include_dormant=true` from the MCP client to see them. They're never deleted automatically.
+
+## `[daily_wrap]`
+
+```toml
+[daily_wrap]
+enabled = false           # opt in: scheduled synthesis may call a remote model
+timezone = ""            # empty = infer system IANA zone; or e.g. "Asia/Shanghai"
+hour = 0
+minute = 5
+retry_seconds = 300       # 30..3600; failure retry + late-evidence recheck cadence
+late_data_grace_hours = 6 # 0..24; revise yesterday's wrap during this window
+lease_seconds = 300       # 30..21600 minimum; raised to cover the model call budget
+```
+
+Scheduled Daily Wrap is disabled by default so an upgrade cannot silently add a
+new model call. Once enabled, the daemon synthesizes the previous local day at
+this time, catches up once after a late startup, retries failures within the
+grace window, and rechecks for late evidence at `retry_seconds` intervals. The
+same day, timezone, and input digest are returned from cache; changed evidence
+creates a new revision on the same canonical row. See
+[stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md).
 
 ## `[search]`
 
@@ -260,7 +288,7 @@ openchronicle status
 - `gpt-5.4-nano   ✓ 234 ms` — provider answered.
 - `claude-haiku-4-5   ✗ AuthenticationError: …` — provider rejected the request. Typos in `model`, missing `api_key_env`, wrong `base_url`, or expired keys all show up here on the first `status` call instead of silently failing inside the writer hours later.
 
-Probes for stages that share an identical `(model, base_url, api_key)` are deduplicated, so the common case (one model for all four stages) makes one network call. Run them in parallel and the whole status command stays under ~5s even if one provider is slow.
+Probes for stages that share an identical `(model, base_url, api_key)` are deduplicated, so the common case (one model for all stages) makes one network call. Run them in parallel and the whole status command stays under ~5s even if one provider is slow.
 
 To skip the network round-trip — e.g. on a flight, in CI, or just to inspect the resolved config — set the mock env var:
 

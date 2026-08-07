@@ -35,7 +35,7 @@
 
 > **Status:** v0.1.0 · macOS only · early alpha
 
-> **This fork:** see the clean-room [Vida-like proactive assistant roadmap](docs/vida-like-roadmap.md).
+> **This fork:** see the clean-room [Vida-like proactive assistant roadmap](docs/vida-like-roadmap.md) and the [Stage 1 memory/Daily Wrap contract](docs/stage1-memory-daily-wrap.md).
 
 OpenChronicle gives AI agents a local, inspectable memory built from real screen and app context.
 
@@ -100,11 +100,16 @@ flowchart LR
     SM["Session mgr<br/>idle 5m · app-switch 3m<br/>max 2h"]
     S2["<b>S2</b> reducer"]
     ED[(event-<br/>YYYY-MM-DD.md)]
-    CLF["Classifier<br/>→ user- / project- / tool- /<br/>topic- / person- / org-*.md"]
+    CLF["Classifier<br/>grounded proposals only"]
+    CAND[(review inbox)]
+    REVIEW["Local review<br/>edit · approve · reject · forget"]
+    WRAP["Daily Wrap<br/>grounded · revisioned"]
     STORE[("SQLite FTS5<br/>+ Markdown")]
 
-    W --> S0 --> S1 --> BUF --> TL --> TB --> S2 --> ED --> CLF --> STORE
+    W --> S0 --> S1 --> BUF --> TL --> TB --> S2 --> ED --> CLF --> CAND --> REVIEW --> STORE
     ED --> STORE
+    ED --> WRAP
+    TB --> WRAP
     BUF -. pre_capture_hook<br/>(post-write · skipped on content-dedup) .-> SM
     SM -. flush 5m / on_end .-> S2
     TB -. grounding .-> CLF
@@ -115,8 +120,9 @@ The core idea is simple:
 1. capture context
 2. compress it into sessions
 3. extract durable facts
-4. store memory locally
-5. let agents query it through tools
+4. review grounded memory candidates
+5. store approved memory locally and generate an evidence-backed Daily Wrap
+6. let agents query memory, wraps, and provenance through read-only tools
 
 ---
 
@@ -128,6 +134,10 @@ The core idea is simple:
 * **Local SQLite indexing**
 * **Structured memory files** like user-, project-, tool-, topic-, person-, org-, and daily event-
 * **Supersede-not-delete history**
+* **Review-first durable memory candidates** with evidence, conflicts, and explicit approval
+* **Canonical Daily Wraps** with exact, explicitly untrusted activity quotes,
+  per-item source references, and partial-coverage reporting
+* **Crash-resumable true purge** for a candidate, its accepted entry, and derived wraps
 * **Local or cloud model support**
 * **Always-on agent-readable interface**, with MCP as the best-supported path today
 
@@ -163,8 +173,19 @@ openchronicle capture-once
 openchronicle timeline tick
 openchronicle timeline list
 openchronicle writer run
+openchronicle memory candidates
+openchronicle memory show <candidate-id>
+openchronicle memory approve <candidate-id>
+openchronicle provenance trace memory_entry <entry-id> --path project-example.md
+openchronicle daily-wrap run --date 2026-08-06 --timezone Asia/Shanghai
+openchronicle daily-wrap show --date 2026-08-06 --timezone Asia/Shanghai
 openchronicle rebuild-index
 ```
+
+Scheduled Daily Wrap is opt-in because it may invoke the configured model with
+a hard byte-bounded evidence payload. Set `[daily_wrap] enabled = true` only after
+choosing an acceptable local or cloud model; one-off `daily-wrap run` remains
+explicit.
 
 ---
 
@@ -223,6 +244,7 @@ Documentation
 * [docs/writer.md](docs/writer.md) - reducer, classifier, and retry model
 * [docs/mcp.md](docs/mcp.md) - current tool surface and integrations
 * [docs/memory-format.md](docs/memory-format.md) - file layout and supersede semantics
+* [docs/stage1-memory-daily-wrap.md](docs/stage1-memory-daily-wrap.md) - provenance, review inbox, Daily Wrap, privacy, and failure semantics
 * [docs/troubleshooting.md](docs/troubleshooting.md) - common issues
 
 ---

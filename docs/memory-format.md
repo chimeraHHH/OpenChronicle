@@ -83,6 +83,8 @@ When a fact changes, the writer calls `supersede(path, old_id, new_content, reas
 2. A trailing `#superseded-by:{new_id}` tag is appended to the old heading.
 3. The old entry's FTS row gets `superseded = 1` — hidden from default search.
 4. A new entry is appended with the replacement content.
+5. The replacement embeds a provenance reference to the post-strike old entry,
+   allowing source tracing, fixed-point rebuild, and transitive purge.
 
 Nothing is deleted. The timeline is intact, and `read_memory` / `search` with `include_superseded=true` surfaces the chain.
 
@@ -108,7 +110,10 @@ hard_limit_tokens = 50000    # emergency: always flag
 - Let the writer do it (normal path), or
 - Edit the Markdown, then run `uv run openchronicle rebuild-index` to resync.
 
-The rebuild is safe and idempotent — it parses every file and rebuilds the `entries`, `files`, and `entries_fts` tables from scratch.
+The rebuild is safe and idempotent — it parses every visible file and rebuilds
+the `entries`, `files`, and `entries_fts` tables from scratch. Files or entries
+behind a pending purge tombstone are deliberately skipped, as are entries whose
+memory-entry/candidate provenance dependency is no longer current.
 
 ## Wiping memory
 
@@ -118,3 +123,8 @@ uv run openchronicle clean all          # ...plus captures, timeline blocks, wri
 ```
 
 Config (`config.toml`) is never touched by `clean` commands.
+Cleanup first hides canonical files with content-free tombstones and clears
+their search projections, then unlinks them. If any unlink fails, the command
+returns nonzero and keeps the corresponding deny marker; direct reads and
+`rebuild-index` cannot expose that leftover file. Remove the filesystem obstacle
+and rerun the same clean command to finish.

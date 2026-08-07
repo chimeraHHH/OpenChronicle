@@ -1,6 +1,6 @@
 # Architecture
 
-OpenChronicle is a single daemon that ingests capture events, compresses them through a deterministic funnel, and classifies the result into durable Markdown memory. There is only one ingestion path — no modes.
+OpenChronicle is a single daemon that ingests capture events, compresses them through a deterministic funnel, and classifies the result into a review inbox. Explicit local approval is the only path from a candidate into durable Markdown memory.
 
 ```mermaid
 flowchart LR
@@ -29,9 +29,14 @@ flowchart LR
         direction TB
         ED[(event-YYYY-MM-DD.md)]
         CLF["Classifier · LLM<br/>tool-call loop · 30 m tick + terminal"]
+        CAND[(memory_candidates<br/>review inbox)]
+        REVIEW["Trusted local review<br/>edit · approve · reject · forget"]
         MF[(user- · project- · tool- ·<br/>topic- · person- · org-*.md)]
+        WRAP[(Daily Wrap<br/>opt-in · revisioned)]
         CMP["Compact · LLM<br/>on-demand"]
-        ED --> CLF --> MF
+        ED --> CLF --> CAND --> REVIEW --> MF
+        ED --> WRAP
+        BLOCKS --> WRAP
         MF -. read / rewrite .-> CMP
         CMP -. supersede .-> MF
     end
@@ -89,8 +94,11 @@ sequenceDiagram
 
     Note over CLF,DB: classifier tick · every 30 min
     CLF->>DB: read event-daily (tagged sid:)<br/>+ timeline_blocks in window (grounding)
-    CLF->>DB: LLM tool-call loop → update memory files
+    CLF->>DB: LLM tool-call loop → stage grounded candidates
     CLF->>SM: advance classified_end
+
+    Note over CLF,DB: later, explicit trusted local review
+    DB->>DB: revalidate evidence → deterministic Markdown write
 
     Note over SM,CLF: on_session_end<br/>(idle / soft-cut / timeout / shutdown / 23:55)
     SM->>R: terminal reduce (full trailing range)
@@ -116,6 +124,7 @@ Defined in `src/openchronicle/daemon.py`.
 | `classifier-tick` | Every `classifier.interval_minutes` (default 30, min 5), runs the classifier over any event-daily entries appended since the session's `classified_end` bookmark. Silent no-op when no new entries have landed. |
 | `pending-reducer` | Every 60s retries durable `ended`/due-`failed` rows. A terminal callback that beats the timeline producer remains `ended` until its final bucket lies inside the producer's durable coverage range. |
 | `daily-safety-net` | Once per local day at `reducer.daily_tick_hour:minute` (default 23:55), force-ends the currently-open session and reduces every stranded `ended`/`failed` session row — the "we survived a crash or midnight rollover" safety net. |
+| `daily-wrap` | Opt-in worker (disabled by default). After the configured post-midnight time, synthesizes the previous IANA-local day, retries/rechecks within the late-data grace window, and revises one canonical grounded wrap. Provider calls run on cancellable dedicated daemon threads; shutdown revokes the matching lease without waiting for a stuck provider. |
 | `mcp` | Hosts the Reader MCP server inside the daemon. Exponential backoff on crash. |
 
 The session cutter itself doesn't have a dedicated task — it runs inline on every persisted, non-duplicate watcher or heartbeat capture via the `pre_capture_hook` wired in `daemon.py`. Session-end callbacks spawn the reducer on a daemon thread; if the final timeline bucket is still pending, the durable row stays queued for `pending-reducer`. A successful terminal write then fires the classifier over the trailing window. Each session's progress on both stages is bookkept on its sessions row: `flush_end` for the reducer, `classified_end` for the classifier.
@@ -123,6 +132,8 @@ The session cutter itself doesn't have a dedicated task — it runs inline on ev
 The daemon also holds a private singleton file lease for its entire lifetime.
 CLI `status`/`stop` trust `.pid` only while that lease is held, so a PID reused
 after `SIGKILL` cannot cause an unrelated process to be reported or signalled.
+Before optional workers start, every normal daemon launch resumes any authorized
+memory purge tombstones. This recovery is independent of Daily Wrap enablement.
 
 `--capture-only` is a strict no-model ingestion/debug mode: it disables the
 timeline, reducer/flush, classifier, and MCP paths. Capture, session bookkeeping,
@@ -148,7 +159,7 @@ restart, the next session, or the configured maximum duration.
 ├── config.toml               # single source of truth for runtime config
 ├── .pid                      # daemon PID; absence ⇒ stopped
 ├── .paused                   # sentinel — capture skips while present
-├── index.db                  # SQLite WAL; entries / files / timeline_blocks / sessions
+├── index.db                  # SQLite WAL; projections, provenance, candidates, wraps
 ├── capture-buffer/           # S1-enriched {iso8601}.json captures
 ├── memory/
 │   ├── index.md              # auto-generated overview
@@ -161,6 +172,7 @@ restart, the next session, or the configured maximum duration.
     ├── session.log           # cut decisions, session-end events
     ├── writer.log            # reducer + classifier runs, tool calls
     ├── compact.log           # compact rounds with preservation ratios
+    ├── daily-wrap.log        # scheduled wrap attempts and outcomes
     └── daemon.log            # lifecycle + MCP server
 ```
 
@@ -195,10 +207,14 @@ src/openchronicle/
 ├── writer/
 │   ├── agent.py              # CLI entry: catch up pending sessions + classify
 │   ├── session_reducer.py    # S2: session → event-YYYY-MM-DD.md entry
-│   ├── classifier.py         # Extracts durable facts via the tool-call loop
-│   ├── tools.py              # read/search/append/create/supersede/commit
+│   ├── classifier.py         # Proposes grounded durable facts for review
+│   ├── tools.py              # classifier read/search/propose/commit boundary
 │   ├── compact.py            # Per-file compaction with fact-preservation check
 │   └── llm.py                # litellm wrapper; per-stage config
+├── provenance/               # Typed evidence refs and rebuildable edge graph
+├── memory_candidates/        # Review-inbox rows and purge tombstones
+├── daily_wrap/               # Canonical job store, service, scheduler
+├── services/                 # Context assembly and trusted memory mutations
 ├── store/
 │   ├── fts.py                # SQLite FTS5 schema, search, cursor context manager
 │   ├── files.py              # Markdown + YAML frontmatter IO
@@ -217,7 +233,7 @@ src/openchronicle/
 
 ## Why this shape
 
-- **Compression first, classification second.** S1 → Timeline → S2 is a deterministic funnel with bounded prompt size at each step. By the time the classifier runs it sees a session-level summary, not raw AX snapshots — so there is no "is this worth writing?" triage call; the classifier just extracts any durable facts it finds, or skips.
+- **Compression first, review before durable memory.** S1 → Timeline → S2 is a deterministic funnel with bounded prompt size at each step. The classifier can only stage evidence-linked candidates; a trusted local approval revalidates source hashes before materializing Markdown.
 - **Session as the natural unit.** A "session" — a bounded chunk of focused work — is what humans remember. Cutting on idle / app-switch / timeout produces event-daily entries with accurate time ranges, which solves the v1 problem of long sessions being under-reported after the first append.
 - **Periodic classifier, bookmarked.** The classifier fires on a 30-min interval during each active session, then attempts one last trailing-window pass at session end. Each successful pass advances `classified_end`, reducing repeat work while long sessions remain open. Crash scheduling is best-effort and has both duplicate-work and missed-terminal-pass windows, so classifier tools deduplicate against existing memory and the bookmark is not an exactly-once contract.
 - **Daily event files.** `event-YYYY-MM-DD.md` sorts alphabetically by day. Weekly files from v1 are left untouched — they stay searchable via FTS.

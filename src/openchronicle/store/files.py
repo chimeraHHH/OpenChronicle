@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import json
 import os
 import re
 import tempfile
 import threading
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
@@ -17,6 +19,7 @@ from typing import Any
 import frontmatter
 
 from .. import paths
+from ..provenance.models import EvidenceRef
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -87,6 +90,9 @@ VALID_PREFIXES = ("user-", "project-", "tool-", "topic-", "person-", "org-", "ev
 _lock_registry_lock = threading.Lock()
 _path_locks: dict[str, threading.Lock] = {}
 _STORE_WRITE_LOCK_NAME = ".store-write.lock"
+_REVIEW_OPERATION_LOCK_NAME = ".memory-review-operation"
+_review_thread_lock = threading.RLock()
+_review_lock_state = threading.local()
 _MEMORY_TEMP_RE = re.compile(
     r"^\.[^/]+\.md\.[A-Za-z0-9_-]+\.tmp$"
 )
@@ -139,6 +145,28 @@ def store_write_lock() -> Iterator[None]:
 
 
 @contextlib.contextmanager
+def review_operation_lock() -> Iterator[None]:
+    """Serialize provenance-producing writes with closure-based purge.
+
+    The lock is re-entrant within one thread because candidate approval calls
+    the generic provenance-bearing append path while already holding this
+    fence. Only the outermost acquisition takes the cross-process BSD lock.
+    """
+    lock_path = paths.root() / _REVIEW_OPERATION_LOCK_NAME
+    with _review_thread_lock:
+        depth = int(getattr(_review_lock_state, "depth", 0))
+        _review_lock_state.depth = depth + 1
+        try:
+            if depth:
+                yield
+            else:
+                with _cross_process_lock(lock_path):
+                    yield
+        finally:
+            _review_lock_state.depth = depth
+
+
+@contextlib.contextmanager
 def file_lock(path: Path) -> Iterator[None]:
     """Serialize writers to one logical path across threads and processes.
 
@@ -177,6 +205,11 @@ ENTRY_HEADING_RE = re.compile(
     r"^##\s*\[(?P<ts>[^\]]+)\]\s*\{id:\s*(?P<id>[a-zA-Z0-9\-]+)\}(?P<tags>[^\n]*)$",
     re.MULTILINE,
 )
+PROVENANCE_MARKER_RE = re.compile(r"<!--\s*oc-provenance:", re.IGNORECASE)
+PROVENANCE_COMMENT_RE = re.compile(
+    r"(?:^|\n)<!--\s*oc-provenance:\s*(?P<payload>\{[^\r\n]*\})\s*-->\s*\Z",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -187,6 +220,10 @@ class ParsedEntry:
     heading_line: str
     body: str
     superseded_by: str | None = None
+    evidence_refs: list[EvidenceRef] = field(default_factory=list)
+    provenance_present: bool = False
+    provenance_valid: bool = True
+    provenance_error: str = ""
 
 
 @dataclass
@@ -209,7 +246,19 @@ def memory_path(name: str) -> Path:
         raise ValueError(f"memory path must not contain slashes: {name!r}")
     if not name.endswith(".md"):
         name = name + ".md"
-    return paths.memory_dir() / name
+    parent = paths.memory_dir()
+    if parent.exists():
+        requested_key = unicodedata.normalize("NFC", name).casefold()
+        matches = [
+            child
+            for child in parent.iterdir()
+            if unicodedata.normalize("NFC", child.name).casefold() == requested_key
+        ]
+        if matches and (len(matches) != 1 or matches[0].name != name):
+            raise ValueError(
+                "memory path spelling must exactly match its canonical on-disk name"
+            )
+    return parent / name
 
 
 def validate_prefix(name: str) -> str:
@@ -279,14 +328,45 @@ def _parse_entries(body: str) -> list[ParsedEntry]:
             if t.startswith("superseded-by:"):
                 superseded_by = t.split(":", 1)[1]
                 break
+        entry_body = body[start:end].strip("\n")
+        evidence_refs: list[EvidenceRef] = []
+        provenance_present = bool(PROVENANCE_MARKER_RE.search(entry_body))
+        provenance_valid = True
+        provenance_error = ""
+        provenance_match = PROVENANCE_COMMENT_RE.search(entry_body)
+        marker_count = len(PROVENANCE_MARKER_RE.findall(entry_body))
+        if provenance_present and (marker_count != 1 or provenance_match is None):
+            provenance_valid = False
+            provenance_error = "provenance marker must be one valid final-line frame"
+        elif provenance_match:
+            try:
+                payload = json.loads(provenance_match.group("payload"))
+                if not isinstance(payload, dict) or payload.get("v") != 1:
+                    raise ValueError("unsupported provenance frame version")
+                raw_sources = payload.get("sources")
+                if not isinstance(raw_sources, list) or not all(
+                    isinstance(item, dict) for item in raw_sources
+                ):
+                    raise ValueError("provenance sources must be an array of objects")
+                evidence_refs = [EvidenceRef.from_dict(item) for item in raw_sources]
+            except (json.JSONDecodeError, ValueError, TypeError):
+                provenance_valid = False
+                provenance_error = "malformed provenance frame"
+                evidence_refs = []
+            if provenance_valid:
+                entry_body = entry_body[: provenance_match.start()].rstrip("\n")
         entries.append(
             ParsedEntry(
                 id=m.group("id"),
                 timestamp=m.group("ts"),
                 tags=tags,
                 heading_line=m.group(0),
-                body=body[start:end].strip("\n"),
+                body=entry_body,
                 superseded_by=superseded_by,
+                evidence_refs=evidence_refs,
+                provenance_present=provenance_present,
+                provenance_valid=provenance_valid,
+                provenance_error=provenance_error,
             )
         )
     return entries
@@ -295,6 +375,14 @@ def _parse_entries(body: str) -> list[ParsedEntry]:
 def render_heading(*, timestamp: str, entry_id: str, tags: list[str]) -> str:
     tag_part = "".join(f" #{t}" for t in tags) if tags else ""
     return f"## [{timestamp}] {{id: {entry_id}}}{tag_part}"
+
+
+def validate_entry_body(body: str) -> None:
+    """Reserve parser control lines so one logical write stays one entry."""
+    if PROVENANCE_MARKER_RE.search(body):
+        raise ValueError("entry content contains the reserved oc-provenance marker")
+    if ENTRY_HEADING_RE.search(body):
+        raise ValueError("entry content contains a reserved canonical entry heading")
 
 
 def render_file(
@@ -308,6 +396,16 @@ def render_file(
         parts.append(e.heading_line)
         if e.body:
             parts.append(e.body)
+        if e.evidence_refs or e.provenance_present:
+            payload = {
+                "v": 1,
+                "sources": [source.to_dict() for source in e.evidence_refs],
+            }
+            parts.append(
+                "<!-- oc-provenance: "
+                + json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                + " -->"
+            )
         parts.append("")
     return "\n".join(parts).rstrip() + "\n"
 

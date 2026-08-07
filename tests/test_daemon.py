@@ -7,6 +7,10 @@ import pytest
 
 from openchronicle import config as config_mod
 from openchronicle import daemon, paths
+from openchronicle.provenance.models import EvidenceRef, timeline_block_digest
+from openchronicle.services.memory import MemoryService
+from openchronicle.store import entries as entries_store
+from openchronicle.store import fts
 
 
 class _Manager:
@@ -216,3 +220,84 @@ async def test_capture_only_excludes_mcp_and_processing_pipeline(
     assert cfg.reducer.enabled is True
     assert manager.force_end_reasons == ["daemon-shutdown"]
     assert not paths.pid_file().exists()
+
+
+@pytest.mark.asyncio
+async def test_default_daemon_startup_resumes_interrupted_memory_purge(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = "DAEMON_STARTUP_PURGE_PRIVATE_MARKER"
+    target_name = "project-startup-purge.md"
+    start = "2026-04-21T10:00:00+00:00"
+    end = "2026-04-21T10:01:00+00:00"
+    with fts.cursor() as conn:
+        conn.execute(
+            """
+            INSERT INTO timeline_blocks(
+                id, start_time, end_time, timezone, entries, apps_used,
+                capture_count, created_at
+            ) VALUES ('tlb-daemon-purge', ?, ?, 'UTC', '[]', '[]', 0, ?)
+            """,
+            (start, end, end),
+        )
+        source = EvidenceRef(
+            kind="timeline_block",
+            id="tlb-daemon-purge",
+            content_hash=timeline_block_digest(
+                start=start, end=end, entries=[], apps=[]
+            ),
+        )
+        entries_store.create_file(
+            conn,
+            name=target_name,
+            description="startup purge regression",
+            tags=["project"],
+        )
+        service = MemoryService(conn)
+        candidate = service.propose_candidate(
+            kind="fact",
+            target_path=target_name,
+            content=marker,
+            tags=["private"],
+            evidence=[source],
+        )
+        accepted = service.approve_candidate(
+            candidate.id, expected_version=candidate.version
+        )
+        assert accepted.applied_entry_id
+
+        real_delete = entries_store.delete_entry
+
+        def interrupted_delete(*args, **kwargs):
+            raise OSError("simulated crash after tombstones")
+
+        monkeypatch.setattr(entries_store, "delete_entry", interrupted_delete)
+        with pytest.raises(OSError, match="simulated crash"):
+            service.purge_candidate(candidate.id)
+        monkeypatch.setattr(entries_store, "delete_entry", real_delete)
+
+    target = paths.memory_dir() / target_name
+    assert marker in target.read_text(encoding="utf-8")
+
+    started: set[str] = set()
+    cancelled: set[str] = set()
+    manager = _install_manager(monkeypatch)
+    _patch_standard_workers(monkeypatch, started=started, cancelled=cancelled)
+    cfg = config_mod.Config()
+    cfg.reducer.enabled = False
+    cfg.daily_wrap.enabled = False
+    cfg.mcp.auto_start = False
+    stop = asyncio.Event()
+
+    run_task = asyncio.create_task(daemon._run(cfg, stop_event=stop))
+    while not {"capture", "session", "daily-safety-net", "timeline"}.issubset(started):
+        await asyncio.sleep(0)
+    stop.set()
+    await run_task
+
+    assert marker not in target.read_text(encoding="utf-8")
+    with fts.cursor() as conn:
+        assert MemoryService(conn).get_candidate(candidate.id) is None
+        assert conn.execute("SELECT COUNT(*) FROM purge_tombstones").fetchone()[0] == 0
+    assert manager.force_end_reasons == ["daemon-shutdown"]

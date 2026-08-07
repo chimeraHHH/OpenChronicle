@@ -1,0 +1,95 @@
+"""Small, serializable provenance value objects."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import dataclass
+from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class EvidenceRef:
+    """A stable reference to one local source record.
+
+    ``path`` is empty for database-native sources such as timeline blocks and
+    sessions. ``content_hash`` captures the exact source revision used by a
+    derived object without copying the source text into the provenance graph.
+    """
+
+    kind: str
+    id: str
+    path: str = ""
+    timestamp: str = ""
+    content_hash: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.kind.strip():
+            raise ValueError("evidence kind is required")
+        if not self.id.strip():
+            raise ValueError("evidence id is required")
+        if "\x00" in self.kind or "\x00" in self.id or "\x00" in self.path:
+            raise ValueError("evidence identifiers cannot contain NUL")
+
+    @property
+    def key(self) -> str:
+        """Opaque prompt-safe token source; it never embeds captured text."""
+        raw = f"{self.kind}\0{self.path}\0{self.id}".encode()
+        return "ev-" + hashlib.sha256(raw).hexdigest()[:20]
+
+    def to_dict(self) -> dict[str, str]:
+        return {
+            "kind": self.kind,
+            "id": self.id,
+            "path": self.path,
+            "timestamp": self.timestamp,
+            "content_hash": self.content_hash,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> EvidenceRef:
+        if not isinstance(value, dict):
+            raise ValueError("evidence reference must be an object")
+        return cls(
+            kind=str(value.get("kind") or ""),
+            id=str(value.get("id") or ""),
+            path=str(value.get("path") or ""),
+            timestamp=str(value.get("timestamp") or ""),
+            content_hash=str(value.get("content_hash") or ""),
+        )
+
+
+def content_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def canonical_digest(value: Any) -> str:
+    return content_digest(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def observation_digest(data: dict[str, Any]) -> str:
+    """Hash every capture field consumed by the timeline prompt renderer."""
+    return canonical_digest(
+        {
+            key: data.get(key)
+            for key in (
+                "timestamp",
+                "window_meta",
+                "trigger",
+                "focused_element",
+                "visible_text",
+                "url",
+                "ax_tree",
+            )
+        }
+    )
+
+
+def timeline_block_digest(
+    *, start: str, end: str, entries: list[Any], apps: list[Any]
+) -> str:
+    return canonical_digest(
+        {"start": start, "end": end, "entries": entries, "apps": apps}
+    )
