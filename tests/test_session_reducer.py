@@ -13,7 +13,6 @@ from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
 from openchronicle.writer import session_reducer
 
-
 _TZ = timezone(timedelta(hours=8))
 _SID = "sess_test0000"
 
@@ -115,6 +114,8 @@ def test_reducer_no_blocks_marks_reduced_no_write(ac_root: Path, monkeypatch) ->
             conn,
             session_store.SessionRow(id="sess_empty", start_time=start, end_time=end, status="ended"),
         )
+        timeline_store.initialize_processed_range(conn, start)
+        timeline_store.advance_processed_through(conn, end, window_start=start)
 
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
     cfg = config_mod.load(ac_root / "config.toml")
@@ -130,6 +131,278 @@ def test_reducer_no_blocks_marks_reduced_no_write(ac_root: Path, monkeypatch) ->
         row = session_store.get_by_id(conn, "sess_empty")
     assert row is not None
     assert row.status == "reduced"
+
+
+def test_terminal_reduce_includes_block_straddling_exact_session_end(
+    ac_root: Path, monkeypatch
+) -> None:
+    """A sub-minute terminal slice must not disappear at a bucket boundary."""
+    block_start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
+    session_start = block_start + timedelta(seconds=10)
+    session_end = block_start + timedelta(seconds=50)
+    session_id = "sess_partial_terminal"
+    with fts.cursor() as conn:
+        timeline_store.insert(
+            conn,
+            timeline_store.TimelineBlock(
+                start_time=block_start,
+                end_time=block_start + timedelta(minutes=1),
+                entries=["[Editor] short but durable work"],
+                apps_used=["Editor"],
+                capture_count=1,
+            ),
+        )
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=session_start,
+                end_time=session_end,
+                status="ended",
+            ),
+        )
+
+    seen_blocks: list[str] = []
+
+    def payload(_cfg, blocks, *_args, **_kwargs):
+        seen_blocks.extend(block.id for block in blocks)
+        return {
+            "summary": "short session",
+            "sub_tasks": ["[10:00-10:01, Editor] short but durable work"],
+        }
+
+    monkeypatch.setattr(session_reducer, "_call_reducer_llm", payload)
+    result = session_reducer.reduce_session(
+        config_mod.load(ac_root / "config.toml"),
+        session_id=session_id,
+        start_time=session_start,
+        end_time=session_end,
+    )
+
+    assert result.written is True
+    assert len(seen_blocks) == 1
+    assert "short but durable work" in (
+        paths.memory_dir() / "event-2026-04-21.md"
+    ).read_text()
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+    assert row is not None and row.status == "reduced"
+
+
+def test_terminal_waits_for_late_timeline_tail_then_pending_retry_writes(
+    ac_root: Path, monkeypatch
+) -> None:
+    block_start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
+    session_start = block_start + timedelta(seconds=10)
+    session_end = block_start + timedelta(seconds=50)
+    session_id = "sess_late_terminal_bucket"
+    with fts.cursor() as conn:
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=session_start,
+                end_time=session_end,
+                status="ended",
+            ),
+        )
+
+    calls = 0
+
+    def payload(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {
+            "summary": "late tail",
+            "sub_tasks": ["[10:00-10:01, Editor] recovered late tail"],
+        }
+
+    monkeypatch.setattr(session_reducer, "_call_reducer_llm", payload)
+    cfg = config_mod.load(ac_root / "config.toml")
+    deferred = session_reducer.reduce_session(
+        cfg,
+        session_id=session_id,
+        start_time=session_start,
+        end_time=session_end,
+    )
+
+    assert deferred.written is False
+    assert deferred.succeeded is False
+    assert calls == 0
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+        assert row is not None and row.status == "ended"
+        timeline_store.insert(
+            conn,
+            timeline_store.TimelineBlock(
+                start_time=block_start,
+                end_time=block_start + timedelta(minutes=1),
+                entries=["[Editor] recovered late tail"],
+                apps_used=["Editor"],
+                capture_count=1,
+            ),
+        )
+        timeline_store.advance_processed_through(
+            conn, block_start + timedelta(minutes=1)
+        )
+
+    retried = session_reducer.reduce_all_pending(cfg)
+
+    assert len(retried) == 1 and retried[0].written is True
+    assert calls == 1
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+    assert row is not None and row.status == "reduced"
+
+
+def test_terminal_uses_one_way_watermark_then_blocks_read_order(
+    ac_root: Path,
+    monkeypatch,
+) -> None:
+    """A producer commit between the two reads must cause defer, not no-op."""
+    block_start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
+    session_start = block_start + timedelta(seconds=10)
+    session_end = block_start + timedelta(seconds=50)
+    session_id = "sess_watermark_toctou"
+    with fts.cursor() as conn:
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=session_start,
+                end_time=session_end,
+                status="ended",
+            ),
+        )
+        timeline_store.initialize_processed_range(
+            conn,
+            block_start - timedelta(minutes=1),
+        )
+        timeline_store.advance_processed_through(
+            conn,
+            block_start,
+            window_start=block_start - timedelta(minutes=1),
+        )
+
+    def producer_commits_after_watermark_read(
+        conn,
+        _start,
+        _end,
+        *,
+        complete_only,
+    ):
+        assert complete_only is False
+        timeline_store.advance_processed_through(
+            conn,
+            block_start + timedelta(minutes=1),
+            window_start=block_start,
+        )
+        return []
+
+    monkeypatch.setattr(
+        session_reducer,
+        "_blocks_for_session",
+        producer_commits_after_watermark_read,
+    )
+    result = session_reducer.reduce_session(
+        config_mod.load(ac_root / "config.toml"),
+        session_id=session_id,
+        start_time=session_start,
+        end_time=session_end,
+    )
+
+    assert result.written is False and result.succeeded is False
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+        assert row is not None and row.status == "ended"
+        assert timeline_store.covers(
+            conn,
+            block_start + timedelta(minutes=1),
+        )
+
+
+def test_upper_watermark_cannot_prove_target_at_coverage_start(
+    ac_root: Path,
+) -> None:
+    session_start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
+    session_end = session_start + timedelta(minutes=1)
+    session_id = "sess_before_coverage"
+    coverage_start = session_end
+    with fts.cursor() as conn:
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=session_start,
+                end_time=session_end,
+                status="ended",
+            ),
+        )
+        timeline_store.initialize_processed_range(conn, coverage_start)
+        timeline_store.advance_processed_through(
+            conn,
+            coverage_start + timedelta(hours=1),
+            window_start=coverage_start,
+        )
+
+    result = session_reducer.reduce_session(
+        config_mod.load(ac_root / "config.toml"),
+        session_id=session_id,
+        start_time=session_start,
+        end_time=session_end,
+    )
+
+    assert result.written is False and result.succeeded is False
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+    assert row is not None and row.status == "ended"
+
+
+def test_active_flush_waits_for_block_that_extends_past_now(
+    ac_root: Path, monkeypatch
+) -> None:
+    block_start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
+    session_start = block_start + timedelta(seconds=10)
+    now = block_start + timedelta(seconds=50)
+    session_id = "sess_partial_flush"
+    with fts.cursor() as conn:
+        timeline_store.insert(
+            conn,
+            timeline_store.TimelineBlock(
+                start_time=block_start,
+                end_time=block_start + timedelta(minutes=1),
+                entries=["[Editor] still-open bucket"],
+                apps_used=["Editor"],
+                capture_count=1,
+            ),
+        )
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=session_start,
+                status="active",
+            ),
+        )
+
+    monkeypatch.setattr(
+        session_reducer,
+        "_call_reducer_llm",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("flush must wait for a complete timeline block")
+        ),
+    )
+    result = session_reducer.flush_active_session(
+        config_mod.load(ac_root / "config.toml"),
+        session_id=session_id,
+        session_start=session_start,
+        now=now,
+    )
+
+    assert result is None
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+    assert row is not None and row.flush_end is None
 
 
 def test_reducer_llm_failure_schedules_retry(ac_root: Path, monkeypatch) -> None:
@@ -335,6 +608,156 @@ def test_terminal_reduce_after_flush_covers_trailing_window(
     assert row.status == "reduced"
 
 
+def test_flush_advances_only_to_persisted_block_boundary_and_accepts_late_block(
+    ac_root: Path,
+    monkeypatch,
+) -> None:
+    session_id = "sess_late_block"
+    start = datetime(2026, 4, 21, 18, 0, tzinfo=_TZ)
+    first_end = start + timedelta(minutes=1)
+    with fts.cursor() as conn:
+        timeline_store.insert(
+            conn,
+            timeline_store.TimelineBlock(
+                start_time=start,
+                end_time=first_end,
+                entries=["[Editor] first minute"],
+                apps_used=["Editor"],
+                capture_count=1,
+            ),
+        )
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=start,
+                status="active",
+            ),
+        )
+
+    windows: list[tuple[datetime, datetime]] = []
+
+    def record_window(_cfg, _blocks, window_start, window_end, **_kwargs):
+        windows.append((window_start, window_end))
+        return {
+            "summary": "partial",
+            "sub_tasks": ["[18:00-18:05, Editor] continued work"],
+        }
+
+    monkeypatch.setattr(session_reducer, "_call_reducer_llm", record_window)
+    cfg = config_mod.load(ac_root / "config.toml")
+    first = session_reducer.flush_active_session(
+        cfg,
+        session_id=session_id,
+        session_start=start,
+        now=start + timedelta(minutes=5),
+    )
+    assert first is not None and first.written is True
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+    assert row is not None and row.flush_end == first_end
+    assert windows == [(start, first_end)]
+
+    late_end = start + timedelta(minutes=5)
+    with fts.cursor() as conn:
+        timeline_store.insert(
+            conn,
+            timeline_store.TimelineBlock(
+                start_time=first_end,
+                end_time=late_end,
+                entries=["[Editor] late materialized block"],
+                apps_used=["Editor"],
+                capture_count=4,
+            ),
+        )
+
+    second = session_reducer.flush_active_session(
+        cfg,
+        session_id=session_id,
+        session_start=start,
+        now=start + timedelta(minutes=6),
+    )
+    assert second is not None and second.written is True
+    assert windows[-1] == (first_end, late_end)
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+    assert row is not None and row.flush_end == late_end
+    markdown = (paths.memory_dir() / "event-2026-04-21.md").read_text()
+    assert markdown.count(f"Session {session_id} [flush]") == 2
+
+
+def test_flush_crash_replay_recovers_watermark_without_second_llm(
+    ac_root: Path,
+    monkeypatch,
+) -> None:
+    session_id = "sess_flush_crash"
+    start = datetime(2026, 4, 21, 19, 0, tzinfo=_TZ)
+    block_end = start + timedelta(minutes=1)
+    with fts.cursor() as conn:
+        timeline_store.insert(
+            conn,
+            timeline_store.TimelineBlock(
+                start_time=start,
+                end_time=block_end,
+                entries=["[Editor] durable flush"],
+                apps_used=["Editor"],
+                capture_count=1,
+            ),
+        )
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=start,
+                status="active",
+            ),
+        )
+
+    calls = 0
+
+    def payload(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return {"summary": "partial", "sub_tasks": ["[19:00-19:01, Editor] work"]}
+
+    monkeypatch.setattr(session_reducer, "_call_reducer_llm", payload)
+    real_set_flush_end = session_store.set_flush_end
+
+    def crash_before_progress(*_args, **_kwargs):
+        raise RuntimeError("simulated process death before flush progress")
+
+    monkeypatch.setattr(session_store, "set_flush_end", crash_before_progress)
+    cfg = config_mod.load(ac_root / "config.toml")
+    with pytest.raises(RuntimeError, match="simulated process death"):
+        session_reducer.flush_active_session(
+            cfg,
+            session_id=session_id,
+            session_start=start,
+            now=start + timedelta(minutes=5),
+        )
+
+    monkeypatch.setattr(session_store, "set_flush_end", real_set_flush_end)
+    replay = session_reducer.flush_active_session(
+        cfg,
+        session_id=session_id,
+        session_start=start,
+        now=start + timedelta(minutes=6),
+    )
+
+    assert replay is None
+    assert calls == 1
+    markdown = (paths.memory_dir() / "event-2026-04-21.md").read_text()
+    assert markdown.count(f"Session {session_id} [flush]") == 1
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+        indexed = conn.execute(
+            "SELECT COUNT(*) FROM entries WHERE tags LIKE ?",
+            (f"%sid:{session_id}%",),
+        ).fetchone()[0]
+    assert row is not None and row.flush_end == block_end
+    assert indexed == 1
+
+
 def test_retry_due_picks_up_failed_rows(ac_root: Path, monkeypatch) -> None:
     start = datetime(2026, 4, 21, 15, 0, tzinfo=_TZ)
     end = start + timedelta(minutes=15)
@@ -370,3 +793,26 @@ def test_retry_due_picks_up_failed_rows(ac_root: Path, monkeypatch) -> None:
         row = session_store.get_by_id(conn, "sess_retry")
     assert row is not None
     assert row.status == "reduced"
+
+
+def test_retry_due_compares_mixed_offsets_by_absolute_time(ac_root: Path) -> None:
+    start = datetime(2026, 11, 1, 0, 0, tzinfo=timezone(timedelta(hours=-4)))
+    now = datetime(2026, 11, 1, 1, 10, tzinfo=timezone(timedelta(hours=-5)))
+    # 01:50 at -04:00 is 05:50Z and is already due at 06:10Z, even though its
+    # ISO string sorts after 01:10 at -05:00 during the DST fallback hour.
+    due_at = datetime(2026, 11, 1, 1, 50, tzinfo=timezone(timedelta(hours=-4)))
+    with fts.cursor() as conn:
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id="sess_dst_retry",
+                start_time=start,
+                end_time=now,
+                status="failed",
+                retry_count=1,
+                next_retry_at=due_at,
+            ),
+        )
+        due = session_store.list_due_for_retry(conn, now=now)
+
+    assert [row.id for row in due] == ["sess_dst_retry"]

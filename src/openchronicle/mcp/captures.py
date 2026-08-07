@@ -2,9 +2,9 @@
 
 Reads JSON files straight out of ``~/.openchronicle/capture-buffer/`` and
 returns the closest match to an optional timestamp with optional app / title
-filters. Filenames are ISO timestamps (``:`` → ``-``, ``+`` → ``p``,
-``-`` → ``m`` in the offset), which is enough to pre-filter by name before
-opening the JSON — critical because each JSON is ~160 KB.
+filters. The shared filename codec accepts current fraction/observation-ID
+stems and legacy variants; parsed instants, rather than wall-clock filename
+order, determine recency across timezone and daylight-saving changes.
 """
 
 from __future__ import annotations
@@ -16,26 +16,13 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths
+from ..capture import filenames
 from ..store import fts as fts_store
 
 
 def _parse_stem(stem: str) -> datetime | None:
-    """Invert ``scheduler._safe_filename``. Returns None on malformed input."""
-    try:
-        date_part, _, rest = stem.partition("T")
-        if not rest:
-            return None
-        for sign, marker in (("+", "p"), ("-", "m")):
-            if marker in rest:
-                time_part, _, offset = rest.partition(marker)
-                h, m, s = time_part.split("-")
-                oh, om = offset.split("-")
-                return datetime.fromisoformat(
-                    f"{date_part}T{h}:{m}:{s}{sign}{oh}:{om}"
-                )
-        return None
-    except (ValueError, IndexError):
-        return None
+    """Parse legacy and current capture stems through the shared codec."""
+    return filenames.parse_capture_stem(stem)
 
 
 def _parse_at(text: str) -> datetime:
@@ -70,10 +57,7 @@ def _matches(
     title = (meta.get("title") or "").lower()
     if app_name is not None and app_name.lower() not in name:
         return False
-    return not (
-        window_title_substring is not None
-        and window_title_substring.lower() not in title
-    )
+    return not (window_title_substring is not None and window_title_substring.lower() not in title)
 
 
 def _load_capture(path: Path) -> dict[str, Any] | None:
@@ -83,9 +67,7 @@ def _load_capture(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _format_response(
-    path: Path, data: dict[str, Any], include_screenshot: bool
-) -> dict[str, Any]:
+def _format_response(path: Path, data: dict[str, Any], include_screenshot: bool) -> dict[str, Any]:
     meta = data.get("window_meta") or {}
     focused = data.get("focused_element") or {}
     shot = data.get("screenshot") or {}
@@ -131,19 +113,21 @@ def read_recent_capture(
 
     target: datetime | None = _parse_at(at) if at else None
 
-    # Filenames sort lexicographically by wall-clock time; pre-filter by name
-    # range so we don't open hundreds of JSONs we don't need.
-    stems = sorted(
-        (p for p in buf.iterdir() if p.is_file() and p.suffix == ".json"),
-        reverse=target is None,  # newest-first when no anchor time
-    )
+    # Parse before sorting: lexicographic wall-clock order is wrong during a
+    # daylight-saving fallback (01:59-04:00 is older than 01:00-05:00).
+    stems: list[tuple[datetime, Path]] = []
+    for path in buf.iterdir():
+        if not path.is_file() or path.suffix != ".json":
+            continue
+        timestamp = _parse_stem(path.stem)
+        if timestamp is not None:
+            stems.append((timestamp, path))
+    if target is None:
+        stems.sort(key=lambda item: item[0].timestamp(), reverse=True)
 
     best: tuple[float, Path, dict[str, Any]] | None = None
 
-    for path in stems:
-        ts = _parse_stem(path.stem)
-        if ts is None:
-            continue
+    for ts, path in stems:
         if target is not None:
             delta = abs((ts - target).total_seconds())
             if delta > max_age_minutes * 60:
@@ -181,14 +165,19 @@ def search_captures(
 ) -> list[dict[str, Any]]:
     """BM25 + snippet search over the S1 FTS index.
 
-    Returns a list of light-weight hits — `file_stem` is the handle to follow
-    up with `read_recent_capture(at=<timestamp>, app_name=<app>)` for the
-    full visible_text + screenshot.
+    Returns light-weight hits. Follow up with
+    `read_recent_capture(at=hit["timestamp"], app_name=hit["app_name"])` for
+    the full visible_text + screenshot; `file_stem` is an opaque provenance
+    handle, not a valid value for `at`.
     """
     with fts_store.cursor() as conn:
         hits = fts_store.search_captures(
-            conn, query=query, since=since, until=until,
-            app_name=app_name, limit=limit,
+            conn,
+            query=query,
+            since=since,
+            until=until,
+            app_name=app_name,
+            limit=limit,
         )
     return [
         {
@@ -208,7 +197,9 @@ def search_captures(
 
 
 def _dedupe_recent_captures(
-    rows: list[fts_store.CaptureHit], *, limit: int,
+    rows: list[fts_store.CaptureHit],
+    *,
+    limit: int,
 ) -> list[fts_store.CaptureHit]:
     """Pick up to ``limit`` rows distinct by (app_name, window_title)."""
     seen: set[tuple[str, str]] = set()
@@ -225,7 +216,8 @@ def _dedupe_recent_captures(
 
 
 def _recent_timeline_blocks(
-    conn: sqlite3.Connection, limit: int,
+    conn: sqlite3.Connection,
+    limit: int,
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
@@ -278,7 +270,9 @@ def current_context(
     """
     with fts_store.cursor() as conn:
         rows = fts_store.recent_captures(
-            conn, app_name=app_filter, limit=max(headline_limit, 30),
+            conn,
+            app_name=app_filter,
+            limit=max(headline_limit, 30),
         )
         full_rows = _dedupe_recent_captures(rows, limit=fulltext_limit)
         full: list[dict[str, Any]] = []

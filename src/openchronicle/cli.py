@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import shutil
@@ -18,7 +19,10 @@ from rich.table import Table
 from . import __version__, paths
 from . import config as config_mod
 from . import logger as logger_mod
+from .capture import filenames as capture_filenames
+from .capture import store_lock as capture_store
 from .store import entries as entries_mod
+from .store import files as files_mod
 from .store import fts, index_md
 
 app = typer.Typer(
@@ -39,9 +43,11 @@ def _init() -> config_mod.Config:
 
 
 def _is_pid_alive(pid: int) -> bool:
+    if pid <= 1:
+        return False
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError):
         return False
     except PermissionError:
         return True
@@ -51,9 +57,43 @@ def _is_pid_alive(pid: int) -> bool:
 def _read_pid() -> int | None:
     try:
         pid = int(paths.pid_file().read_text().strip())
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
+        return None
+    # A PID alone is unsafe after SIGKILL because the OS can reuse it for an
+    # unrelated process. Bind the public PID file to the PID recorded by the
+    # process that currently holds OpenChronicle's lifetime lease. Malformed,
+    # dangerous (process-group/init), stale, or mismatched values fail closed.
+    if pid <= 1:
+        return None
+    lock_pid = _held_daemon_lock_pid()
+    if lock_pid != pid:
         return None
     return pid if _is_pid_alive(pid) else None
+
+
+def _held_daemon_lock_pid() -> int | None:
+    """Return the valid PID recorded in a currently-held daemon lease."""
+    try:
+        fd = os.open(paths.daemon_lock_file(), os.O_RDWR)
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                lock_pid = int(os.read(fd, 64).decode("ascii").strip())
+            except (OSError, UnicodeDecodeError, ValueError):
+                return None
+            return lock_pid if lock_pid > 1 else None
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return None
+    except OSError:
+        # Stop must never send a signal when lease ownership is ambiguous.
+        return None
+    finally:
+        os.close(fd)
 
 
 def _daemon_uptime() -> str:
@@ -89,17 +129,32 @@ def _last_capture_info() -> tuple[str | None, str | None]:
     buf = paths.capture_buffer_dir()
     if not buf.exists():
         return None, None
-    json_files = sorted(p for p in buf.iterdir() if p.suffix == ".json")
+    json_files = [p for p in buf.iterdir() if p.suffix == ".json"]
     if not json_files:
         return None, None
+    latest = _latest_capture_path(json_files)
     try:
-        data = json.loads(json_files[-1].read_bytes())
+        data = json.loads(latest.read_bytes())
         ts = data.get("timestamp")
         meta = data.get("window_meta") or {}
         app = meta.get("app_name")
         return ts, app
     except (OSError, ValueError):
-        return json_files[-1].stem, None
+        return latest.stem, None
+
+
+def _latest_capture_path(files: list[Path]) -> Path:
+    """Return the newest valid capture by absolute time, with a legacy fallback."""
+    from .capture import filenames
+
+    parsed = [
+        (timestamp.timestamp(), path)
+        for path in files
+        if (timestamp := filenames.parse_capture_stem(path.stem)) is not None
+    ]
+    if parsed:
+        return max(parsed, key=lambda item: item[0])[1]
+    return max(files)
 
 
 def _health_status(pid: int | None, last_ts: str | None) -> tuple[str, str]:
@@ -126,7 +181,11 @@ def _health_status(pid: int | None, last_ts: str | None) -> tuple[str, str]:
 @app.command()
 def start(
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in this terminal."),
-    capture_only: bool = typer.Option(False, "--capture-only", help="Skip the writer loop."),
+    capture_only: bool = typer.Option(
+        False,
+        "--capture-only",
+        help="Capture/session bookkeeping only; disable model processing and MCP.",
+    ),
 ) -> None:
     """Start the OpenChronicle daemon."""
     cfg = _init()
@@ -226,8 +285,8 @@ def status() -> None:
 
     buf = paths.capture_buffer_dir()
     if buf.exists():
-        bufs = sorted(p for p in buf.iterdir() if p.suffix == ".json")
-        last = bufs[-1].name if bufs else "(none)"
+        bufs = [p for p in buf.iterdir() if p.suffix == ".json"]
+        last = _latest_capture_path(bufs).name if bufs else "(none)"
         table.add_row("Buffer", f"{len(bufs)} files, last: {last}")
 
     with fts.cursor() as conn:
@@ -882,7 +941,11 @@ def capture_once() -> None:
     provider = ax_capture.create_provider(
         depth=cfg.capture.ax_depth, timeout=cfg.capture.ax_timeout_seconds
     )
-    path = scheduler.capture_once(cfg.capture, provider)
+    path = scheduler.capture_once(
+        cfg.capture,
+        provider,
+        trigger={"event_type": "manual"},
+    )
     if path:
         console.print(f"[green]Wrote {path}[/green]")
     else:
@@ -914,55 +977,98 @@ def rebuild_captures_index() -> None:
     import json
 
     _init()
-    buf = paths.capture_buffer_dir()
-    if not buf.exists():
-        with fts.cursor() as conn:
-            conn.execute("DELETE FROM captures")
-        console.print("[yellow]No capture-buffer directory; nothing to rebuild.[/yellow]")
-        return
+    with capture_store.capture_store_lock():
+        buf = paths.capture_buffer_dir()
+        if not buf.exists():
+            _delete_capture_rows(_all_capture_row_ids())
+            console.print(
+                "[yellow]No capture-buffer directory; nothing to rebuild.[/yellow]"
+            )
+            return
 
-    files = sorted(p for p in buf.iterdir() if p.is_file() and p.suffix == ".json")
-    file_ids = {p.stem for p in files}
-    with fts.cursor() as conn:
-        rows = conn.execute("SELECT id FROM captures").fetchall()
-    stale_ids = [row["id"] for row in rows if row["id"] not in file_ids]
-    _delete_capture_rows(stale_ids)
+        files = sorted(p for p in buf.iterdir() if p.is_file() and p.suffix == ".json")
+        if not files:
+            _delete_capture_rows(_all_capture_row_ids())
+            console.print("[yellow]capture-buffer is empty; nothing to rebuild.[/yellow]")
+            return
 
-    if not files:
-        console.print("[yellow]capture-buffer is empty; nothing to rebuild.[/yellow]")
-        return
-
-    indexed = 0
-    skipped = 0
-    with fts.cursor() as conn:
+        parsed: list[tuple[Path, dict[str, str]]] = []
+        skipped = 0
         for p in files:
             try:
-                data = json.loads(p.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
+                data = json.loads(p.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("capture JSON root must be an object")
+            except (OSError, json.JSONDecodeError, ValueError) as exc:
                 skipped += 1
                 console.print(f"[yellow]skip {p.name}: {exc}[/yellow]")
                 continue
-            meta = data.get("window_meta") or {}
-            focused = data.get("focused_element") or {}
-            try:
-                fts.insert_capture(
-                    conn,
-                    id=p.stem,
-                    timestamp=data.get("timestamp", ""),
-                    app_name=meta.get("app_name") or "",
-                    bundle_id=meta.get("bundle_id") or "",
-                    window_title=meta.get("title") or "",
-                    focused_role=focused.get("role") or "",
-                    focused_value=focused.get("value") or "",
-                    visible_text=data.get("visible_text") or "",
-                    url=data.get("url") or "",
+            meta_value = data.get("window_meta")
+            meta = meta_value if isinstance(meta_value, dict) else {}
+            focused_value = data.get("focused_element")
+            focused = focused_value if isinstance(focused_value, dict) else {}
+            # Keep only the small searchable projection in memory; screenshots
+            # can make the authoritative JSON files very large.
+            parsed.append(
+                (
+                    p,
+                    {
+                        "timestamp": _capture_text(data.get("timestamp")),
+                        "app_name": _capture_text(meta.get("app_name")),
+                        "bundle_id": _capture_text(meta.get("bundle_id")),
+                        "window_title": _capture_text(meta.get("title")),
+                        "focused_role": _capture_text(focused.get("role")),
+                        "focused_value": _capture_text(focused.get("value")),
+                        "visible_text": _capture_text(data.get("visible_text")),
+                        "url": _capture_text(data.get("url")),
+                    },
                 )
-                indexed += 1
-            except Exception as exc:  # noqa: BLE001
-                skipped += 1
-                console.print(f"[yellow]skip {p.name}: {exc}[/yellow]")
-            if indexed % 200 == 0 and indexed > 0:
-                console.print(f"  indexed {indexed} / {len(files)}…")
+            )
+
+        # Only successfully parsed object roots count as authoritative rows.
+        # Thus a corrupt or list-valued JSON clears any old same-stem index row
+        # instead of preserving stale searchable content indefinitely.
+        valid_ids = {p.stem for p, _data in parsed}
+        indexed = 0
+        with fts.cursor() as conn:
+            conn.execute("BEGIN")
+            try:
+                existing_ids = {
+                    row["id"] for row in conn.execute("SELECT id FROM captures")
+                }
+                conn.executemany(
+                    "DELETE FROM captures WHERE id=?",
+                    ((capture_id,) for capture_id in existing_ids - valid_ids),
+                )
+
+                for p, record in parsed:
+                    try:
+                        fts.insert_capture(
+                            conn,
+                            id=p.stem,
+                            timestamp=record["timestamp"],
+                            app_name=record["app_name"],
+                            bundle_id=record["bundle_id"],
+                            window_title=record["window_title"],
+                            focused_role=record["focused_role"],
+                            focused_value=record["focused_value"],
+                            visible_text=record["visible_text"],
+                            url=record["url"],
+                        )
+                        indexed += 1
+                    except Exception as exc:  # noqa: BLE001
+                        # A malformed record must not keep an older same-stem
+                        # searchable projection behind.
+                        fts.delete_capture(conn, p.stem)
+                        skipped += 1
+                        console.print(f"[yellow]skip {p.name}: {exc}[/yellow]")
+                    if indexed % 200 == 0 and indexed > 0:
+                        console.print(f"  indexed {indexed} / {len(files)}…")
+                conn.execute("COMMIT")
+            except Exception:  # noqa: BLE001
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
 
     console.print(
         f"[green]Captures index rebuilt: {indexed} indexed, {skipped} skipped "
@@ -1020,42 +1126,105 @@ def _delete_capture_rows(capture_ids: list[str]) -> None:
             raise
 
 
-def _clean_captures() -> int:
+def _all_capture_row_ids() -> list[str]:
+    with fts.cursor() as conn:
+        return [row["id"] for row in conn.execute("SELECT id FROM captures")]
+
+
+def _capture_text(value: object) -> str:
+    """Normalize optional capture fields to SQLite-safe text."""
+    return value if isinstance(value, str) else ""
+
+
+def _capture_clean_targets() -> list[Path]:
     buf = paths.capture_buffer_dir()
     if not buf.exists():
-        return 0
-    removed_stems: list[str] = []
-    n = 0
-    for p in buf.iterdir():
-        if p.suffix == ".json" and p.is_file():
-            p.unlink()
-            removed_stems.append(p.stem)
-            n += 1
-    _delete_capture_rows(removed_stems)
-    return n
+        return []
+    return [
+        path
+        for path in buf.iterdir()
+        if path.is_file()
+        and (
+            path.suffix == ".json"
+            or capture_filenames.is_capture_temp_name(path.name)
+        )
+    ]
+
+
+def _memory_clean_targets() -> list[Path]:
+    memory = paths.memory_dir()
+    if not memory.exists():
+        return []
+    return [
+        path
+        for path in memory.rglob("*")
+        if path.is_file()
+        and (path.suffix == ".md" or files_mod.is_memory_temp_name(path.name))
+    ]
+
+
+def _clean_captures() -> int:
+    with capture_store.capture_store_lock():
+        captures = _capture_clean_targets()
+        # Preserve JSON when the searchable projection cannot be removed.
+        # Clear every row, not only rows matching current files: clean must also
+        # remove stale searchable content when the buffer is empty or missing.
+        # Once the database batch succeeds, individual unlink failures merely
+        # leave an unindexed authoritative file that rebuild can recover.
+        _delete_capture_rows(_all_capture_row_ids())
+        removed = 0
+        for p in captures:
+            try:
+                p.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed
 
 
 def _clean_timeline() -> int:
     with fts.cursor() as conn:
         n = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
-        conn.execute("DELETE FROM timeline_blocks")
+        conn.execute("BEGIN")
+        try:
+            conn.execute("DELETE FROM timeline_blocks")
+            conn.execute("DELETE FROM timeline_state")
+            conn.execute("COMMIT")
+        except Exception:  # noqa: BLE001
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
     return n
 
 
 def _clean_memory() -> tuple[int, int]:
-    """Delete memory Markdown files + reset entries/files tables. Returns (files, entries)."""
-    mem = paths.memory_dir()
-    files = 0
-    if mem.exists():
-        for p in mem.rglob("*.md"):
-            if p.is_file():
-                p.unlink()
-                files += 1
-    with fts.cursor() as conn:
-        entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-        conn.execute("DELETE FROM entries")
-        conn.execute("DELETE FROM files")
-    return files, entries
+    """Delete memory files/temp copies and reset indexes. Returns (files, entries)."""
+    with files_mod.store_write_lock():
+        targets = _memory_clean_targets()
+        # Privacy deletion follows the same fail-closed order as captures:
+        # clear every searchable projection transactionally before unlinking
+        # authoritative Markdown or crash-left temp copies. If SQLite is
+        # unavailable, plaintext remains recoverable and search state is not
+        # falsely presented as wiped.
+        with fts.cursor() as conn:
+            entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+            conn.execute("BEGIN")
+            try:
+                conn.execute("DELETE FROM entries")
+                conn.execute("DELETE FROM files")
+                conn.execute("COMMIT")
+            except Exception:  # noqa: BLE001
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        removed = 0
+        for path in targets:
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed, entries
 
 
 def _clean_writer_state() -> bool:
@@ -1073,7 +1242,7 @@ def clean_captures(
     """Delete all files in the capture buffer."""
     _init()
     buf = paths.capture_buffer_dir()
-    count = sum(1 for p in buf.iterdir() if p.suffix == ".json") if buf.exists() else 0
+    count = len(_capture_clean_targets())
     console.print(f"About to delete {count} capture file(s) under {buf}")
     _warn_if_running()
     if not _confirm("Proceed?", yes):
@@ -1106,12 +1275,12 @@ def clean_memory(
     """Delete all memory Markdown files and reset the FTS index."""
     _init()
     mem = paths.memory_dir()
-    md_count = sum(1 for _ in mem.rglob("*.md")) if mem.exists() else 0
+    memory_count = len(_memory_clean_targets())
     with fts.cursor() as conn:
         entry_count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         file_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
     console.print(
-        f"About to delete {md_count} Markdown file(s) under {mem} "
+        f"About to delete {memory_count} memory file(s) under {mem} "
         f"and reset {entry_count} entries / {file_count} files in the index."
     )
     _warn_if_running()
@@ -1130,10 +1299,8 @@ def clean_all(
 ) -> None:
     """Delete captures, timeline blocks, memory, and writer state. Config is kept."""
     _init()
-    buf = paths.capture_buffer_dir()
-    mem = paths.memory_dir()
-    capture_count = sum(1 for p in buf.iterdir() if p.suffix == ".json") if buf.exists() else 0
-    md_count = sum(1 for _ in mem.rglob("*.md")) if mem.exists() else 0
+    capture_count = len(_capture_clean_targets())
+    memory_count = len(_memory_clean_targets())
     with fts.cursor() as conn:
         entry_count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         tlb_count = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
@@ -1142,7 +1309,7 @@ def clean_all(
         "[bold red]This will delete:[/bold red]\n"
         f"  - {capture_count} capture file(s)\n"
         f"  - {tlb_count} timeline block(s)\n"
-        f"  - {md_count} memory Markdown file(s) and {entry_count} index entries\n"
+        f"  - {memory_count} memory file(s) and {entry_count} index entries\n"
         f"  - writer state\n"
         "[bold]Config ({}) is kept.[/bold]".format(paths.config_file())
     )

@@ -508,9 +508,9 @@ def build_server(cfg: Config | None = None):
         it, call both — they're independent indexes and neither is expensive.
 
         Returns the top-`limit` matching captures (BM25-ranked) with snippet
-        highlighting (matched tokens wrapped in `[...]`). Each hit includes
-        `file_stem` — pass that as `at` to `read_recent_capture` to get the
-        full visible_text.
+        highlighting (matched tokens wrapped in `[...]`). To hydrate a hit,
+        pass its ISO `timestamp` (and optionally `app_name`) to
+        `read_recent_capture`; `file_stem` is an opaque provenance handle.
 
         Examples:
           search_captures(query="rate limiter")             — find any time it appeared

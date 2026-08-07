@@ -10,13 +10,14 @@ Capture is the only layer that touches the outside world. It produces one JSON f
 
 Both funnel into `capture_once` in `capture/scheduler.py`, which runs:
 
-1. `ax_capture.capture_frontmost(focused_window_only=True)` — one-shot invocation of `mac-ax-helper` for the current window, pruned to `ax_depth` layers.
-2. `s1_parser.enrich()` — extracts `focused_element`, `visible_text`, and `url` from the AX tree (see [S1 fields](#s1-fields) below).
-3. `screenshot.grab()` — unless `include_screenshot = false`.
-4. `window_meta.active_window()` — app name, title, bundle_id via `NSRunningApplication`.
-5. Write `{iso8601_safe}.json` to the buffer.
+1. `window_meta.active_window()` — app name, title, bundle ID via `NSRunningApplication`.
+2. The deterministic privacy pre-gate — allowlist and app/bundle/title exclusions. A denial stops here, before AX, screenshot, JSON, FTS, logs containing content, or model use.
+3. `ax_capture.capture_frontmost(focused_window_only=True)` — one-shot invocation of `mac-ax-helper` for the current window, pruned to `ax_depth` layers.
+4. `screenshot.grab()` — only when the user opts into `include_screenshot = true`.
+5. `s1_parser.enrich()` — extracts `focused_element`, `visible_text`, and `url` from the AX tree (see [S1 fields](#s1-fields) below).
+6. Atomically write a private (`0600`) v3 observation JSON and update the recoverable FTS projection.
 
-The filename is ISO-8601 with `:` → `-` and `+` → `p` / `-` → `m` for the TZ offset. Example: `2026-04-21T17-07-32p08-00.json`.
+The filename preserves timestamp fractions and timezone, then appends a random observation ID so same-millisecond events cannot overwrite each other. Example: `2026-04-21T17-07-32.123p08-00_obs_0123456789abcdef.json`. Legacy timestamp-only filenames remain readable.
 
 The same capture scheduler also invokes `SessionManager.on_event` (wired as a `pre_capture_hook` in `daemon.py`), so the session cutter sees every capture-worthy event without a separate subscription path.
 
@@ -61,14 +62,23 @@ A 10×+ ratio means there's content past depth 30 you'd miss.
 
 ```json
 {
-  "timestamp": "2026-04-21T17:07:32+08:00",
-  "schema_version": 2,
-  "trigger": { "event_type": "window_focus_changed", "app": "Claude", ... },
+  "timestamp": "2026-04-21T17:07:32.123+08:00",
+  "schema_version": 3,
+  "observation_id": "obs_0123456789abcdef...",
+  "trigger": {
+    "event_type": "UserTextInput",
+    "app_name": "Claude",
+    "bundle_id": "com.anthropic.claudefordesktop",
+    "pid": 1234,
+    "timestamp": "2026-04-21T17:07:32.100+08:00",
+    "details": { "role": "AXTextArea", "value": "..." }
+  },
   "window_meta": {
     "app_name": "Claude",
     "bundle_id": "com.anthropic.claudefordesktop",
     "title": "New conversation — Claude"
   },
+  "privacy": { "decision": "allowed", "policy_version": 1 },
   "focused_element": {
     "role": "AXTextArea",
     "title": "Message composer",
@@ -89,7 +99,14 @@ A 10×+ ratio means there's content past depth 30 you'd miss.
 }
 ```
 
-`trigger` is `{"event_type": "heartbeat"}` for timer captures and `{"event_type": "manual"}` for `capture-once`. Screenshot is omitted entirely when `include_screenshot = false`.
+Watcher-triggered observations retain the complete decoded watcher payload rather than projecting it down to three fields. `trigger` is `{"event_type": "heartbeat"}` for timer captures and `{"event_type": "manual"}` for `capture-once`. Screenshot is omitted entirely by default.
+
+The current pre-gate can decide from app, bundle, and window title before collecting content. URL/private-mode classification and content redaction after in-memory AX parsing are the next privacy stage; until that lands, exclude sensitive browsers by bundle/title or use a strict bundle allowlist.
+
+Opt-in screenshots currently capture the primary display, not just the verified
+frontmost window. They can therefore include split-screen or background content
+that window-title policy cannot inspect. Keep screenshots disabled for sensitive
+work until window-scoped capture and post-capture verification land.
 
 Secure fields (password inputs) are replaced with `"[REDACTED]"` at the helper level — the Python side never sees them.
 
@@ -103,6 +120,12 @@ Ported from Einsia-Partner's `s1_collector`. These are what downstream LLM stage
 
 Screenshots live in the capture JSON but are **not** passed to the timeline / reducer / classifier prompts. They exist for future vision-model paths and for debugging.
 
+The capture's authoritative `timestamp` is assigned immediately before its
+atomic write while holding the collection lock. Timeline membership is
+snapshotted under that same lock. A slow AX/screenshot collection therefore
+cannot arrive later with an old timestamp after the producer has already
+certified that wall-clock bucket as empty.
+
 ## Buffer hygiene — tiered retention
 
 Captures are pruned by the timeline tick, not the writer. After each timeline scan, `capture_scheduler.cleanup_buffer` applies three passes (oldest-safe-first), all gated on "this file has already been absorbed by a closed timeline block" so un-absorbed trailing captures are never touched:
@@ -111,7 +134,7 @@ Captures are pruned by the timeline tick, not the writer. After each timeline sc
 |---|---|---|
 | **Delete** | mtime older than `buffer_retention_hours` (default **168** = 7 days) | Whole JSON removed |
 | **Strip screenshot** | mtime older than `screenshot_retention_hours` (default **24**) | Rewrite JSON without `screenshot` field; sets `screenshot_stripped: true`. The AX tree, `visible_text`, `focused_element`, and `url` stay |
-| **Evict by size** | Total buffer > `buffer_max_mb` (default **2000**, i.e. 2 GB; `0` disables) | Delete oldest absorbed files until under the cap |
+| **Evict by size** | Total buffer > `buffer_max_mb` (default **2000**, i.e. 2 GB; `0` disables) | Delete oldest absorbed files toward the target; never evict unprocessed captures |
 
 Why tiered: the screenshot base64 is ~77% of each capture's bytes but nothing downstream consumes it today (it's kept for future vision stages + debugging). Stripping it at 24h drops each stale capture to ~20% of its original size, which is what makes a 7-day window affordable. Typical steady-state footprint is in the 100s of MB.
 
@@ -120,6 +143,10 @@ To wipe manually:
 ```bash
 openchronicle clean captures
 ```
+
+Atomic writes use private temporary files. If the process is killed before the
+rename, the next daemon startup or cleanup pass removes the strictly matched
+orphan temp while holding the capture-store lock; manual clean removes them too.
 
 ## Search index — `captures_fts`
 

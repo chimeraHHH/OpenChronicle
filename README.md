@@ -35,6 +35,8 @@
 
 > **Status:** v0.1.0 · macOS only · early alpha
 
+> **This fork:** see the clean-room [Vida-like proactive assistant roadmap](docs/vida-like-roadmap.md).
+
 OpenChronicle gives AI agents a local, inspectable memory built from real screen and app context.
 
 It runs on your Mac, captures structured context from what you're doing, and turns it into persistent Markdown memory: what you're working on, what you've decided, which tools you use, and which people or projects matter.

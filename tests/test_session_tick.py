@@ -4,16 +4,12 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import pytest
-
 from openchronicle import config as config_mod
-from openchronicle import paths
 from openchronicle.session import store as session_store
 from openchronicle.session import tick as session_tick
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
 from openchronicle.writer import session_reducer
-
 
 _TZ = timezone(timedelta(hours=8))
 

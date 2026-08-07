@@ -8,15 +8,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from openchronicle import config as config_mod
 from openchronicle.session import store as session_store
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
 from openchronicle.writer import agent
 from openchronicle.writer import llm as llm_mod
-
 
 _TZ = timezone(timedelta(hours=8))
 

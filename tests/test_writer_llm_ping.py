@@ -38,8 +38,10 @@ def test_ping_stage_success_records_latency(monkeypatch: pytest.MonkeyPatch) -> 
     import litellm
 
     calls: list[dict] = []
+    monkeypatch.setattr(litellm, "num_retries", 3)
 
     def fake_completion(**kwargs):
+        assert litellm.num_retries == 0
         calls.append(kwargs)
         return object()  # ping_stage doesn't read the response
 
@@ -55,6 +57,7 @@ def test_ping_stage_success_records_latency(monkeypatch: pytest.MonkeyPatch) -> 
     # ping should keep the request small and bounded.
     assert calls[0]["max_tokens"] == 4
     assert "timeout" in calls[0]
+    assert calls[0]["num_retries"] == 0
 
 
 def test_ping_stage_failure_label_includes_class_and_message(

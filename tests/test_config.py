@@ -6,10 +6,16 @@ from openchronicle import config
 def test_defaults_when_no_file(tmp_path: Path) -> None:
     cfg = config.load(tmp_path / "missing.toml")
     assert cfg.capture.interval_minutes == 10
+    assert cfg.capture.include_screenshot is False
+    assert cfg.capture.deny_unknown_windows is True
+    assert cfg.capture.allowed_bundle_ids == []
+    assert cfg.capture.excluded_bundle_ids == []
     assert cfg.session.gap_minutes == 5
     assert cfg.reducer.enabled is True
     default = cfg.model_for("reducer")
     assert default.model == "gpt-5.4-nano"
+    assert default.timeout_seconds is None
+    assert default.num_retries is None
 
 
 def test_stage_override_merges(tmp_path: Path) -> None:
@@ -34,11 +40,40 @@ api_key_env = "ANTHROPIC_API_KEY"
     assert classifier.api_key_env == "ANTHROPIC_API_KEY"
 
 
+def test_llm_reliability_settings_inherit_and_override(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[models.default]
+timeout_seconds = 90
+num_retries = 1
+
+[models.reducer]
+timeout_seconds = 240
+
+[models.timeline]
+num_retries = 0
+"""
+    )
+
+    cfg = config.load(path)
+
+    assert cfg.model_for("classifier").timeout_seconds == 90
+    assert cfg.model_for("classifier").num_retries == 1
+    assert cfg.model_for("reducer").timeout_seconds == 240
+    assert cfg.model_for("reducer").num_retries == 1
+    assert cfg.model_for("timeline").timeout_seconds == 90
+    assert cfg.model_for("timeline").num_retries == 0
+
+
 def test_write_default_creates_file(tmp_path: Path) -> None:
     p = tmp_path / "config.toml"
     assert config.write_default_if_missing(p)
     assert p.exists()
     assert "[models.default]" in p.read_text()
+    assert "# timeout_seconds = 120" in p.read_text()
+    assert "# num_retries = 2" in p.read_text()
+    assert "include_screenshot = false" in p.read_text()
     # idempotent
     assert not config.write_default_if_missing(p)
 

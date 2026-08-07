@@ -18,6 +18,8 @@ model = "gpt-5.4-nano"
 api_key_env = "OPENAI_API_KEY"
 # base_url = "https://your-gateway/v1"
 # api_key  = "sk-..."        # overrides api_key_env if set
+# timeout_seconds = 120       # per-attempt provider I/O timeout; max 1800
+# num_retries = 2             # transient failures only; max 5; 3 total attempts
 
 [models.timeline]     # short-window normalizer — runs constantly, keep cheap but not weak
 # inherits from default
@@ -36,13 +38,20 @@ api_key_env = "OPENAI_API_KEY"
 
 Each stage section **inherits every field** from `[models.default]` and overrides only what it sets. If you want a single model everywhere, set `[models.default]` and leave the rest empty.
 
+`timeout_seconds` is passed to LiteLLM as the provider transport timeout; it
+bounds stalled connect/read/write operations, not an adversarial server that
+keeps a response alive forever. OpenChronicle owns the outer retry loop and
+clears request-level and process-global LiteLLM retries, so attempt count is
+deterministic. Retryable
+conditions are 408/409/429, connection/timeout failures, and HTTP 5xx.
+
 Stage → purpose:
 
 | Stage | Runs | What it does |
 |---|---|---|
 | `timeline` | every 60s while captures exist | Normalizes a short (default 1-min) capture window into a list of activity records with authored text preserved verbatim. |
-| `reducer` | on session end + daily safety net | Turns a session's timeline blocks into one event-daily entry with time-ranged sub_tasks. |
-| `classifier` | after each successful reducer run | Reads the just-written entry + context, extracts durable facts into user-/project-/tool-/topic-/person-/org- files via a tool-call loop. |
+| `reducer` | active-session flushes + session end + due retry/safety net | Turns a session's timeline blocks into time-ranged event-daily entries. |
+| `classifier` | periodic active-session passes + terminal catch-up | Reads event-daily entries + context and extracts durable facts into user-/project-/tool-/topic-/person-/org- files via a tool-call loop. |
 | `compact` | after commits that flag files | Rewrites a fat file; rejects if >5% noun-phrase loss. |
 
 ### Fully local with Ollama
@@ -91,8 +100,13 @@ dedup_interval_seconds = 1.0         # same-event-type dedup window
 same_window_dedup_seconds = 5.0      # non-focus-change events in the same bundle+window are dropped if within this gap
 buffer_retention_hours = 168         # 7 days; stale absorbed captures past this are deleted
 screenshot_retention_hours = 24      # after 24h, strip screenshot (77% of bytes) but keep AX+text
-buffer_max_mb = 2000                 # hard ceiling (MB); oldest absorbed files evicted first (0 disables)
-include_screenshot = true
+buffer_max_mb = 2000                 # best-effort target over absorbed files (0 disables)
+allowed_bundle_ids = []              # non-empty = capture only these bundle IDs
+excluded_bundle_ids = []             # exact, case-insensitive
+excluded_app_names = []              # exact, case-insensitive
+excluded_window_title_patterns = []  # substring, case-insensitive
+deny_unknown_windows = true          # fail closed if active app identity is unavailable
+include_screenshot = false           # opt in; screenshots are unused downstream today
 screenshot_max_width = 1920
 screenshot_jpeg_quality = 80
 ax_depth = 100                       # Electron apps need deep trees; 8 only reaches chrome
@@ -101,26 +115,48 @@ ax_timeout_seconds = 3
 
 Tuning notes:
 
+- **`allowed_bundle_ids`.** Leave empty for compatibility, or set a strict
+  allowlist for the safest deployment. Unknown/empty bundle IDs are denied
+  whenever this list is non-empty. All exclusion rules still take precedence.
+- **Exclusions.** Bundle IDs and app names use case-insensitive exact matching;
+  window-title patterns use case-insensitive substring matching. These checks
+  run before AX collection, screenshots, persistence, indexing, and model use.
+- **`deny_unknown_windows`.** Defaults to `true`. If macOS active-window
+  metadata cannot provide a bundle ID, capture stops instead of bypassing an
+  allow/exclude rule.
+- **`include_screenshot`.** Defaults to `false`. Screenshots are not consumed by
+  the current memory stages and currently cover the primary display rather than
+  only the verified window. Enable them only for an explicit, non-sensitive
+  debugging or future vision workflow.
 - **`ax_depth`.** Native Cocoa apps are fine at 20. Electron apps (Claude Desktop, VS Code, Slack, Notion) put user content past layer 20 — stay at 100 unless you're CPU-constrained.
 - **`debounce_seconds`.** Lower = more captures during typing; higher = fewer near-duplicates.
 - **`same_window_dedup_seconds`.** When the user types for a long time in the same document, this is the knob that decides how frequently you re-capture the same (bundle, window) pair. Focus changes always bypass this.
 - **`heartbeat_minutes`.** Periodic capture as a safety net. `0` disables it completely (watcher-only). Values `>0` are clamped to a 60s floor.
 - **`buffer_retention_hours`.** Whole-JSON deletion cutoff. Default 7 days lets `read_recent_capture` reach back that far — shrink to a few hours if you only care about the current work session, bump if you want longer recall.
 - **`screenshot_retention_hours`.** After this many hours the screenshot field is stripped (rest of the JSON stays). Screenshots aren't used by timeline / reducer / classifier today — setting this ≪ `buffer_retention_hours` is what makes long retention cheap. `0` or very large values keep screenshots for the full window.
-- **`buffer_max_mb`.** Hard ceiling in MB. When exceeded, the cleanup pass evicts oldest absorbed files until under. Set to `0` to disable (pure time-based retention).
+- **`buffer_max_mb`.** Best-effort size target in MB. When exceeded, cleanup
+  evicts the oldest already-absorbed files toward the target, but never removes
+  unprocessed captures. Capture-only mode or a stalled timeline can therefore
+  exceed it. Set to `0` to disable size-based cleanup.
 
 ## `[timeline]`
 
 ```toml
 [timeline]
 window_minutes = 1                # wall-clock aligned (:00/:01/:02/...)
-cold_lookback_minutes = 30        # on first run, at most backfill this far
+cold_lookback_minutes = 30        # default seed when no older retained/pending evidence exists
 recent_context_blocks = 720       # ~12h of 1-min blocks; consulted by tooling
 ```
 
 Timeline is always-on and acts as a **verbatim-preserving normalizer** — it de-duplicates snapshots and strips UI chrome but preserves the user's typed text, URLs, titles, and proper nouns unchanged. Real compression happens in the reducer.
 
 `window_minutes` is effectively locked in once blocks exist — changing it later produces new-sized blocks going forward, but old blocks keep their original boundaries (they're keyed by `(start_time, end_time)`). The default 1-min size pairs with the reducer's flush tick (default 5-min) so each flush consumes ~5 blocks. A larger timeline window cuts LLM calls per hour but risks the model sliding from normalization into summarization.
+
+`cold_lookback_minutes` is not a data-loss cutoff. On a fresh/legacy state the
+producer seeds from the earliest of this default horizon, any valid retained
+capture, and any durable pending reducer window. Catch-up is capped per tick
+and resumes from its persisted upper bound, so a long outage is recovered over
+multiple ticks without blocking the daemon indefinitely.
 
 ## `[session]`
 
@@ -141,7 +177,7 @@ See [session.md](session.md) for what each rule means and how to tune it.
 
 ```toml
 [reducer]
-enabled = true                   # run S2 reducer on session end + daily safety net
+enabled = true                   # session/flush/pending reducer + classifier pipeline
 daily_tick_hour = 23             # local-time hour for the daily safety-net tick
 daily_tick_minute = 55
 ```
@@ -155,7 +191,7 @@ Setting `enabled = false` disables both the S2 reducer and the classifier. Sessi
 interval_minutes = 30           # durable-fact extraction cadence inside active sessions (min 5)
 ```
 
-While a session is active, the classifier wakes up every `interval_minutes` and extracts durable facts from event-daily entries written since its last pass. The terminal reduce (at session end) runs one more classifier pass over whatever trailing window the tick didn't reach, so nothing is lost between the final tick and the session close. Each pass advances the session's `classified_end` bookmark so entries are never double-classified.
+While a session is active, the classifier wakes up every `interval_minutes` and extracts durable facts from event-daily entries written since its last pass. The terminal reduce (at session end) attempts one more classifier pass over whatever trailing window the tick didn't reach. Successful passes advance the session's `classified_end` bookmark to avoid repeat work during normal operation. Crash scheduling is best-effort: work may repeat if tool writes land before the bookmark, and the terminal pass may be missed if the process dies after reducer completion. Classifier tools must deduplicate against existing memory; `classified_end` is not an exactly-once guarantee.
 
 Values `< 5` are clamped to 5 to keep LLM cost bounded. Pair with `[session] flush_minutes`: the reducer flushes at a higher frequency than the classifier, so a classifier tick always has fresh entries to look at.
 

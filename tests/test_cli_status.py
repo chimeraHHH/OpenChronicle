@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from openchronicle import __version__, cli, paths
+from openchronicle import __version__, cli, daemon, paths
+from openchronicle import config as config_mod
 from openchronicle.writer import llm as llm_mod
 
 
@@ -105,6 +108,73 @@ def test_daemon_uptime_running(ac_root: Path, monkeypatch: pytest.MonkeyPatch) -
     assert "m" in uptime  # recently created PID file → minutes-level uptime
 
 
+def test_pid_is_untrusted_without_daemon_lease(ac_root: Path) -> None:
+    paths.pid_file().write_text(str(os.getpid()))
+
+    assert cli._read_pid() is None
+
+
+def test_pid_is_trusted_while_daemon_lease_is_held(ac_root: Path) -> None:
+    lease_fd = daemon._acquire_daemon_lock()
+    paths.pid_file().write_text(str(os.getpid()))
+    try:
+        assert cli._read_pid() == os.getpid()
+    finally:
+        daemon._release_daemon_lock(lease_fd)
+
+
+@pytest.mark.parametrize("unsafe_pid", [-1, 0, 1])
+def test_pid_rejects_process_group_and_init_values(
+    ac_root: Path, unsafe_pid: int
+) -> None:
+    lease_fd = daemon._acquire_daemon_lock()
+    paths.daemon_lock_file().write_text(str(unsafe_pid))
+    paths.pid_file().write_text(str(unsafe_pid))
+    try:
+        assert cli._read_pid() is None
+    finally:
+        daemon._release_daemon_lock(lease_fd)
+
+
+def test_stop_never_signals_pid_that_mismatches_held_lease(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lease_fd = daemon._acquire_daemon_lock()
+    paths.pid_file().write_text(str(os.getpid()))
+    paths.daemon_lock_file().write_text("999999")
+    signals: list[tuple[int, int]] = []
+
+    def record_signal(pid: int, sig: int) -> None:
+        signals.append((pid, sig))
+
+    monkeypatch.setattr(cli, "_init", lambda: config_mod.Config())
+    monkeypatch.setattr(cli.os, "kill", record_signal)
+    try:
+        result = CliRunner().invoke(cli.app, ["stop"])
+    finally:
+        daemon._release_daemon_lock(lease_fd)
+
+    assert result.exit_code == 1
+    assert signals == []
+
+
+def test_stop_never_signals_live_recycled_pid_without_lease(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths.pid_file().write_text(str(os.getpid()))
+    signals: list[tuple[int, int]] = []
+
+    def record_signal(pid: int, sig: int) -> None:
+        signals.append((pid, sig))
+
+    monkeypatch.setattr(cli, "_init", lambda: config_mod.Config())
+    monkeypatch.setattr(cli.os, "kill", record_signal)
+    result = CliRunner().invoke(cli.app, ["stop"])
+
+    assert result.exit_code == 1
+    assert (os.getpid(), signal.SIGTERM) not in signals
+
+
 def test_health_stopped() -> None:
     """(None, None) → "stopped", "red"."""
     label, style = cli._health_status(None, None)
@@ -171,6 +241,25 @@ def test_last_capture_finds_newest(ac_root: Path) -> None:
     ts, app = cli._last_capture_info()
     assert ts == "2026-04-22T14:05:00+08:00", f"got ts={ts!r}"
     assert app == "Safari", f"got app={app!r}"
+
+
+def test_last_capture_uses_absolute_time_across_dst_fallback(ac_root: Path) -> None:
+    buf = paths.capture_buffer_dir()
+    older = buf / "2026-11-01T01-59-59m04-00.json"
+    newer = buf / "2026-11-01T01-00-00m05-00.json"
+    older.write_text(json.dumps({
+        "timestamp": "2026-11-01T01:59:59-04:00",
+        "window_meta": {"app_name": "Older"},
+    }))
+    newer.write_text(json.dumps({
+        "timestamp": "2026-11-01T01:00:00-05:00",
+        "window_meta": {"app_name": "Newer"},
+    }))
+
+    ts, app = cli._last_capture_info()
+
+    assert ts == "2026-11-01T01:00:00-05:00"
+    assert app == "Newer"
 
 
 def test_last_capture_handles_corrupted_json(ac_root: Path) -> None:

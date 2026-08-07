@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -107,8 +109,20 @@ class FileRow:
 
 
 def connect(db_path: Path | None = None) -> sqlite3.Connection:
-    db_path = db_path or paths.index_db()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path is None:
+        paths.ensure_dirs()
+        db_path = paths.index_db()
+    else:
+        # A caller-provided database may live under a shared/system parent;
+        # create a missing directory privately but never chmod an existing
+        # arbitrary parent such as /tmp.
+        db_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        fd = os.open(db_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        os.chmod(db_path, 0o600)
+    else:
+        os.close(fd)
     conn = sqlite3.connect(db_path, isolation_level=None, timeout=10.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -121,9 +135,18 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     from ..session import store as session_store
     from ..timeline import store as timeline_store
+
     timeline_store.ensure_schema(conn)
     session_store.ensure_schema(conn)
+    _secure_db_files(db_path)
     return conn
+
+
+def _secure_db_files(db_path: Path) -> None:
+    """Restrict the database and any live WAL sidecars to the current user."""
+    for suffix in ("", "-wal", "-shm"):
+        with contextlib.suppress(FileNotFoundError):
+            os.chmod(f"{db_path}{suffix}", 0o600)
 
 
 @contextmanager
@@ -155,6 +178,7 @@ def checkpoint(mode: str = "TRUNCATE") -> tuple[int, int, int]:
 
 
 # ─── files table ───────────────────────────────────────────────────────────
+
 
 def upsert_file(conn: sqlite3.Connection, row: FileRow) -> None:
     conn.execute(
@@ -225,6 +249,7 @@ def _to_file_row(r: sqlite3.Row) -> FileRow:
 
 
 # ─── entries (FTS5) ────────────────────────────────────────────────────────
+
 
 def insert_entry(
     conn: sqlite3.Connection,
@@ -314,8 +339,13 @@ def search(
     args.append(top_k)
     rows = conn.execute(sql, args).fetchall()
     return [
-        EntryHit(id=r["id"], path=r["path"], timestamp=r["timestamp"], content=r["content"],
-                 rank=r["rank"])
+        EntryHit(
+            id=r["id"],
+            path=r["path"],
+            timestamp=r["timestamp"],
+            content=r["content"],
+            rank=r["rank"],
+        )
         for r in rows
     ]
 
@@ -326,7 +356,8 @@ def search(
 @dataclass
 class CaptureHit:
     """A captures-table row paired with its FTS rank + snippet."""
-    id: str                # capture file stem
+
+    id: str  # capture file stem
     timestamp: str
     app_name: str
     bundle_id: str
@@ -334,8 +365,8 @@ class CaptureHit:
     focused_role: str
     focused_value: str
     url: str
-    snippet: str           # FTS5 snippet() with the matched tokens highlighted
-    rank: float            # bm25 score (lower = better); 0.0 for non-search recent()
+    snippet: str  # FTS5 snippet() with the matched tokens highlighted
+    rank: float  # bm25 score (lower = better); 0.0 for non-search recent()
 
 
 def insert_capture(
@@ -368,8 +399,17 @@ def insert_capture(
             visible_text=excluded.visible_text,
             url=excluded.url
         """,
-        (id, timestamp, app_name, bundle_id, window_title,
-         focused_role, focused_value, visible_text, url),
+        (
+            id,
+            timestamp,
+            app_name,
+            bundle_id,
+            window_title,
+            focused_role,
+            focused_value,
+            visible_text,
+            url,
+        ),
     )
 
 
@@ -413,8 +453,7 @@ def search_captures(
         "       bm25(captures_fts) AS rank "
         "  FROM captures c "
         "  JOIN captures_fts ON captures_fts.rowid = c.rowid "
-        " WHERE " + " AND ".join(clauses) +
-        " ORDER BY rank LIMIT ?"
+        " WHERE " + " AND ".join(clauses) + " ORDER BY rank LIMIT ?"
     )
     args.append(limit)
     rows = conn.execute(sql, args).fetchall()
@@ -481,13 +520,9 @@ def recent_captures(
     ]
 
 
-def get_capture_visible_text(
-    conn: sqlite3.Connection, capture_id: str
-) -> str:
+def get_capture_visible_text(conn: sqlite3.Connection, capture_id: str) -> str:
     """Read just the visible_text field for a capture. Used by current_context."""
-    r = conn.execute(
-        "SELECT visible_text FROM captures WHERE id=?", (capture_id,)
-    ).fetchone()
+    r = conn.execute("SELECT visible_text FROM captures WHERE id=?", (capture_id,)).fetchone()
     return (r["visible_text"] if r else "") or ""
 
 
@@ -522,7 +557,8 @@ def recent(
     args.append(limit)
     rows = conn.execute(sql, args).fetchall()
     return [
-        EntryHit(id=r["id"], path=r["path"], timestamp=r["timestamp"], content=r["content"],
-                 rank=0.0)
+        EntryHit(
+            id=r["id"], path=r["path"], timestamp=r["timestamp"], content=r["content"], rank=0.0
+        )
         for r in rows
     ]

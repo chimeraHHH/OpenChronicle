@@ -130,11 +130,13 @@ def tool_supersede(
 def tool_flag_compact(
     conn: sqlite3.Connection, *, path: str, reason: str, state: CommitState
 ) -> dict[str, Any]:
+    entries_mod.require_autocommit(conn)
     p = files_mod.memory_path(path)
-    if not p.exists():
-        return {"error": f"file not found: {path}"}
-    fts.set_needs_compact(conn, p.name, True)
-    files_mod.update_frontmatter(p, {"needs_compact": True})
+    with files_mod.store_write_lock(), files_mod.file_lock(p):
+        if not p.exists():
+            return {"error": f"file not found: {path}"}
+        files_mod._update_frontmatter_unlocked(p, {"needs_compact": True})
+        fts.set_needs_compact(conn, p.name, True)
     state.flagged_compact.append(path)
     logger.info("flag_compact: %s (%s)", path, reason)
     return {"ok": True}

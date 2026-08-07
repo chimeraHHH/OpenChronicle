@@ -43,11 +43,19 @@ def _unique_tokens(text: str) -> set[str]:
 
 
 def compact_file(cfg: Config, conn: sqlite3.Connection, *, name: str) -> CompactResult:
+    entries_mod.require_autocommit(conn)
     path = files_mod.memory_path(name)
     if not path.exists():
         return CompactResult(name, False, 0, 0, 0, 0, 0.0, "file missing")
 
-    original = path.read_text()
+    # Take the model input under the same global→path order used by every
+    # Markdown/FTS mutation. Release both during the slow LLM call; writeback
+    # re-acquires them and rejects a stale rewrite below.
+    with files_mod.store_write_lock(), files_mod.file_lock(path):
+        try:
+            original = path.read_text()
+        except FileNotFoundError:
+            return CompactResult(name, False, 0, 0, 0, 0, 0.0, "file missing")
     before_unique = _unique_tokens(original)
     before_tokens = len(original) // 4
 
@@ -109,7 +117,7 @@ def compact_file(cfg: Config, conn: sqlite3.Connection, *, name: str) -> Compact
     # Accept only if the file is still the same one the LLM saw. The LLM call
     # can take tens of seconds; reducers/classifiers may append while it runs.
     # Overwriting after a stale read would silently drop those new entries.
-    with files_mod.file_lock(path):
+    with files_mod.store_write_lock(), files_mod.file_lock(path):
         try:
             current = path.read_text()
         except FileNotFoundError:

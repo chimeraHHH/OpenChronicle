@@ -14,10 +14,11 @@ fields are back-rendered via ``ax_tree_to_markdown`` as a fallback.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from .. import paths
+from ..capture import filenames, store_lock
 from ..capture.ax_models import ax_tree_to_markdown
 from ..config import Config
 from ..logger import get
@@ -48,25 +49,7 @@ def _capture_stem_in_window(stem: str, start: datetime, end: datetime) -> bool:
 
 
 def _stem_to_dt(stem: str) -> datetime | None:
-    # Capture filenames look like ``2026-04-21T17-07-32p08-00`` or
-    # ``…m05-00`` for negative offsets. Reverse the sanitisation that
-    # scheduler.py applied so fromisoformat can parse it.
-    if len(stem) < 20:
-        return None
-    try:
-        date_part = stem[:10]
-        time_part = stem[11:19].replace("-", ":")
-        offset = stem[19:]
-        if offset.startswith("p"):
-            tz = "+" + offset[1:].replace("-", ":")
-        elif offset.startswith("m"):
-            tz = "-" + offset[1:].replace("-", ":")
-        else:
-            tz = ""
-        iso = f"{date_part}T{time_part}{tz}"
-        return datetime.fromisoformat(iso)
-    except (ValueError, IndexError):
-        return None
+    return filenames.parse_capture_stem(stem)
 
 
 def captures_in_window(start: datetime, end: datetime) -> list[Path]:
@@ -82,7 +65,90 @@ def captures_in_window(start: datetime, end: datetime) -> list[Path]:
     return files
 
 
-def _load_captures(capture_files: list[Path]) -> list[tuple[Path, dict]]:
+def capture_paths_by_window(
+    end: datetime,
+    window_minutes: int,
+) -> dict[datetime, list[Path]]:
+    """Snapshot valid retained capture paths before ``end`` by wall window.
+
+    The capture writer assigns its authoritative timestamp while holding the
+    same collection lock.  Consequently, a writer that finishes before this
+    snapshot is included, while one that starts afterwards receives a current
+    timestamp and cannot appear late in an already-closed window.
+    """
+    grouped_paths: dict[datetime, list[tuple[datetime, Path]]] = {}
+    with store_lock.capture_store_lock():
+        buf = paths.capture_buffer_dir()
+        if not buf.exists():
+            return {}
+        for path in buf.iterdir():
+            if path.suffix != ".json" or not path.is_file():
+                continue
+            timestamp = filenames.parse_capture_stem(path.stem)
+            if timestamp is None or timestamp >= end:
+                continue
+            window_start = store.floor_to_window(timestamp, window_minutes)
+            grouped_paths.setdefault(window_start, []).append((timestamp, path))
+
+        return {
+            window_start: [
+                path
+                for _timestamp, path in sorted(
+                    items,
+                    key=lambda item: (item[0].timestamp(), item[1].name),
+                )
+            ]
+            for window_start, items in grouped_paths.items()
+        }
+
+
+def load_capture_snapshot(
+    capture_windows: dict[datetime, list[Path]],
+    *,
+    start: datetime,
+    end: datetime,
+    window_minutes: int,
+) -> dict[datetime, list[tuple[Path, dict]]]:
+    """Read the bounded slice and bucket it relative to the durable cursor.
+
+    The cursor may not align with the current wall-clock window after a user
+    changes ``timeline.window_minutes``. Grouping by actual membership in
+    ``[cursor, cursor + step)`` prevents a capture floored under the new size
+    from being skipped behind an older, differently aligned watermark.
+    """
+    step = timedelta(minutes=max(1, int(window_minutes)))
+    step_seconds = step.total_seconds()
+    selected: dict[datetime, list[tuple[datetime, Path]]] = {}
+    for paths_in_window in capture_windows.values():
+        for path in paths_in_window:
+            timestamp = filenames.parse_capture_stem(path.stem)
+            if timestamp is None or not (start <= timestamp < end):
+                continue
+            bucket_index = int((timestamp - start).total_seconds() // step_seconds)
+            bucket_start = start + step * bucket_index
+            selected.setdefault(bucket_start, []).append((timestamp, path))
+
+    with store_lock.capture_store_lock():
+        return {
+            window_start: _load_captures(
+                [
+                    path
+                    for _timestamp, path in sorted(
+                        items,
+                        key=lambda item: (item[0].timestamp(), item[1].name),
+                    )
+                ],
+                drop_screenshot=True,
+            )
+            for window_start, items in selected.items()
+        }
+
+
+def _load_captures(
+    capture_files: list[Path],
+    *,
+    drop_screenshot: bool = False,
+) -> list[tuple[Path, dict]]:
     """Parse every capture JSON once. Files that fail to read/parse are dropped.
 
     The window is small (≤30 files) so the entire parsed list stays cheap to
@@ -102,6 +168,8 @@ def _load_captures(capture_files: list[Path]) -> list[tuple[Path, dict]]:
         if not isinstance(data, dict):
             logger.warning("timeline: capture %s is not a JSON object", p.name)
             continue
+        if drop_screenshot:
+            data.pop("screenshot", None)
         parsed.append((p, data))
     return parsed
 
@@ -200,6 +268,7 @@ def produce_block_for_window(
     *,
     start: datetime,
     end: datetime,
+    parsed_captures: list[tuple[Path, dict]] | None = None,
 ) -> store.TimelineBlock | None:
     """Build one block. Returns ``None`` if the window is empty or already done."""
     if store.has_window(conn, start, end):
@@ -208,17 +277,26 @@ def produce_block_for_window(
         )
         return None
 
-    capture_files = captures_in_window(start, end)
+    if parsed_captures is None:
+        # Standalone/debug callers still receive an atomic directory snapshot.
+        with store_lock.capture_store_lock():
+            capture_files = captures_in_window(start, end)
+            parsed = _load_captures(capture_files)
+    else:
+        # The periodic tick snapshots bytes before opening SQLite, preserving
+        # the capture-store -> database lock order used by writers.
+        parsed = parsed_captures
+        capture_files = [path for path, _data in parsed]
     if not capture_files:
         logger.info(
             "timeline: window %s → %s has 0 captures, skipping",
-            start.isoformat(), end.isoformat(),
+            start.isoformat(),
+            end.isoformat(),
         )
         return None
 
-    # Parse capture JSON once; reused for prompt rendering AND the heuristic
-    # fallback so an LLM miss doesn't trigger a second pass over the same files.
-    parsed = _load_captures(capture_files)
+    # Capture JSON is parsed once; reused for prompt rendering AND the
+    # heuristic fallback so an LLM miss doesn't trigger a second read.
     events_text, apps_used = _format_events(parsed)
     # Use len(parsed) — capture_count must match what the LLM actually sees
     # and what _heuristic_entries can group; len(capture_files) overcounts
@@ -263,8 +341,12 @@ def produce_block_for_window(
     store.insert(conn, block)
     logger.info(
         "timeline: stored block %s — %s → %s (%d entries, %d captures, apps=%s)",
-        block.id, start.isoformat(), end.isoformat(),
-        len(entries), capture_count, ", ".join(apps_used),
+        block.id,
+        start.isoformat(),
+        end.isoformat(),
+        len(entries),
+        capture_count,
+        ", ".join(apps_used),
     )
     return block
 
