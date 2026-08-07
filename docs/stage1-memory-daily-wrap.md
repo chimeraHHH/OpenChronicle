@@ -113,21 +113,26 @@ over MCP. MCP remains read-only.
 ## True purge semantics
 
 An explicit `forget` first computes the transitive candidate → accepted entry →
-Daily Wrap item/revision closure and commits content-free tombstones for every
+Daily Wrap item/revision closure, plus any now-empty candidate-created target
+file that is safe to unlink. It commits content-free tombstones for every
 affected artifact in the same immediate SQLite transaction. Only then does it
 remove:
 
 1. derived wrap revisions and item/whole-wrap provenance;
 2. the accepted Markdown entry;
-3. its FTS and file projections;
-4. candidate plaintext and provenance;
-5. the tombstones after all prior steps succeed.
+3. their FTS projections;
+4. unchanged empty candidate-owned Markdown files and their file projections;
+5. candidate plaintext and provenance;
+6. the tombstones after all prior steps succeed.
 
 If the process dies, every normal daemon startup (even when Daily Wrap is
 disabled) or a later trusted memory command resumes the authorized plan. While
 a tombstone exists, `append_entry_once` and `rebuild-index` refuse to resurrect
-that entry from Markdown. A provenance-bearing append that waited behind the
-purge must revalidate its source and fails closed after the source disappears.
+that entry or file from Markdown. Candidate-file projections are removed in
+the same transaction as purge intent, so a crash cannot expose a sensitive
+description or tag through an older direct SQLite reader. A provenance-bearing
+append that waited behind the purge must revalidate its source and fails closed
+after the source disappears.
 Rejection is not purge: rejected proposals remain review history until
 explicitly forgotten.
 The purge plan always includes the deterministic approval entry ID, even if a
@@ -138,6 +143,17 @@ Markdown frames. This catches a cross-file derivative whose atomic Markdown
 rename succeeded but whose FTS/provenance projection crashed. Legacy
 `supersede_entry` replacements now embed and project an explicit dependency on
 the superseded entry, so they enter the same transitive purge closure.
+Files created during candidate approval carry an owner ID and a digest bound to
+their original stable frontmatter and path. Every verified affected file is
+included in the preview's `files` / `counts.memory_files`. Empty files are
+unlinked. If unrelated entries or freeform content survive, their body is kept
+while owner markers are removed, description is made generic, tags are rebuilt
+from surviving canonical entries, and the file projection is replaced.
+Pre-existing files are never deleted or metadata-sanitized; only canonical
+entries proven to be inside the reviewed closure are removed. A symlink,
+non-regular path, changed ownership metadata, or any damaged provenance frame
+fails closed. Finalization is revalidated under the normal store/file locks,
+and crash replay retains the tombstone until Markdown and SQLite agree.
 SQLite connections use `secure_delete`, and successful purge requests a
 truncating WAL checkpoint. This is best-effort local erasure, not a promise to
 erase APFS snapshots, backups, provider logs, or data already copied elsewhere.

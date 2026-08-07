@@ -1,0 +1,80 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "OpenChronicle",
+  "version": "0.1.0",
+  "identifier": "app.openchronicle.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist",
+    "removeUnusedCommands": true
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "main",
+        "title": "OpenChronicle",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 900,
+        "minHeight": 620,
+        "center": true,
+        "visible": true,
+        "devtools": false
+      }
+    ],
+    "security": {
+      "capabilities": ["main-review"],
+      "csp": {
+        "default-src": ["'self'"],
+        "connect-src": ["ipc:", "http://ipc.localhost"],
+        "font-src": ["'self'"],
+        "img-src": ["'self'", "data:"],
+        "object-src": ["'none'"],
+        "base-uri": ["'none'"],
+        "form-action": ["'none'"],
+        "frame-ancestors": ["'none'"],
+        "media-src": ["'none'"],
+        "script-src": ["'self'"],
+        "style-src": ["'self'"]
+      },
+      "devCsp": {
+        "default-src": ["'self'"],
+        "connect-src": [
+          "ipc:",
+          "http://ipc.localhost",
+          "http://127.0.0.1:1420",
+          "ws://127.0.0.1:1420"
+        ],
+        "font-src": ["'self'"],
+        "img-src": ["'self'", "data:"],
+        "object-src": ["'none'"],
+        "base-uri": ["'none'"],
+        "form-action": ["'none'"],
+        "frame-ancestors": ["'none'"],
+        "media-src": ["'none'"],
+        "script-src": ["'self'"],
+        "style-src": ["'self'", "'unsafe-inline'"]
+      },
+      "pattern": {
+        "use": "isolation",
+        "options": {
+          "dir": "../dist-isolation"
+        }
+      },
+      "freezePrototype": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "icon": ["icons/icon.png"],
+    "category": "Productivity",
+    "shortDescription": "Local-first memory review for OpenChronicle",
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import sqlite3
 from dataclasses import dataclass
+
+import frontmatter
 
 from ..logger import get
 from ..memory_candidates import store as candidate_store
@@ -22,7 +25,46 @@ logger = get("openchronicle.memory")
 class PurgeResult:
     candidate_id: str
     removed_entry: bool
+    removed_files: tuple[str, ...]
     invalidated_wraps: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PurgePreview:
+    """Canonical, content-free deletion closure for an explicit review action."""
+
+    candidate_id: str
+    expected_version: int
+    candidate_ids: tuple[str, ...]
+    entries: tuple[dict[str, str], ...]
+    files: tuple[dict[str, str], ...]
+    wrap_ids: tuple[str, ...]
+    plan_digest: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "candidate_id": self.candidate_id,
+            "expected_version": self.expected_version,
+            "candidate_ids": list(self.candidate_ids),
+            "entries": [dict(entry) for entry in self.entries],
+            "files": [dict(file) for file in self.files],
+            "wrap_ids": list(self.wrap_ids),
+            "counts": {
+                "candidates": len(self.candidate_ids),
+                "memory_entries": len(self.entries),
+                "memory_files": len(self.files),
+                "daily_wraps": len(self.wrap_ids),
+            },
+            "plan_digest": self.plan_digest,
+        }
+
+
+class StalePurgePlan(RuntimeError):
+    """The deletion closure changed after the user reviewed its preview."""
+
+
+class PurgeClosureUnverifiable(RuntimeError):
+    """A damaged provenance frame prevents safe deletion-closure discovery."""
 
 
 @contextlib.contextmanager
@@ -122,9 +164,7 @@ class MemoryService:
             ):
                 raise ValueError("candidate target is pending permanent purge")
             invalid_sources = [
-                source
-                for source in evidence
-                if not provenance_store.is_current(self.conn, source)
+                source for source in evidence if not provenance_store.is_current(self.conn, source)
             ]
             if invalid_sources:
                 raise ValueError("memory candidate evidence is missing or changed")
@@ -158,19 +198,13 @@ class MemoryService:
             existing_sources = provenance_store.direct_sources(
                 self.conn, _candidate_ref(candidate.id)
             )
-            if created or (
-                candidate.proposal_digest == proposal_digest
-                and not existing_sources
-            ):
+            if created or (candidate.proposal_digest == proposal_digest and not existing_sources):
                 provenance_store.replace_sources(
                     self.conn,
                     subject=_candidate_ref(candidate.id),
                     sources=evidence,
                 )
-            elif (
-                candidate.proposal_digest != proposal_digest
-                or existing_sources != evidence
-            ):
+            elif candidate.proposal_digest != proposal_digest or existing_sources != evidence:
                 candidate_store.record_replay_mismatch(self.conn, candidate.id)
             self.conn.execute("COMMIT")
         except BaseException:
@@ -201,9 +235,7 @@ class MemoryService:
             normalized_content = _normalize_content(content)
             clean_tags = _normalize_tags(tags)
             next_conflict_key = (
-                current.conflict_key
-                if conflict_key is None
-                else conflict_key.strip().casefold()
+                current.conflict_key if conflict_key is None else conflict_key.strip().casefold()
             )
             digest = content_digest(normalized_content)
             self.conn.execute("BEGIN IMMEDIATE")
@@ -234,13 +266,9 @@ class MemoryService:
                     self.conn.execute("ROLLBACK")
                 raise
 
-    def approve_candidate(
-        self, candidate_id: str, *, expected_version: int
-    ) -> MemoryCandidate:
+    def approve_candidate(self, candidate_id: str, *, expected_version: int) -> MemoryCandidate:
         with _review_operation_lock():
-            return self._approve_candidate_locked(
-                candidate_id, expected_version=expected_version
-            )
+            return self._approve_candidate_locked(candidate_id, expected_version=expected_version)
 
     def _approve_candidate_locked(
         self, candidate_id: str, *, expected_version: int
@@ -251,11 +279,16 @@ class MemoryService:
         if current.status == "applying":
             if expected_version not in {current.version, current.version - 1}:
                 raise candidate_store.CandidateConflict("candidate version changed")
-        elif current.version != expected_version:
-            raise candidate_store.CandidateConflict("candidate version changed")
+        else:
+            if current.version != expected_version:
+                raise candidate_store.CandidateConflict("candidate version changed")
+            if current.status != "pending":
+                raise candidate_store.CandidateConflict("candidate must be pending before approval")
 
         sources = provenance_store.direct_sources(self.conn, _candidate_ref(candidate_id))
-        invalid_sources = [source for source in sources if not provenance_store.is_current(self.conn, source)]
+        invalid_sources = [
+            source for source in sources if not provenance_store.is_current(self.conn, source)
+        ]
         if not sources or invalid_sources:
             detail = (
                 "candidate has no durable evidence"
@@ -280,7 +313,7 @@ class MemoryService:
                 self.conn,
                 candidate_id=candidate_id,
                 expected_version=expected_version,
-                from_statuses=("pending", "conflict"),
+                from_statuses=("pending",),
                 to_status="applying",
             )
         entry_id = _candidate_entry_id(candidate_id)
@@ -293,6 +326,7 @@ class MemoryService:
                         name=applying.target_path,
                         description=f"Reviewed {applying.kind} memories.",
                         tags=applying.tags,
+                        owner_candidate_id=applying.id,
                     )
             entries_store.append_entry_once(
                 self.conn,
@@ -359,28 +393,76 @@ class MemoryService:
                     self.conn.execute("ROLLBACK")
                 raise
 
-    def purge_candidate(self, candidate_id: str) -> PurgeResult:
-        """Crash-resumably forget a proposal and its accepted derivatives."""
+    def preview_purge_candidate(self, candidate_id: str, *, expected_version: int) -> PurgePreview:
+        """Return the exact deletion closure without authorizing deletion."""
         with _review_operation_lock():
-            return self._purge_candidate_locked(candidate_id)
+            root = self._required(candidate_id)
+            if root.version != expected_version:
+                raise candidate_store.CandidateConflict("candidate version changed")
+            plan = self._build_purge_plan(root)
+            return _purge_preview(plan)
 
-    def _purge_candidate_locked(self, candidate_id: str) -> PurgeResult:
+    def purge_candidate(
+        self,
+        candidate_id: str,
+        *,
+        expected_version: int | None = None,
+        expected_plan_digest: str | None = None,
+    ) -> PurgeResult:
+        """Crash-resumably forget a proposal and its accepted derivatives.
+
+        Trusted review UIs should supply both compare-and-swap values from
+        :meth:`preview_purge_candidate`.  The optional form preserves the
+        established local CLI recovery path.
+        """
+        with _review_operation_lock():
+            return self._purge_candidate_locked(
+                candidate_id,
+                expected_version=expected_version,
+                expected_plan_digest=expected_plan_digest,
+            )
+
+    def _purge_candidate_locked(
+        self,
+        candidate_id: str,
+        *,
+        expected_version: int | None,
+        expected_plan_digest: str | None,
+    ) -> PurgeResult:
         tombstones = [
             tombstone
-            for tombstone in candidate_store.list_tombstones(
-                self.conn, kind="memory_candidate"
-            )
+            for tombstone in candidate_store.list_tombstones(self.conn, kind="memory_candidate")
             if tombstone.artifact_id == candidate_id
         ]
         if tombstones:
+            plan = tombstones[0].plan
+            if expected_version is not None and int(plan.get("root_version", -1)) != (
+                expected_version
+            ):
+                raise candidate_store.CandidateConflict("candidate version changed")
+            if expected_plan_digest is not None and _purge_plan_digest(plan) != (
+                expected_plan_digest
+            ):
+                raise StalePurgePlan("purge closure changed after preview")
             return self._execute_purge(tombstones[0])
+
+        root = self._required(candidate_id)
+        if expected_version is not None and root.version != expected_version:
+            raise candidate_store.CandidateConflict("candidate version changed")
 
         self.conn.execute("BEGIN IMMEDIATE")
         try:
             # The closure snapshot and every deny-read tombstone commit as one
             # write transaction. Candidate proposals and wrap publication also
             # use BEGIN IMMEDIATE, so no new dependent can land in between.
-            plan = self._build_purge_plan(self._required(candidate_id))
+            root = self._required(candidate_id)
+            if expected_version is not None and root.version != expected_version:
+                raise candidate_store.CandidateConflict("candidate version changed")
+            plan = self._build_purge_plan(root)
+            if expected_plan_digest is not None and _purge_plan_digest(plan) != (
+                expected_plan_digest
+            ):
+                raise StalePurgePlan("purge closure changed after preview")
             candidate_store.put_tombstone(
                 self.conn,
                 kind="memory_candidate",
@@ -401,6 +483,20 @@ class MemoryService:
                     "DELETE FROM entries WHERE id=? AND path=?",
                     (str(entry["id"]), str(entry["path"])),
                 )
+            for file in plan["files"]:
+                assert isinstance(file, dict)
+                path = str(file["path"])
+                candidate_store.put_tombstone(
+                    self.conn,
+                    kind="memory_file",
+                    artifact_id=path,
+                )
+                # Some legacy/internal readers query ``files`` directly.  The
+                # deny-read tombstone protects canonical Markdown and rebuilds;
+                # deleting the projection in the same transaction also keeps
+                # candidate-derived descriptions/tags out of those readers if
+                # the process crashes before the physical unlink.
+                self.conn.execute("DELETE FROM files WHERE path=?", (path,))
             for wrap_id in plan["wrap_ids"]:
                 candidate_store.put_tombstone(
                     self.conn, kind="daily_wrap", artifact_id=str(wrap_id)
@@ -412,9 +508,7 @@ class MemoryService:
             raise
         tombstone = next(
             tombstone
-            for tombstone in candidate_store.list_tombstones(
-                self.conn, kind="memory_candidate"
-            )
+            for tombstone in candidate_store.list_tombstones(self.conn, kind="memory_candidate")
             if tombstone.artifact_id == candidate_id
         )
         return self._execute_purge(tombstone)
@@ -422,20 +516,40 @@ class MemoryService:
     def resume_pending_purges(self) -> list[PurgeResult]:
         with _review_operation_lock():
             results: list[PurgeResult] = []
-            for tombstone in candidate_store.list_tombstones(
-                self.conn, kind="memory_candidate"
-            ):
+            for tombstone in candidate_store.list_tombstones(self.conn, kind="memory_candidate"):
                 results.append(self._execute_purge(tombstone))
             return results
 
-    def _execute_purge(
-        self, tombstone: candidate_store.PurgeTombstone
-    ) -> PurgeResult:
-        candidate_id, candidates, entries, wrap_ids = _decode_purge_plan(tombstone)
+    def _execute_purge(self, tombstone: candidate_store.PurgeTombstone) -> PurgeResult:
+        candidate_id, candidates, entries, files, wrap_ids = _decode_purge_plan(tombstone)
         removed_entry = False
+        removed_files: list[str] = []
         try:
             from ..daily_wrap import store as daily_wrap_store
 
+            # Validate every planned Markdown path before deleting any wrap or
+            # entry. Candidate-owned containers receive the stronger ownership
+            # check below; shared/pre-existing files must still fail closed on
+            # symlink or non-regular replacement. delete_entry repeats this
+            # check while holding the actual rewrite locks.
+            for path in sorted({entry["path"] for entry in entries}):
+                entries_store.require_regular_purge_entry_path(self.conn, name=path)
+
+            # Revalidate the exact regular files before any Markdown rewrite.
+            # Cooperative writers are fenced by the review lock; this also
+            # fails closed if an external editor replaced a reviewed path in
+            # the gap after the purge intent committed.
+            for file in files:
+                planned_entry_ids = {
+                    entry["id"] for entry in entries if entry["path"] == file["path"]
+                }
+                entries_store.require_candidate_owned_file(
+                    self.conn,
+                    name=file["path"],
+                    owner_candidate_id=file["owner_candidate_id"],
+                    template_digest=file["template_digest"],
+                    planned_entry_ids=planned_entry_ids,
+                )
             for wrap_id in wrap_ids:
                 daily_wrap_store.purge(self.conn, wrap_id)
             for entry in entries:
@@ -447,13 +561,28 @@ class MemoryService:
                     )
                     or removed_entry
                 )
+            for file in files:
+                if entries_store.finalize_candidate_owned_file(
+                    self.conn,
+                    name=file["path"],
+                    owner_candidate_id=file["owner_candidate_id"],
+                    template_digest=file["template_digest"],
+                    delete_if_empty=file["action"] == "delete",
+                ):
+                    removed_files.append(file["path"])
             for purged_candidate_id in candidates:
                 candidate_ref = _candidate_ref(purged_candidate_id)
                 provenance_store.delete_subject(self.conn, candidate_ref)
                 provenance_store.delete_source_edges(self.conn, candidate_ref)
                 candidate_store.delete(self.conn, purged_candidate_id)
 
-            self._verify_purge(candidates, entries, wrap_ids)
+            self._verify_purge(
+                candidates,
+                entries,
+                files,
+                removed_files,
+                wrap_ids,
+            )
             checkpoint = self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
             if checkpoint is not None and int(checkpoint[0]) != 0:
                 raise RuntimeError("secure purge checkpoint is busy; retry required")
@@ -466,6 +595,12 @@ class MemoryService:
                         kind="memory_entry",
                         artifact_id=entry["id"],
                         path=entry["path"],
+                    )
+                for file in files:
+                    candidate_store.delete_tombstone(
+                        self.conn,
+                        kind="memory_file",
+                        artifact_id=file["path"],
                     )
                 for wrap_id in wrap_ids:
                     candidate_store.delete_tombstone(
@@ -494,6 +629,7 @@ class MemoryService:
         return PurgeResult(
             candidate_id=candidate_id,
             removed_entry=removed_entry,
+            removed_files=tuple(sorted(set(removed_files))),
             invalidated_wraps=tuple(sorted(set(wrap_ids))),
         )
 
@@ -502,31 +638,23 @@ class MemoryService:
         entries: dict[tuple[str, str], EvidenceRef] = {}
         wrap_ids: set[str] = set()
         queue: list[EvidenceRef] = [_candidate_ref(root.id)]
-        markdown_dependents: dict[
-            tuple[str, str, str], list[EvidenceRef]
-        ] = {}
+        markdown_dependents: dict[tuple[str, str, str], list[EvidenceRef]] = {}
 
         # The SQLite edge graph is a projection written after the atomic
         # Markdown rename. Scan embedded frames as a second source of truth so
         # an append that crashed in that narrow gap still enters the deletion
         # closure instead of leaving a plaintext orphan on disk.
         for path in files_store.list_memory_files():
-            if candidate_store.is_tombstoned(
-                self.conn, kind="memory_file", artifact_id=path.name
-            ):
+            if candidate_store.is_tombstoned(self.conn, kind="memory_file", artifact_id=path.name):
                 continue
             parsed = files_store.read_file(path)
             for entry in parsed.entries:
                 if not entry.provenance_valid:
-                    logger.warning(
-                        "cannot infer purge dependency from invalid frame %s#%s",
-                        path.name,
-                        entry.id,
+                    raise PurgeClosureUnverifiable(
+                        "cannot establish purge closure: invalid provenance frame "
+                        f"in {path.name}#{entry.id}"
                     )
-                    continue
-                dependent = EvidenceRef(
-                    kind="memory_entry", id=entry.id, path=path.name
-                )
+                dependent = EvidenceRef(kind="memory_entry", id=entry.id, path=path.name)
                 for source in entry.evidence_refs:
                     markdown_dependents.setdefault(
                         (source.kind, source.path, source.id), []
@@ -544,8 +672,7 @@ class MemoryService:
                     entry.id
                     for entry in parsed.entries
                     if any(
-                        source.kind == "memory_candidate"
-                        and source.id == candidate.id
+                        source.kind == "memory_candidate" and source.id == candidate.id
                         for source in entry.evidence_refs
                     )
                 )
@@ -590,13 +717,26 @@ class MemoryService:
                     if dependent.path:
                         wrap_ids.add(dependent.path)
 
+        planned_entry_keys = set(entries)
+        purge_files: list[dict[str, str]] = []
+        for target_path in sorted({candidate.target_path for candidate in candidates.values()}):
+            record = _candidate_owned_file_purge_record(
+                target_path,
+                candidates=candidates,
+                planned_entry_keys=planned_entry_keys,
+            )
+            if record is not None:
+                purge_files.append(record)
+
         return {
             "candidate_id": root.id,
+            "root_version": root.version,
             "candidates": sorted(candidates),
             "entries": [
                 {"id": ref.id, "path": ref.path}
                 for ref in sorted(entries.values(), key=lambda item: (item.path, item.id))
             ],
+            "files": purge_files,
             "wrap_ids": sorted(wrap_ids),
         }
 
@@ -604,6 +744,8 @@ class MemoryService:
         self,
         candidates: list[str],
         entries: list[dict[str, str]],
+        files: list[dict[str, str]],
+        removed_files: list[str],
         wrap_ids: list[str],
     ) -> None:
         from ..daily_wrap import store as daily_wrap_store
@@ -642,6 +784,37 @@ class MemoryService:
                 (purged_candidate_id, purged_candidate_id),
             ).fetchone():
                 raise RuntimeError("memory candidate provenance survived purge")
+        removed_file_set = set(removed_files)
+        for file in files:
+            path = files_store.memory_path(file["path"])
+            indexed = self.conn.execute(
+                "SELECT description, tags, entry_count FROM files WHERE path=? LIMIT 1",
+                (file["path"],),
+            ).fetchone()
+            if file["path"] in removed_file_set:
+                if path.exists() or path.is_symlink():
+                    raise RuntimeError("candidate-owned memory file survived purge")
+                if indexed is not None:
+                    raise RuntimeError("candidate-owned memory file projection survived purge")
+                continue
+
+            if not path.is_file() or path.is_symlink():
+                raise RuntimeError("sanitized candidate-owned memory file is missing")
+            parsed = files_store.read_file(path)
+            surviving_tags = sorted({tag for entry in parsed.entries for tag in entry.tags})
+            if not files_store.candidate_file_is_sanitized(
+                parsed.raw_frontmatter,
+                surviving_tags=surviving_tags,
+                entry_count=len(parsed.entries),
+            ):
+                raise RuntimeError("candidate-owned memory file metadata survived purge")
+            if (
+                indexed is None
+                or indexed["description"] != files_store.SANITIZED_CANDIDATE_FILE_DESCRIPTION
+                or (indexed["tags"] or "").split() != surviving_tags
+                or int(indexed["entry_count"] or 0) != len(parsed.entries)
+            ):
+                raise RuntimeError("sanitized memory file projection is inconsistent")
         for wrap_id in wrap_ids:
             if daily_wrap_store.get_by_id(self.conn, wrap_id) is not None:
                 raise RuntimeError("Daily Wrap survived purge")
@@ -677,9 +850,57 @@ def _markdown_entry_exists(path: str, entry_id: str) -> bool:
     return any(entry.id == entry_id for entry in parsed.entries)
 
 
+def _candidate_owned_file_purge_record(
+    path_name: str,
+    *,
+    candidates: dict[str, MemoryCandidate],
+    planned_entry_keys: set[tuple[str, str]],
+) -> dict[str, str] | None:
+    """Return a content-free deletion record for one safely owned file.
+
+    Ownership alone is insufficient: an unrelated canonical entry or freeform
+    body means a user or another workflow has adopted the container.  Such a
+    file is preserved and only the explicitly planned entries are removed.
+    """
+    path = files_store.memory_path(path_name)
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        post = frontmatter.load(path)
+        fm = dict(post.metadata)
+        owner_candidate_id = files_store.candidate_file_owner(fm, path_name=path.name)
+        entries = files_store._parse_entries(post.content)
+    except Exception as exc:  # fail closed on a user replacement/malformed file
+        logger.warning("preserving changed candidate-owned file %s: %s", path.name, exc)
+        return None
+    owner = candidates.get(owner_candidate_id or "")
+    if owner is None or owner.target_path != path.name:
+        return None
+    matches = list(files_store.ENTRY_HEADING_RE.finditer(post.content))
+    freeform_prefix = post.content[: matches[0].start()] if matches else post.content
+    has_surviving_content = bool(freeform_prefix.strip()) or any(
+        (path.name, entry.id) not in planned_entry_keys for entry in entries
+    )
+
+    template_digest = fm.get(files_store.CANDIDATE_FILE_TEMPLATE_DIGEST_KEY)
+    assert isinstance(template_digest, str)
+    return {
+        "path": path.name,
+        "owner_candidate_id": owner.id,
+        "template_digest": template_digest,
+        "action": "sanitize" if has_surviving_content else "delete",
+    }
+
+
 def _decode_purge_plan(
     tombstone: candidate_store.PurgeTombstone,
-) -> tuple[str, list[str], list[dict[str, str]], list[str]]:
+) -> tuple[
+    str,
+    list[str],
+    list[dict[str, str]],
+    list[dict[str, str]],
+    list[str],
+]:
     plan = tombstone.plan
     candidate_id = str(plan.get("candidate_id") or tombstone.artifact_id)
     raw_candidates = plan.get("candidates")
@@ -708,17 +929,97 @@ def _decode_purge_plan(
         if entry_id and path:
             entries.append({"id": entry_id, "path": path})
 
+    files: list[dict[str, str]] = []
+    raw_files = plan.get("files")
+    if isinstance(raw_files, list):
+        for value in raw_files:
+            if not isinstance(value, dict):
+                continue
+            path = str(value.get("path") or "")
+            owner_candidate_id = str(value.get("owner_candidate_id") or "")
+            template_digest = str(value.get("template_digest") or "")
+            action = str(value.get("action") or "delete")
+            if path and owner_candidate_id and template_digest and action in {"delete", "sanitize"}:
+                files.append(
+                    {
+                        "path": path,
+                        "owner_candidate_id": owner_candidate_id,
+                        "template_digest": template_digest,
+                        "action": action,
+                    }
+                )
+
     raw_wrap_ids = plan.get("wrap_ids")
-    wrap_ids = (
-        [str(value) for value in raw_wrap_ids]
-        if isinstance(raw_wrap_ids, list)
-        else []
-    )
+    wrap_ids = [str(value) for value in raw_wrap_ids] if isinstance(raw_wrap_ids, list) else []
     return (
         candidate_id,
         sorted(set(candidates)),
         sorted(entries, key=lambda item: (item["path"], item["id"])),
+        sorted(files, key=lambda item: item["path"]),
         sorted(set(wrap_ids)),
+    )
+
+
+def _purge_plan_digest(plan: dict[str, object]) -> str:
+    """Hash the canonical closure reviewed by a trusted local UI."""
+    canonical = {
+        "candidate_id": str(plan.get("candidate_id") or ""),
+        "root_version": int(plan.get("root_version") or 0),
+        "candidates": sorted(str(value) for value in plan.get("candidates", [])),
+        "entries": sorted(
+            (
+                {
+                    "id": str(value.get("id") or ""),
+                    "path": str(value.get("path") or ""),
+                }
+                for value in plan.get("entries", [])
+                if isinstance(value, dict)
+            ),
+            key=lambda value: (value["path"], value["id"]),
+        ),
+        "files": sorted(
+            (
+                {
+                    "path": str(value.get("path") or ""),
+                    "owner_candidate_id": str(value.get("owner_candidate_id") or ""),
+                    "template_digest": str(value.get("template_digest") or ""),
+                    "action": str(value.get("action") or "delete"),
+                }
+                for value in plan.get("files", [])
+                if isinstance(value, dict)
+            ),
+            key=lambda value: value["path"],
+        ),
+        "wrap_ids": sorted(str(value) for value in plan.get("wrap_ids", [])),
+    }
+    payload = json.dumps(
+        canonical,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _purge_preview(plan: dict[str, object]) -> PurgePreview:
+    candidate_id, candidates, entries, files, wrap_ids = _decode_purge_plan(
+        candidate_store.PurgeTombstone(
+            kind="memory_candidate",
+            artifact_id=str(plan.get("candidate_id") or ""),
+            path="",
+            plan=plan,
+            requested_at="",
+            last_error="",
+        )
+    )
+    return PurgePreview(
+        candidate_id=candidate_id,
+        expected_version=int(plan.get("root_version") or 0),
+        candidate_ids=tuple(candidates),
+        entries=tuple(entries),
+        files=tuple({"path": file["path"]} for file in files),
+        wrap_ids=tuple(wrap_ids),
+        plan_digest=_purge_plan_digest(plan),
     )
 
 
@@ -764,8 +1065,7 @@ def _candidate_idempotency_key(
     evidence: list[EvidenceRef],
 ) -> str:
     source_keys = sorted(
-        f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}"
-        for ref in evidence
+        f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}" for ref in evidence
     )
     payload = "\0".join(
         ["memory-candidate-v1", kind, target_path, content_hash, *sorted(tags), *source_keys]

@@ -178,11 +178,27 @@ restart, the next session, or the configured maximum duration.
 
 SQLite is opened with WAL mode — the MCP reader and the writer paths coexist without blocking.
 
+## Trusted desktop review shell
+
+The Stage 1 desktop source slice is a separate Tauri process, not another
+daemon task. Its React WebView can invoke only eleven typed custom commands.
+Rust validates those request structs and launches one short-lived
+`openchronicle-desktop-bridge` process with a bounded stdin/stdout JSON
+exchange. The bridge then reuses the same SQLite stores, file locks,
+`MemoryService`, privacy policy, and provenance graph as the CLI.
+
+There is no generic WebView shell, filesystem, HTTP, SQL, MCP, dialog, process,
+or arbitrary-URL capability. Rust owns the tray, executable selection, and the
+native permanent-forget confirmation. A normal snapshot reads local state and
+does not ping a provider. See [desktop-shell.md](desktop-shell.md) for the
+protocol, threat model, and packaging gate.
+
 ## Code layout
 
 ```
 src/openchronicle/
 ├── cli.py                    # Typer entry point
+├── desktop_bridge.py         # One-shot allowlisted JSON bridge for the native shell
 ├── daemon.py                 # Async task orchestration
 ├── config.py                 # TOML loader, per-stage ModelConfig inheritance
 ├── paths.py                  # ~/.openchronicle/* paths
@@ -214,7 +230,7 @@ src/openchronicle/
 ├── provenance/               # Typed evidence refs and rebuildable edge graph
 ├── memory_candidates/        # Review-inbox rows and purge tombstones
 ├── daily_wrap/               # Canonical job store, service, scheduler
-├── services/                 # Context assembly and trusted memory mutations
+├── services/                 # Context, desktop snapshot/evidence, capture control, trusted mutations
 ├── store/
 │   ├── fts.py                # SQLite FTS5 schema, search, cursor context manager
 │   ├── files.py              # Markdown + YAML frontmatter IO
@@ -229,6 +245,11 @@ src/openchronicle/
     ├── classifier.md         # Durable-fact extraction
     ├── compact.md            # Compaction
     └── schema.md             # Full memory spec — also returned by MCP get_schema
+
+apps/desktop/
+├── src/                      # React review UI and one centralized typed IPC adapter
+├── dist-isolation/           # Tauri isolation hook and request filter
+└── src-tauri/                # Native commands, ACL/CSP, bridge runner, tray, confirmation
 ```
 
 ## Why this shape

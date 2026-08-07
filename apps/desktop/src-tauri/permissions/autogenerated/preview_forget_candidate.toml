@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-preview-forget-candidate"
+description = "Enables the preview_forget_candidate command without any pre-configured scope."
+commands.allow = ["preview_forget_candidate"]
+
+[[permission]]
+identifier = "deny-preview-forget-candidate"
+description = "Denies the preview_forget_candidate command without any pre-configured scope."
+commands.deny = ["preview_forget_candidate"]

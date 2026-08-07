@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-daily-wrap"
+description = "Enables the get_daily_wrap command without any pre-configured scope."
+commands.allow = ["get_daily_wrap"]
+
+[[permission]]
+identifier = "deny-get-daily-wrap"
+description = "Denies the get_daily_wrap command without any pre-configured scope."
+commands.deny = ["get_daily_wrap"]

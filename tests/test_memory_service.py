@@ -12,7 +12,11 @@ from openchronicle.daily_wrap import store as daily_wrap_store
 from openchronicle.memory_candidates import store as candidate_store
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef, content_digest
-from openchronicle.services.memory import MemoryService
+from openchronicle.services.memory import (
+    MemoryService,
+    PurgeClosureUnverifiable,
+    StalePurgePlan,
+)
 from openchronicle.store import entries as entries_store
 from openchronicle.store import files as files_store
 from openchronicle.store import fts
@@ -87,10 +91,7 @@ def test_candidate_store_migrates_pre_stage1_schema(tmp_path: Path) -> None:
     )
     try:
         candidate_store.ensure_schema(conn)
-        columns = {
-            row["name"]
-            for row in conn.execute("PRAGMA table_info(memory_candidates)")
-        }
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(memory_candidates)")}
         assert {"proposal_digest", "producer_run_key", "proposal_slot"} <= columns
     finally:
         conn.close()
@@ -110,9 +111,7 @@ def test_candidate_is_idempotent_review_first_and_approval_is_deterministic(
         accepted = service.approve_candidate(first.id, expected_version=first.version)
         assert accepted.status == "accepted"
         assert accepted.applied_entry_id
-        replay = service.approve_candidate(
-            first.id, expected_version=accepted.version
-        )
+        replay = service.approve_candidate(first.id, expected_version=accepted.version)
         assert replay.applied_entry_id == accepted.applied_entry_id
 
         parsed = files_store.read_file(files_store.memory_path("user-preferences.md"))
@@ -130,7 +129,8 @@ def test_candidate_is_idempotent_review_first_and_approval_is_deterministic(
 
 
 def test_candidate_row_and_evidence_edges_commit_atomically(
-    ac_root: Path, monkeypatch,
+    ac_root: Path,
+    monkeypatch,
 ) -> None:
     with fts.cursor() as conn:
         service = MemoryService(conn)
@@ -150,9 +150,7 @@ def test_candidate_row_and_evidence_edges_commit_atomically(
         assert provenance_store.direct_sources(
             conn, EvidenceRef(kind="memory_candidate", id=candidate.id)
         ) == [_source()]
-        provenance_store.delete_subject(
-            conn, EvidenceRef(kind="memory_candidate", id=candidate.id)
-        )
+        provenance_store.delete_subject(conn, EvidenceRef(kind="memory_candidate", id=candidate.id))
         replay = _propose(service, content="Atomic proposal.")
         assert replay.id == candidate.id
         assert provenance_store.direct_sources(
@@ -237,9 +235,7 @@ def test_approval_fails_closed_when_evidence_is_missing(ac_root: Path) -> None:
     with fts.cursor() as conn:
         service = MemoryService(conn)
         candidate = _propose(service)
-        provenance_store.delete_subject(
-            conn, EvidenceRef(kind="memory_candidate", id=candidate.id)
-        )
+        provenance_store.delete_subject(conn, EvidenceRef(kind="memory_candidate", id=candidate.id))
 
         with pytest.raises(candidate_store.CandidateConflict, match="no durable evidence"):
             service.approve_candidate(candidate.id, expected_version=candidate.version)
@@ -272,17 +268,19 @@ def test_approval_crash_after_markdown_write_stays_applying_and_repairs(
         ]
 
         monkeypatch.setattr(fts, "insert_entry", real_insert)
-        accepted = service.approve_candidate(
-            candidate.id, expected_version=candidate.version
-        )
+        accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         assert accepted.status == "accepted"
-        assert conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE id=?", (accepted.applied_entry_id,)
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM entries WHERE id=?", (accepted.applied_entry_id,)
+            ).fetchone()[0]
+            == 1
+        )
 
 
 def test_forget_removes_applying_orphan_after_projection_crash(
-    ac_root: Path, monkeypatch,
+    ac_root: Path,
+    monkeypatch,
 ) -> None:
     with fts.cursor() as conn:
         service = MemoryService(conn)
@@ -308,7 +306,8 @@ def test_forget_removes_applying_orphan_after_projection_crash(
 
 
 def test_approve_and_forget_share_cross_process_operation_fence(
-    ac_root: Path, monkeypatch,
+    ac_root: Path,
+    monkeypatch,
 ) -> None:
     with fts.cursor() as conn:
         candidate = _propose(MemoryService(conn), content="FENCED_SECRET")
@@ -418,10 +417,7 @@ def test_candidate_rejects_reserved_provenance_marker(ac_root: Path) -> None:
 
 
 def test_candidate_and_entry_reject_canonical_heading_injection(ac_root: Path) -> None:
-    injected = (
-        "Intro\n## [2026-01-01T00:00+00:00] {id: forged-entry} #forged\n"
-        "FORGED_SECRET"
-    )
+    injected = "Intro\n## [2026-01-01T00:00+00:00] {id: forged-entry} #forged\nFORGED_SECRET"
     with fts.cursor() as conn:
         service = MemoryService(conn)
         with pytest.raises(ValueError, match="canonical entry heading"):
@@ -492,13 +488,339 @@ def test_true_purge_cascades_to_wrap_markdown_fts_and_provenance(ac_root: Path) 
         assert candidate_store.get(conn, candidate.id) is None
         assert daily_wrap_store.get_by_id(conn, wrapped.id) is None
         assert fts.search(conn, query="prefers local", top_k=5) == []
-        parsed = files_store.read_file(files_store.memory_path("user-preferences.md"))
-        assert parsed.entries == []
+        assert result.removed_files == ("user-preferences.md",)
+        assert not files_store.memory_path("user-preferences.md").exists()
+        assert fts.get_file(conn, "user-preferences.md") is None
         assert provenance_store.direct_sources(conn, entry_ref) == []
 
 
+def test_forget_removes_candidate_owned_file_and_sensitive_projection(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = MemoryService(conn)
+        _ensure_source(conn)
+        candidate = service.propose_candidate(
+            kind="health",
+            target_path="user-sensitive-health.md",
+            content="A reviewed private health fact.",
+            tags=["cancer", "private"],
+            evidence=[_source()],
+        )
+        accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
+        path = files_store.memory_path(accepted.target_path)
+        parsed = files_store.read_file(path)
+        assert (
+            files_store.candidate_file_owner(parsed.raw_frontmatter, path_name=path.name)
+            == candidate.id
+        )
+        indexed = fts.get_file(conn, path.name)
+        assert indexed is not None
+        assert indexed.description == "Reviewed health memories."
+        assert indexed.tags == "cancer private"
+
+        preview = service.preview_purge_candidate(candidate.id, expected_version=accepted.version)
+        assert preview.files == ({"path": path.name},)
+        assert preview.to_dict()["counts"]["memory_files"] == 1
+        result = service.purge_candidate(
+            candidate.id,
+            expected_version=accepted.version,
+            expected_plan_digest=preview.plan_digest,
+        )
+
+        assert result.removed_files == (path.name,)
+        assert not path.exists()
+        assert fts.get_file(conn, path.name) is None
+        entries_store.rebuild_index(conn)
+        assert fts.get_file(conn, path.name) is None
+
+
+def test_forget_preserves_preexisting_file_and_user_content(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        service = MemoryService(conn)
+        _ensure_source(conn)
+        target = "user-existing-health.md"
+        path = entries_store.create_file(
+            conn,
+            name=target,
+            description="User-maintained health notebook.",
+            tags=["personal"],
+        )
+        post = frontmatter.load(path)
+        post.metadata["user_note"] = "keep this metadata"
+        post.content = "User-authored preface that is not a canonical entry."
+        files_store.atomic_write_text(path, frontmatter.dumps(post) + "\n")
+
+        candidate = service.propose_candidate(
+            kind="health",
+            target_path=target,
+            content="A reviewed private health fact.",
+            tags=["private"],
+            evidence=[_source()],
+        )
+        accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
+        preview = service.preview_purge_candidate(candidate.id, expected_version=accepted.version)
+        assert preview.files == ()
+
+        result = service.purge_candidate(
+            candidate.id,
+            expected_version=accepted.version,
+            expected_plan_digest=preview.plan_digest,
+        )
+
+        assert result.removed_files == ()
+        kept = frontmatter.load(path)
+        assert kept.content.strip() == "User-authored preface that is not a canonical entry."
+        assert kept.metadata["description"] == "User-maintained health notebook."
+        assert kept.metadata["tags"] == ["personal"]
+        assert kept.metadata["user_note"] == "keep this metadata"
+        assert files_store.read_file(path).entries == []
+        assert fts.get_file(conn, target) is not None
+
+
+def test_forget_replay_fails_closed_if_shared_path_becomes_symlink(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with fts.cursor() as conn:
+        service = MemoryService(conn)
+        _ensure_source(conn)
+        target = "user-shared-symlink.md"
+        path = entries_store.create_file(
+            conn,
+            name=target,
+            description="User-maintained shared notebook.",
+            tags=["personal"],
+        )
+        candidate = service.propose_candidate(
+            kind="health",
+            target_path=target,
+            content="PRIVATE_SHARED_ENTRY_MUST_NOT_SURVIVE_FORGET",
+            tags=["private"],
+            evidence=[_source()],
+        )
+        accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
+        preview = service.preview_purge_candidate(candidate.id, expected_version=accepted.version)
+        assert preview.files == ()
+
+        real_execute = MemoryService._execute_purge
+
+        def crash_after_intent(self, tombstone):
+            raise RuntimeError("crash after shared purge intent")
+
+        monkeypatch.setattr(MemoryService, "_execute_purge", crash_after_intent)
+        with pytest.raises(RuntimeError, match="shared purge intent"):
+            service.purge_candidate(
+                candidate.id,
+                expected_version=accepted.version,
+                expected_plan_digest=preview.plan_digest,
+            )
+        monkeypatch.setattr(MemoryService, "_execute_purge", real_execute)
+
+        outside = ac_root / "moved-shared-notebook.md"
+        path.replace(outside)
+        path.symlink_to(outside)
+        before = outside.read_text(encoding="utf-8")
+
+        with pytest.raises(RuntimeError, match="changed to a symlink"):
+            service.resume_pending_purges()
+
+        assert path.is_symlink()
+        assert outside.read_text(encoding="utf-8") == before
+        assert "PRIVATE_SHARED_ENTRY_MUST_NOT_SURVIVE_FORGET" in before
+        assert candidate_store.is_tombstoned(
+            conn, kind="memory_candidate", artifact_id=candidate.id
+        )
+
+
+def test_forget_preview_blocks_on_even_unrelated_invalid_provenance(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = MemoryService(conn)
+        candidate = _propose(service)
+        path = entries_store.create_file(
+            conn,
+            name="topic-unrelated-damaged.md",
+            description="Unrelated notebook.",
+            tags=["unrelated"],
+        )
+        entries_store.append_entry(
+            conn,
+            name=path.name,
+            content="Unrelated retained text.",
+            tags=["unrelated"],
+        )
+        post = frontmatter.load(path)
+        post.content += (
+            '\n<!-- oc-provenance: {"v":1,"sources":[{"id":"definitely-unrelated"}]} BROKEN -->\n'
+        )
+        files_store.atomic_write_text(path, frontmatter.dumps(post) + "\n")
+        assert files_store.read_file(path).entries[0].provenance_valid is False
+
+        with pytest.raises(PurgeClosureUnverifiable, match="invalid provenance frame"):
+            service.preview_purge_candidate(candidate.id, expected_version=candidate.version)
+
+        assert candidate_store.get(conn, candidate.id) is not None
+        assert candidate_store.list_tombstones(conn) == []
+
+
+def test_forget_preserves_candidate_file_with_unrelated_entry_and_fences_preview(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = MemoryService(conn)
+        _ensure_source(conn)
+        candidate = service.propose_candidate(
+            kind="health",
+            target_path="user-sensitive-health-shared.md",
+            content="Private candidate entry.",
+            tags=["cancer", "private"],
+            evidence=[_source()],
+        )
+        accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
+        initial = service.preview_purge_candidate(candidate.id, expected_version=accepted.version)
+        assert initial.files == ({"path": accepted.target_path},)
+
+        unrelated_id = entries_store.append_entry(
+            conn,
+            name=accepted.target_path,
+            content="UNRELATED_ENTRY_MUST_SURVIVE",
+            tags=["retained"],
+        )
+        fresh = service.preview_purge_candidate(candidate.id, expected_version=accepted.version)
+        assert fresh.files == ({"path": accepted.target_path},)
+        assert fresh.plan_digest != initial.plan_digest
+        with pytest.raises(StalePurgePlan, match="purge closure changed"):
+            service.purge_candidate(
+                candidate.id,
+                expected_version=accepted.version,
+                expected_plan_digest=initial.plan_digest,
+            )
+
+        result = service.purge_candidate(
+            candidate.id,
+            expected_version=accepted.version,
+            expected_plan_digest=fresh.plan_digest,
+        )
+        assert result.removed_files == ()
+        parsed = files_store.read_file(files_store.memory_path(accepted.target_path))
+        assert [entry.id for entry in parsed.entries] == [unrelated_id]
+        assert parsed.entries[0].body == "UNRELATED_ENTRY_MUST_SURVIVE"
+        assert parsed.raw_frontmatter["description"] == "Local memories."
+        assert parsed.raw_frontmatter["tags"] == ["retained"]
+        assert files_store.CANDIDATE_FILE_OWNER_KEY not in parsed.raw_frontmatter
+        assert files_store.CANDIDATE_FILE_TEMPLATE_DIGEST_KEY not in parsed.raw_frontmatter
+        indexed = fts.get_file(conn, accepted.target_path)
+        assert indexed is not None and indexed.entry_count == 1
+        assert indexed.description == "Local memories."
+        assert indexed.tags == "retained"
+        assert "cancer" not in indexed.tags
+        assert "private" not in indexed.tags
+        assert fts.search(conn, query="UNRELATED_ENTRY_MUST_SURVIVE", top_k=5)
+
+
+def test_forget_restores_file_projection_if_external_adoption_follows_intent(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with fts.cursor() as conn:
+        service = MemoryService(conn)
+        candidate = _propose(service, content="PRIVATE_ENTRY_TO_REMOVE")
+        accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
+        preview = service.preview_purge_candidate(candidate.id, expected_version=accepted.version)
+        assert preview.files == ({"path": accepted.target_path},)
+        real_finalize_file = entries_store.finalize_candidate_owned_file
+
+        def adopt_before_finalize(connection, **kwargs):
+            path = files_store.memory_path(kwargs["name"])
+            post = frontmatter.load(path)
+            assert post.content.strip() == ""
+            post.content = "USER_ADOPTED_AFTER_PURGE_INTENT"
+            files_store.atomic_write_text(path, frontmatter.dumps(post) + "\n")
+            return real_finalize_file(connection, **kwargs)
+
+        monkeypatch.setattr(
+            entries_store,
+            "finalize_candidate_owned_file",
+            adopt_before_finalize,
+        )
+        result = service.purge_candidate(
+            candidate.id,
+            expected_version=accepted.version,
+            expected_plan_digest=preview.plan_digest,
+        )
+
+        assert result.removed_files == ()
+        path = files_store.memory_path(accepted.target_path)
+        assert frontmatter.load(path).content.strip() == "USER_ADOPTED_AFTER_PURGE_INTENT"
+        parsed = files_store.read_file(path)
+        assert parsed.description == "Local memories."
+        assert parsed.tags == []
+        assert files_store.CANDIDATE_FILE_OWNER_KEY not in parsed.raw_frontmatter
+        indexed = fts.get_file(conn, accepted.target_path)
+        assert indexed is not None and indexed.entry_count == 0
+        assert fts.search(conn, query="PRIVATE_ENTRY_TO_REMOVE", top_k=5) == []
+        assert candidate_store.list_tombstones(conn) == []
+
+
+def test_sanitized_owned_file_replays_after_projection_crash(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with fts.cursor() as conn:
+        service = MemoryService(conn)
+        candidate = _propose(service, content="PRIVATE_METADATA_SOURCE")
+        accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
+        entries_store.append_entry(
+            conn,
+            name=accepted.target_path,
+            content="SURVIVING_ENTRY",
+            tags=["surviving"],
+        )
+        preview = service.preview_purge_candidate(candidate.id, expected_version=accepted.version)
+        real_upsert = entries_store._upsert_file_projection
+
+        def fail_sanitized_projection(connection, *, path, post):
+            if post.metadata.get("description") == files_store.SANITIZED_CANDIDATE_FILE_DESCRIPTION:
+                raise RuntimeError("projection crash after sanitization")
+            return real_upsert(connection, path=path, post=post)
+
+        monkeypatch.setattr(
+            entries_store,
+            "_upsert_file_projection",
+            fail_sanitized_projection,
+        )
+        with pytest.raises(RuntimeError, match="projection crash after sanitization"):
+            service.purge_candidate(
+                candidate.id,
+                expected_version=accepted.version,
+                expected_plan_digest=preview.plan_digest,
+            )
+
+        path = files_store.memory_path(accepted.target_path)
+        crashed = files_store.read_file(path)
+        assert crashed.description == "Local memories."
+        assert crashed.tags == ["surviving"]
+        assert files_store.CANDIDATE_FILE_OWNER_KEY not in crashed.raw_frontmatter
+        assert fts.get_file(conn, accepted.target_path) is None
+        assert candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=accepted.target_path
+        )
+
+        monkeypatch.setattr(entries_store, "_upsert_file_projection", real_upsert)
+        resumed = service.resume_pending_purges()
+        assert [result.candidate_id for result in resumed] == [candidate.id]
+        assert resumed[0].removed_files == ()
+        assert candidate_store.list_tombstones(conn) == []
+        indexed = fts.get_file(conn, accepted.target_path)
+        assert indexed is not None
+        assert indexed.description == "Local memories."
+        assert indexed.tags == "surviving"
+        assert fts.search(conn, query="PRIVATE_METADATA_SOURCE", top_k=5) == []
+        assert fts.search(conn, query="SURVIVING_ENTRY", top_k=5)
+
+
 def test_purge_intent_fences_inflight_wrap_publication(
-    ac_root: Path, monkeypatch,
+    ac_root: Path,
+    monkeypatch,
 ) -> None:
     with fts.cursor() as conn:
         service = MemoryService(conn)
@@ -590,10 +912,13 @@ def test_purge_intent_fences_inflight_wrap_publication(
     assert isinstance(errors[0][1], daily_wrap_store.DailyWrapLostLease)
     with fts.cursor() as conn:
         assert candidate_store.get(conn, candidate.id) is None
-        assert conn.execute(
-            "SELECT COUNT(*) FROM daily_wrap_revisions WHERE wrap_id=?",
-            (claim.row.id,),
-        ).fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM daily_wrap_revisions WHERE wrap_id=?",
+                (claim.row.id,),
+            ).fetchone()[0]
+            == 0
+        )
         row = daily_wrap_store.get_by_id(conn, claim.row.id)
         assert row is not None and row.output is None
 
@@ -604,9 +929,7 @@ def test_purge_closure_fences_concurrent_provenance_entry_append(
     with fts.cursor() as conn:
         service = MemoryService(conn)
         candidate = _propose(service, content="CLOSURE_SOURCE_SECRET")
-        accepted = service.approve_candidate(
-            candidate.id, expected_version=candidate.version
-        )
+        accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         assert accepted.applied_entry_id
         source_ref = EvidenceRef(
             kind="memory_entry",
@@ -680,14 +1003,17 @@ def test_purge_closure_fences_concurrent_provenance_entry_append(
         assert _entry_ids("project-late-derived.md") == []
         entries_store.rebuild_index(conn)
         assert fts.search(conn, query="LATE_DERIVED_SECRET", top_k=5) == []
-        assert provenance_store.direct_sources(
-            conn,
-            EvidenceRef(
-                kind="memory_entry",
-                id="late-derived-entry",
-                path="project-late-derived.md",
-            ),
-        ) == []
+        assert (
+            provenance_store.direct_sources(
+                conn,
+                EvidenceRef(
+                    kind="memory_entry",
+                    id="late-derived-entry",
+                    path="project-late-derived.md",
+                ),
+            )
+            == []
+        )
 
 
 def test_purge_tombstone_prevents_rebuild_resurrection_after_crash(
@@ -712,20 +1038,31 @@ def test_purge_tombstone_prevents_rebuild_resurrection_after_crash(
             artifact_id=accepted.applied_entry_id,
             path=accepted.target_path,
         )
+        assert candidate_store.is_tombstoned(
+            conn,
+            kind="memory_file",
+            artifact_id=accepted.target_path,
+        )
+        assert files_store.memory_path(accepted.target_path).exists()
+        assert fts.get_file(conn, accepted.target_path) is None
 
         entries_store.rebuild_index(conn)
-        assert conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE id=?",
-            (accepted.applied_entry_id,),
-        ).fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM entries WHERE id=?",
+                (accepted.applied_entry_id,),
+            ).fetchone()[0]
+            == 0
+        )
 
         monkeypatch.setattr(entries_store, "delete_entry", real_delete)
         resumed = service.resume_pending_purges()
         assert [result.candidate_id for result in resumed] == [candidate.id]
+        assert resumed[0].removed_files == (accepted.target_path,)
         assert candidate_store.list_tombstones(conn) == []
         assert candidate_store.get(conn, candidate.id) is None
-        parsed = files_store.read_file(files_store.memory_path("user-preferences.md"))
-        assert parsed.entries == []
+        assert not files_store.memory_path(accepted.target_path).exists()
+        assert fts.get_file(conn, accepted.target_path) is None
 
 
 def test_purge_replay_clears_fts_when_markdown_was_already_replaced(
@@ -745,9 +1082,12 @@ def test_purge_replay_clears_fts_when_markdown_was_already_replaced(
 
         service.purge_candidate(candidate.id)
         assert fts.search(conn, query="SECRET_AFTER_RENAME", top_k=5) == []
-        assert conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE id=?", (accepted.applied_entry_id,)
-        ).fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM entries WHERE id=?", (accepted.applied_entry_id,)
+            ).fetchone()[0]
+            == 0
+        )
         assert candidate_store.list_tombstones(conn) == []
 
 
@@ -804,23 +1144,24 @@ def test_rebuild_resolves_valid_memory_dependencies_independent_of_file_order(
                 )
             ],
         )
-        derived = service.approve_candidate(
-            derived.id, expected_version=derived.version
-        )
+        derived = service.approve_candidate(derived.id, expected_version=derived.version)
         assert derived.applied_entry_id
 
         files_count, entries_count = entries_store.rebuild_index(conn)
         assert files_count >= 3
         assert entries_count >= 3
         assert fts.search(conn, query="Derived rebuild fact", top_k=5)
-        assert provenance_store.direct_sources(
-            conn,
-            EvidenceRef(
-                kind="memory_entry",
-                id=derived.applied_entry_id,
-                path=derived.target_path,
-            ),
-        )[1].id == root.applied_entry_id
+        assert (
+            provenance_store.direct_sources(
+                conn,
+                EvidenceRef(
+                    kind="memory_entry",
+                    id=derived.applied_entry_id,
+                    path=derived.target_path,
+                ),
+            )[1].id
+            == root.applied_entry_id
+        )
 
 
 def test_supersede_is_provenance_linked_and_purged_with_accepted_source(
@@ -840,16 +1181,14 @@ def test_supersede_is_provenance_linked_and_purged_with_accepted_source(
             reason="SUPERSEDE_REASON_SECRET",
             tags=["replacement"],
         )
-        replacement_ref = EvidenceRef(
-            kind="memory_entry", id=replacement_id, path=root.target_path
-        )
+        replacement_ref = EvidenceRef(kind="memory_entry", id=replacement_id, path=root.target_path)
         sources = provenance_store.direct_sources(conn, replacement_ref)
         assert [(source.path, source.id) for source in sources] == [
             (root.target_path, root.applied_entry_id)
         ]
-        assert "SUPERSEDE_REASON_SECRET" not in files_store.memory_path(
-            root.target_path
-        ).read_text(encoding="utf-8")
+        assert "SUPERSEDE_REASON_SECRET" not in files_store.memory_path(root.target_path).read_text(
+            encoding="utf-8"
+        )
 
         service.purge_candidate(root.id)
         assert _entry_ids(root.target_path) == []
@@ -896,14 +1235,17 @@ def test_purge_scans_markdown_for_crash_orphan_missing_projection(
                 evidence_refs=[source_ref],
             )
         assert _entry_ids("project-crash-orphan.md") == ["crash-orphan-entry"]
-        assert provenance_store.direct_sources(
-            conn,
-            EvidenceRef(
-                kind="memory_entry",
-                id="crash-orphan-entry",
-                path="project-crash-orphan.md",
-            ),
-        ) == []
+        assert (
+            provenance_store.direct_sources(
+                conn,
+                EvidenceRef(
+                    kind="memory_entry",
+                    id="crash-orphan-entry",
+                    path="project-crash-orphan.md",
+                ),
+            )
+            == []
+        )
 
         monkeypatch.setattr(fts, "insert_entry", real_insert)
         service.purge_candidate(root.id)
@@ -1015,9 +1357,12 @@ def test_purge_uses_revision_provenance_to_delete_old_wrap_secret(ac_root: Path)
         result = service.purge_candidate(candidate.id)
         assert result.invalidated_wraps == (first.id,)
         assert daily_wrap_store.get_by_id(conn, first.id) is None
-        assert conn.execute(
-            "SELECT COUNT(*) FROM daily_wrap_revisions WHERE wrap_id=?", (first.id,)
-        ).fetchone()[0] == 0
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM daily_wrap_revisions WHERE wrap_id=?", (first.id,)
+            ).fetchone()[0]
+            == 0
+        )
         assert "SECRET_FROM_OLD_REVISION" not in "".join(
             str(value)
             for row in conn.execute("SELECT output_json FROM daily_wrap_revisions")

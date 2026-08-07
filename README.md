@@ -35,7 +35,7 @@
 
 > **Status:** v0.1.0 · macOS only · early alpha
 
-> **This fork:** see the clean-room [Vida-like proactive assistant roadmap](docs/vida-like-roadmap.md) and the [Stage 1 memory/Daily Wrap contract](docs/stage1-memory-daily-wrap.md).
+> **This fork:** see the clean-room [Vida-like proactive assistant roadmap](docs/vida-like-roadmap.md), the [Stage 1 memory/Daily Wrap contract](docs/stage1-memory-daily-wrap.md), and the [trusted desktop-shell boundary](docs/desktop-shell.md).
 
 OpenChronicle gives AI agents a local, inspectable memory built from real screen and app context.
 
@@ -137,7 +137,9 @@ The core idea is simple:
 * **Review-first durable memory candidates** with evidence, conflicts, and explicit approval
 * **Canonical Daily Wraps** with exact, explicitly untrusted activity quotes,
   per-item source references, and partial-coverage reporting
-* **Crash-resumable true purge** for a candidate, its accepted entry, and derived wraps
+* **Crash-resumable true purge** for a candidate, its accepted entry, candidate-owned target metadata/file, and derived wraps
+* **Native review-shell source slice** for pause/resume, candidate review,
+  read-only Daily Wraps, timeline inspection, privacy policy, and exact source lineage
 * **Local or cloud model support**
 * **Always-on agent-readable interface**, with MCP as the best-supported path today
 
@@ -245,6 +247,7 @@ Documentation
 * [docs/mcp.md](docs/mcp.md) - current tool surface and integrations
 * [docs/memory-format.md](docs/memory-format.md) - file layout and supersede semantics
 * [docs/stage1-memory-daily-wrap.md](docs/stage1-memory-daily-wrap.md) - provenance, review inbox, Daily Wrap, privacy, and failure semantics
+* [docs/desktop-shell.md](docs/desktop-shell.md) - Tauri trust boundary, fixed bridge protocol, dangerous-action semantics, and release gates
 * [docs/troubleshooting.md](docs/troubleshooting.md) - common issues
 
 ---
@@ -255,7 +258,23 @@ Documentation
 uv sync --all-extras
 uv run pytest
 uv run ruff check
+
+cd apps/desktop
+nvm use                 # .nvmrc pins the supported Node.js LTS runtime
+npm ci
+npm test
+npm run build
+npm run tauri:dev
+
+cd src-tauri
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo check --locked --release
 ```
+
+The desktop source build intentionally is not a distributable app yet. A
+self-contained, signed bridge sidecar plus notarization and macOS TCC testing
+remain release gates; see [docs/desktop-shell.md](docs/desktop-shell.md).
 
 ---
 

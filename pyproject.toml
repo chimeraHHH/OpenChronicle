@@ -31,6 +31,7 @@ dependencies = [
 
 [project.scripts]
 openchronicle = "openchronicle.cli:app"
+openchronicle-desktop-bridge = "openchronicle.desktop_bridge:main"
 
 [project.urls]
 Repository = "https://github.com/openchronicle/openchronicle"

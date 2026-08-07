@@ -1120,6 +1120,7 @@ def memory_candidate_forget(
         ).purge_candidate(candidate_id)
     console.print(
         f"[green]Purged {candidate_id}; entry_removed={result.removed_entry}; "
+        f"files_removed={len(result.removed_files)}; "
         f"wraps_invalidated={len(result.invalidated_wraps)}.[/green]"
     )
 

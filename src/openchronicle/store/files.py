@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -41,9 +42,7 @@ def atomic_write_text(path: Path, content: str) -> None:
     inherited the umask default (typically 0o644).
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp"
-    )
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -71,7 +70,31 @@ def atomic_write_text(path: Path, content: str) -> None:
             tmp_path.unlink()
         raise
 
+
 VALID_PREFIXES = ("user-", "project-", "tool-", "topic-", "person-", "org-", "event-")
+
+# Candidate approval may create a target Markdown file before it appends the
+# reviewed entry.  Persisting ownership in that same atomic Markdown write is
+# what lets permanent-forget distinguish an app-created empty container from a
+# pre-existing user file even after a crash between the file and SQLite writes.
+CANDIDATE_FILE_OWNER_KEY = "openchronicle_owner_candidate_id"
+CANDIDATE_FILE_TEMPLATE_DIGEST_KEY = "openchronicle_owner_template_digest"
+SANITIZED_CANDIDATE_FILE_DESCRIPTION = "Local memories."
+_DEFAULT_FRONTMATTER_KEYS = frozenset(
+    {
+        "description",
+        "tags",
+        "status",
+        "created",
+        "updated",
+        "entry_count",
+        "needs_compact",
+    }
+)
+_CANDIDATE_FILE_FRONTMATTER_KEYS = _DEFAULT_FRONTMATTER_KEYS | {
+    CANDIDATE_FILE_OWNER_KEY,
+    CANDIDATE_FILE_TEMPLATE_DIGEST_KEY,
+}
 
 
 # Per-path mutex registry. The reducer fires from a daemon thread per
@@ -93,9 +116,7 @@ _STORE_WRITE_LOCK_NAME = ".store-write.lock"
 _REVIEW_OPERATION_LOCK_NAME = ".memory-review-operation"
 _review_thread_lock = threading.RLock()
 _review_lock_state = threading.local()
-_MEMORY_TEMP_RE = re.compile(
-    r"^\.[^/]+\.md\.[A-Za-z0-9_-]+\.tmp$"
-)
+_MEMORY_TEMP_RE = re.compile(r"^\.[^/]+\.md\.[A-Za-z0-9_-]+\.tmp$")
 
 
 def _lock_for(path: Path) -> threading.Lock:
@@ -201,6 +222,7 @@ def cleanup_orphan_memory_temps() -> int:
                 pass
     return removed
 
+
 ENTRY_HEADING_RE = re.compile(
     r"^##\s*\[(?P<ts>[^\]]+)\]\s*\{id:\s*(?P<id>[a-zA-Z0-9\-]+)\}(?P<tags>[^\n]*)$",
     re.MULTILINE,
@@ -255,9 +277,7 @@ def memory_path(name: str) -> Path:
             if unicodedata.normalize("NFC", child.name).casefold() == requested_key
         ]
         if matches and (len(matches) != 1 or matches[0].name != name):
-            raise ValueError(
-                "memory path spelling must exactly match its canonical on-disk name"
-            )
+            raise ValueError("memory path spelling must exactly match its canonical on-disk name")
     return parent / name
 
 
@@ -266,9 +286,7 @@ def validate_prefix(name: str) -> str:
     for p in VALID_PREFIXES:
         if stem.startswith(p) and len(stem) > len(p):
             return p.rstrip("-")
-    raise ValueError(
-        f"filename {name!r} must start with one of: {', '.join(VALID_PREFIXES)}"
-    )
+    raise ValueError(f"filename {name!r} must start with one of: {', '.join(VALID_PREFIXES)}")
 
 
 def today() -> str:
@@ -285,6 +303,83 @@ def default_frontmatter(*, description: str, tags: list[str]) -> dict[str, Any]:
         "entry_count": 0,
         "needs_compact": False,
     }
+
+
+def mark_candidate_owned(fm: dict[str, Any], *, candidate_id: str, path_name: str) -> None:
+    """Mark a freshly created default file as owned by one review candidate.
+
+    The digest binds every stable, user-meaningful frontmatter field.  Fields
+    maintained by normal entry writes (``updated``, ``entry_count`` and
+    ``needs_compact``) are deliberately excluded so they do not revoke safe
+    ownership merely because an entry was appended or deleted.
+    """
+    if not re.fullmatch(r"mc-[0-9a-f]{24}", candidate_id):
+        raise ValueError("invalid candidate file owner")
+    if set(fm) != _DEFAULT_FRONTMATTER_KEYS:
+        raise ValueError("candidate ownership requires default frontmatter")
+    memory_path(path_name)
+    fm[CANDIDATE_FILE_OWNER_KEY] = candidate_id
+    fm[CANDIDATE_FILE_TEMPLATE_DIGEST_KEY] = _candidate_file_template_digest(
+        fm, path_name=path_name
+    )
+
+
+def candidate_file_owner(fm: dict[str, Any], *, path_name: str) -> str | None:
+    """Return the verified owner of an unchanged candidate-created file.
+
+    Any extra field or change to stable metadata revokes automatic deletion.
+    This is intentionally fail-closed: permanent-forget may leave a container
+    behind, but it must never delete a file a user has adopted or annotated.
+    """
+    if set(fm) != _CANDIDATE_FILE_FRONTMATTER_KEYS:
+        return None
+    owner = fm.get(CANDIDATE_FILE_OWNER_KEY)
+    recorded_digest = fm.get(CANDIDATE_FILE_TEMPLATE_DIGEST_KEY)
+    tags = fm.get("tags")
+    if (
+        not isinstance(owner, str)
+        or re.fullmatch(r"mc-[0-9a-f]{24}", owner) is None
+        or not isinstance(recorded_digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", recorded_digest) is None
+        or not isinstance(fm.get("description"), str)
+        or not isinstance(tags, list)
+        or any(not isinstance(tag, str) for tag in tags)
+        or fm.get("status") != "active"
+        or not isinstance(fm.get("entry_count"), int)
+        or isinstance(fm.get("entry_count"), bool)
+        or not isinstance(fm.get("needs_compact"), bool)
+    ):
+        return None
+    actual_digest = _candidate_file_template_digest(fm, path_name=path_name)
+    return owner if actual_digest == recorded_digest else None
+
+
+def candidate_file_is_sanitized(
+    fm: dict[str, Any], *, surviving_tags: list[str], entry_count: int
+) -> bool:
+    """Recognize the deterministic, non-owner state used by purge replay."""
+    return (
+        set(fm) == _DEFAULT_FRONTMATTER_KEYS
+        and fm.get("description") == SANITIZED_CANDIDATE_FILE_DESCRIPTION
+        and fm.get("tags") == sorted(set(surviving_tags))
+        and fm.get("status") == "active"
+        and fm.get("entry_count") == entry_count
+        and not isinstance(fm.get("entry_count"), bool)
+        and isinstance(fm.get("needs_compact"), bool)
+    )
+
+
+def _candidate_file_template_digest(fm: dict[str, Any], *, path_name: str) -> str:
+    stable = {
+        "path": path_name,
+        "owner_candidate_id": str(fm.get(CANDIDATE_FILE_OWNER_KEY) or ""),
+        "description": str(fm.get("description") or ""),
+        "tags": [str(tag) for tag in (fm.get("tags") or [])],
+        "status": str(fm.get("status") or ""),
+        "created": str(fm.get("created") or ""),
+    }
+    payload = json.dumps(stable, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def write_file(path: Path, fm: dict[str, Any], body: str) -> None:
@@ -425,4 +520,6 @@ def update_frontmatter(path: Path, updates: dict[str, Any]) -> None:
 def list_memory_files() -> list[Path]:
     if not paths.memory_dir().exists():
         return []
-    return sorted(p for p in paths.memory_dir().iterdir() if p.suffix == ".md" and p.name != "index.md")
+    return sorted(
+        p for p in paths.memory_dir().iterdir() if p.suffix == ".md" and p.name != "index.md"
+    )
