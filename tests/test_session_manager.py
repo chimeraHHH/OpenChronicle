@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from openchronicle.session.manager import SessionManager
 
@@ -16,7 +16,7 @@ class _FakeClock:
         self.now = self.now + timedelta(**kwargs)
 
 
-_T0 = datetime(2026, 4, 21, 10, 0, 0, tzinfo=timezone.utc)
+_T0 = datetime(2026, 4, 21, 10, 0, 0, tzinfo=UTC)
 
 
 def _event(bundle: str = "com.apple.dt.Xcode") -> dict:

@@ -37,6 +37,10 @@ def pid_file() -> Path:
     return root() / ".pid"
 
 
+def daemon_lock_file() -> Path:
+    return root() / ".daemon.lock"
+
+
 def paused_flag() -> Path:
     return root() / ".paused"
 
@@ -48,4 +52,7 @@ def writer_state() -> Path:
 
 def ensure_dirs() -> None:
     for d in (root(), memory_dir(), capture_buffer_dir(), logs_dir()):
-        d.mkdir(parents=True, exist_ok=True)
+        d.mkdir(parents=True, exist_ok=True, mode=0o700)
+        # Sensitive AX text, screenshots, logs, and memory all live beneath
+        # these directories. Tighten pre-existing installs as well as new ones.
+        d.chmod(0o700)

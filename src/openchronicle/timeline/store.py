@@ -12,7 +12,7 @@ import json
 import os
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS timeline_blocks (
@@ -28,6 +28,15 @@ CREATE TABLE IF NOT EXISTS timeline_blocks (
 );
 CREATE INDEX IF NOT EXISTS idx_tlb_start ON timeline_blocks(start_time);
 CREATE INDEX IF NOT EXISTS idx_tlb_end ON timeline_blocks(end_time);
+
+-- Durable producer watermark. Unlike MAX(timeline_blocks.end_time), this also
+-- advances across closed windows with zero captures, letting consumers prove
+-- that a missing block is truly empty rather than merely late.
+CREATE TABLE IF NOT EXISTS timeline_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    processed_from TEXT,
+    processed_through TEXT NOT NULL
+);
 """
 
 
@@ -57,6 +66,12 @@ def _make_id(start: datetime) -> str:
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(timeline_state)")}
+    if "processed_from" not in columns:
+        # An upper bound created by an older build cannot prove which earlier
+        # windows were actually inspected.  Leave the new lower bound NULL so
+        # the producer safely reconstructs its coverage range.
+        conn.execute("ALTER TABLE timeline_state ADD COLUMN processed_from TEXT")
 
 
 def has_window(conn: sqlite3.Connection, start: datetime, end: datetime) -> bool:
@@ -89,7 +104,7 @@ def insert(conn: sqlite3.Connection, block: TimelineBlock) -> None:
 
 def get_latest_end(conn: sqlite3.Connection) -> datetime | None:
     row = conn.execute(
-        "SELECT end_time FROM timeline_blocks ORDER BY end_time DESC LIMIT 1"
+        "SELECT end_time FROM timeline_blocks ORDER BY julianday(end_time) DESC LIMIT 1"
     ).fetchone()
     if not row:
         return None
@@ -97,6 +112,102 @@ def get_latest_end(conn: sqlite3.Connection) -> datetime | None:
         return datetime.fromisoformat(row[0])
     except (TypeError, ValueError):
         return None
+
+
+def get_processed_through(conn: sqlite3.Connection) -> datetime | None:
+    """Return the upper bound only when a complete coverage range is known."""
+    processed_range = get_processed_range(conn)
+    return processed_range[1] if processed_range is not None else None
+
+
+def get_processed_range(
+    conn: sqlite3.Connection,
+) -> tuple[datetime, datetime] | None:
+    """Return ``[processed_from, processed_through]`` or fail closed."""
+    row = conn.execute(
+        "SELECT processed_from, processed_through FROM timeline_state WHERE id=1"
+    ).fetchone()
+    if not row or not row[0] or not row[1]:
+        return None
+    try:
+        start = datetime.fromisoformat(row[0])
+        end = datetime.fromisoformat(row[1])
+    except (TypeError, ValueError):
+        return None
+    if _instant(start) > _instant(end):
+        return None
+    return start, end
+
+
+def initialize_processed_range(conn: sqlite3.Connection, start: datetime) -> None:
+    """Reset producer coverage to the safe recovery seed ``start``."""
+    value = start.isoformat()
+    conn.execute(
+        """
+        INSERT INTO timeline_state(id, processed_from, processed_through)
+        VALUES (1, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            processed_from=excluded.processed_from,
+            processed_through=excluded.processed_through
+        """,
+        (value, value),
+    )
+
+
+def advance_processed_through(
+    conn: sqlite3.Connection,
+    value: datetime,
+    *,
+    window_start: datetime | None = None,
+) -> None:
+    """Extend a contiguous coverage range through ``value``.
+
+    ``window_start`` is supplied by the producer and must not leave a gap after
+    the current upper bound.  The optional form preserves the small public API
+    used by tests/debug tooling and records a point range on first use.
+    """
+    processed_range = get_processed_range(conn)
+    if processed_range is None:
+        initialize_processed_range(conn, window_start or value)
+        processed_range = get_processed_range(conn)
+    assert processed_range is not None
+    _processed_from, processed_through = processed_range
+    start = window_start or processed_through
+    if _instant(start) > _instant(processed_through):
+        raise ValueError("timeline coverage cannot advance across an uninspected gap")
+    if _instant(value) <= _instant(processed_through):
+        return
+    conn.execute(
+        "UPDATE timeline_state SET processed_through=? WHERE id=1",
+        (value.isoformat(),),
+    )
+
+
+def range_covers(
+    processed_range: tuple[datetime, datetime] | None,
+    moment: datetime,
+) -> bool:
+    """Return whether an inspected-window range proves an end boundary.
+
+    ``processed_from`` is the start of the first inspected window, not an
+    inspected end boundary itself, so coverage is ``(from, through]``.
+    """
+    if processed_range is None:
+        return False
+    start, end = processed_range
+    instant = _instant(moment)
+    return _instant(start) < instant <= _instant(end)
+
+
+def covers(conn: sqlite3.Connection, moment: datetime) -> bool:
+    """Return whether the durable producer range covers ``moment``."""
+    return range_covers(get_processed_range(conn), moment)
+
+
+def _instant(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.astimezone()
+    return value.astimezone(UTC)
 
 
 def query_recent(conn: sqlite3.Connection, *, limit: int = 12) -> list[TimelineBlock]:
@@ -138,6 +249,14 @@ def floor_to_window(moment: datetime, window_minutes: int) -> datetime:
     """Floor to the wall-clock window boundary. 14:07:42 → 14:05:00 (w=5)."""
     floor_min = (moment.minute // window_minutes) * window_minutes
     return moment.replace(minute=floor_min, second=0, microsecond=0)
+
+
+def ceil_to_window(moment: datetime, window_minutes: int) -> datetime:
+    """Ceil to the wall-clock boundary that proves ``moment`` was inspected."""
+    floor = floor_to_window(moment, window_minutes)
+    if floor == moment:
+        return floor
+    return floor + timedelta(minutes=window_minutes)
 
 
 def iter_windows(

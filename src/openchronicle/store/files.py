@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import os
 import re
 import tempfile
@@ -79,12 +80,16 @@ VALID_PREFIXES = ("user-", "project-", "tool-", "topic-", "person-", "org-", "ev
 # write wins. The FTS index, written outside the file, ends up holding
 # rows for entries that don't exist on disk.
 #
-# The fix is in-process (the daemon is single-process; CLI commands
-# don't write memory files), per-path (so unrelated files don't
-# serialize), and bounded (one Lock per memory file ≈ a few hundred
-# entries lifetime, dozens of bytes each).
+# Each thread mutex is paired with a cross-process BSD lock below so daemon
+# callbacks and CLI recovery commands cannot race. Per-path locks protect the
+# read-modify-write itself; store mutations additionally take one global lock
+# so a full FTS rebuild cannot interleave with any Markdown/index update.
 _lock_registry_lock = threading.Lock()
 _path_locks: dict[str, threading.Lock] = {}
+_STORE_WRITE_LOCK_NAME = ".store-write.lock"
+_MEMORY_TEMP_RE = re.compile(
+    r"^\.[^/]+\.md\.[A-Za-z0-9_-]+\.tmp$"
+)
 
 
 def _lock_for(path: Path) -> threading.Lock:
@@ -105,10 +110,68 @@ def _lock_for(path: Path) -> threading.Lock:
 
 
 @contextlib.contextmanager
-def file_lock(path: Path) -> Iterator[None]:
-    """Serialize concurrent writers on a single memory-file path."""
-    with _lock_for(path):
+def _cross_process_lock(lock_path: Path) -> Iterator[None]:
+    """Hold one private BSD advisory-lock sidecar until the context exits."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
         yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def store_write_lock() -> Iterator[None]:
+    """Serialize Markdown/FTS mutations, including full index rebuilds.
+
+    Operations that also mutate one Markdown file must acquire this global
+    lock before :func:`file_lock`. Keeping one order across threads and
+    processes prevents a rebuild from deleting FTS rows while a file writer is
+    between its Markdown rename and matching index update.
+    """
+    lock_path = paths.root() / _STORE_WRITE_LOCK_NAME
+    with _lock_for(lock_path), _cross_process_lock(lock_path):
+        yield
+
+
+@contextlib.contextmanager
+def file_lock(path: Path) -> Iterator[None]:
+    """Serialize writers to one logical path across threads and processes.
+
+    The stable sidecar lock coordinates CLI recovery commands with the daemon,
+    and the kernel releases it automatically if either process crashes.
+    """
+    with _lock_for(path):
+        lock_path = path.parent / f".{path.name}.lock"
+        with _cross_process_lock(lock_path):
+            yield
+
+
+def is_memory_temp_name(name: str) -> bool:
+    """Recognize temp files created by :func:`atomic_write_text`."""
+    return _MEMORY_TEMP_RE.fullmatch(name) is not None
+
+
+def cleanup_orphan_memory_temps() -> int:
+    """Remove crash-left temp copies while excluding every live writer."""
+    removed = 0
+    with store_write_lock():
+        memory = paths.memory_dir()
+        if not memory.exists():
+            return 0
+        for path in memory.rglob("*"):
+            if not path.is_file() or not is_memory_temp_name(path.name):
+                continue
+            try:
+                path.unlink()
+                removed += 1
+            except OSError:
+                pass
+    return removed
 
 ENTRY_HEADING_RE = re.compile(
     r"^##\s*\[(?P<ts>[^\]]+)\]\s*\{id:\s*(?P<id>[a-zA-Z0-9\-]+)\}(?P<tags>[^\n]*)$",
@@ -249,11 +312,16 @@ def render_file(
     return "\n".join(parts).rstrip() + "\n"
 
 
+def _update_frontmatter_unlocked(path: Path, updates: dict[str, Any]) -> None:
+    """Update frontmatter after the caller has acquired global→path locks."""
+    post = frontmatter.load(path)
+    post.metadata.update(updates)
+    atomic_write_text(path, frontmatter.dumps(post) + "\n")
+
+
 def update_frontmatter(path: Path, updates: dict[str, Any]) -> None:
-    with file_lock(path):
-        post = frontmatter.load(path)
-        post.metadata.update(updates)
-        atomic_write_text(path, frontmatter.dumps(post) + "\n")
+    with store_write_lock(), file_lock(path):
+        _update_frontmatter_unlocked(path, updates)
 
 
 def list_memory_files() -> list[Path]:

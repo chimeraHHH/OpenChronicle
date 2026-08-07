@@ -20,6 +20,15 @@ from . import fts
 logger = get("openchronicle.store")
 
 
+def require_autocommit(conn: sqlite3.Connection) -> None:
+    """Reject callers that would invert the global-lock/SQLite lock order."""
+    if conn.in_transaction:
+        raise RuntimeError(
+            "memory file mutations require an autocommit SQLite connection; "
+            "finish the existing transaction before writing Markdown"
+        )
+
+
 def _now_iso_minute() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M")
 
@@ -42,6 +51,7 @@ def _ensure_prefix(path_name: str) -> str:
 def create_file(
     conn: sqlite3.Connection, *, name: str, description: str, tags: list[str]
 ) -> Path:
+    require_autocommit(conn)
     if not description.strip():
         raise ValueError("description is required")
     prefix = _ensure_prefix(name)
@@ -49,7 +59,7 @@ def create_file(
     # Lock around the exists-check + write so two concurrent classifiers
     # deciding to create the same file don't both pass the check and have
     # the second clobber the first's freshly written content.
-    with files_mod.file_lock(path):
+    with files_mod.store_write_lock(), files_mod.file_lock(path):
         if path.exists():
             raise FileExistsError(f"{path.name} already exists")
 
@@ -82,13 +92,60 @@ def append_entry(
     soft_limit_tokens: int | None = None,
 ) -> str:
     """Append a new entry, returning its id."""
+    entry_id, _created = _append_entry(
+        conn,
+        name=name,
+        content=content,
+        tags=tags,
+        soft_limit_tokens=soft_limit_tokens,
+        requested_id=None,
+    )
+    return entry_id
+
+
+def append_entry_once(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    content: str,
+    tags: list[str],
+    entry_id: str,
+    soft_limit_tokens: int | None = None,
+) -> tuple[str, bool]:
+    """Append a deterministic entry once and repair a missing FTS row.
+
+    Returns ``(entry_id, created)``. If Markdown reached disk just before a
+    crash, a retry reuses the existing entry instead of appending a duplicate.
+    """
+    if not re.fullmatch(r"[a-zA-Z0-9-]+", entry_id):
+        raise ValueError(f"invalid deterministic entry id: {entry_id!r}")
+    return _append_entry(
+        conn,
+        name=name,
+        content=content,
+        tags=tags,
+        soft_limit_tokens=soft_limit_tokens,
+        requested_id=entry_id,
+    )
+
+
+def _append_entry(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    content: str,
+    tags: list[str],
+    soft_limit_tokens: int | None,
+    requested_id: str | None,
+) -> tuple[str, bool]:
+    require_autocommit(conn)
     path = files_mod.memory_path(name)
     if not path.exists():
         raise FileNotFoundError(f"{path.name} does not exist; call create_file first")
     prefix = _ensure_prefix(name)
 
     ts = _now_iso_minute()
-    entry_id = make_id(ts)
+    entry_id = requested_id or make_id(ts)
     heading = files_mod.render_heading(timestamp=ts, entry_id=entry_id, tags=tags)
     body = content.strip()
 
@@ -96,8 +153,49 @@ def append_entry(
     # the same file can't read the same base, append, and clobber this
     # write — both writes claim "+1 entry" but only one entry survives
     # while the FTS index keeps both, leaving file/index inconsistent.
-    with files_mod.file_lock(path):
+    with files_mod.store_write_lock(), files_mod.file_lock(path):
         post = frontmatter.load(path)
+        if requested_id is not None:
+            existing = next(
+                (
+                    entry
+                    for entry in files_mod._parse_entries(post.content)
+                    if entry.id == entry_id
+                ),
+                None,
+            )
+            if existing is not None:
+                indexed = conn.execute(
+                    "SELECT 1 FROM entries WHERE id=? AND path=? LIMIT 1",
+                    (entry_id, path.name),
+                ).fetchone()
+                if indexed is None:
+                    fts.insert_entry(
+                        conn,
+                        id=entry_id,
+                        path=path.name,
+                        prefix=prefix,
+                        timestamp=existing.timestamp,
+                        tags=" ".join(existing.tags),
+                        content=existing.body,
+                        superseded=0,
+                    )
+                fts.upsert_file(
+                    conn,
+                    fts.FileRow(
+                        path=path.name,
+                        prefix=prefix,
+                        description=str(post.metadata.get("description", "")),
+                        tags=" ".join(post.metadata.get("tags", []) or []),
+                        status=str(post.metadata.get("status", "active")),
+                        entry_count=int(post.metadata.get("entry_count", 0)),
+                        created=str(post.metadata.get("created", "")),
+                        updated=str(post.metadata.get("updated", "")),
+                        needs_compact=1 if post.metadata.get("needs_compact") else 0,
+                    ),
+                )
+                return entry_id, False
+
         current = post.content.rstrip()
         new_block = f"\n\n{heading}\n{body}\n" if current else f"{heading}\n{body}\n"
         post.content = current + new_block
@@ -142,7 +240,7 @@ def append_entry(
                 needs_compact=1 if post.metadata.get("needs_compact") else 0,
             ),
         )
-    return entry_id
+    return entry_id, True
 
 
 def supersede_entry(
@@ -155,6 +253,7 @@ def supersede_entry(
     tags: list[str] | None = None,
 ) -> str:
     """Mark old entry superseded and append the new one. Returns new entry id."""
+    require_autocommit(conn)
     path = files_mod.memory_path(name)
     if not path.exists():
         raise FileNotFoundError(path.name)
@@ -163,7 +262,7 @@ def supersede_entry(
     # plus an FTS update. Holding the lock across both halves keeps
     # readers from seeing a state where the file has the new entry but
     # FTS still doesn't (or vice versa).
-    with files_mod.file_lock(path):
+    with files_mod.store_write_lock(), files_mod.file_lock(path):
         parsed = files_mod.read_file(path)
         target = next((e for e in parsed.entries if e.id == old_entry_id), None)
         if target is None:
@@ -236,46 +335,56 @@ def supersede_entry(
 
 def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
     """Full rebuild: drop all FTS rows and files rows, re-ingest from Markdown."""
-    conn.execute("DELETE FROM entries")
-    conn.execute("DELETE FROM files")
-    file_count = 0
-    entry_count = 0
-    for path in files_mod.list_memory_files():
+    require_autocommit(conn)
+    with files_mod.store_write_lock():
+        conn.execute("BEGIN")
         try:
-            prefix = _ensure_prefix(path.name)
-        except ValueError as exc:
-            logger.warning("skipping %s: %s", path.name, exc)
-            continue
-        parsed = files_mod.read_file(path)
-        fts.upsert_file(
-            conn,
-            fts.FileRow(
-                path=path.name,
-                prefix=prefix,
-                description=parsed.description,
-                tags=" ".join(parsed.tags),
-                status=parsed.status,
-                entry_count=len(parsed.entries),
-                created=parsed.created,
-                updated=parsed.updated,
-                needs_compact=1 if parsed.needs_compact else 0,
-            ),
-        )
-        file_count += 1
-        for e in parsed.entries:
-            superseded = 1 if (e.superseded_by or _body_is_striked(e.body)) else 0
-            fts.insert_entry(
-                conn,
-                id=e.id,
-                path=path.name,
-                prefix=prefix,
-                timestamp=e.timestamp,
-                tags=" ".join(e.tags),
-                content=_strip_strike(e.body),
-                superseded=superseded,
-            )
-            entry_count += 1
-    return file_count, entry_count
+            conn.execute("DELETE FROM entries")
+            conn.execute("DELETE FROM files")
+            file_count = 0
+            entry_count = 0
+            for path in files_mod.list_memory_files():
+                try:
+                    prefix = _ensure_prefix(path.name)
+                except ValueError as exc:
+                    logger.warning("skipping %s: %s", path.name, exc)
+                    continue
+                with files_mod.file_lock(path):
+                    parsed = files_mod.read_file(path)
+                    fts.upsert_file(
+                        conn,
+                        fts.FileRow(
+                            path=path.name,
+                            prefix=prefix,
+                            description=parsed.description,
+                            tags=" ".join(parsed.tags),
+                            status=parsed.status,
+                            entry_count=len(parsed.entries),
+                            created=parsed.created,
+                            updated=parsed.updated,
+                            needs_compact=1 if parsed.needs_compact else 0,
+                        ),
+                    )
+                    file_count += 1
+                    for e in parsed.entries:
+                        superseded = 1 if (e.superseded_by or _body_is_striked(e.body)) else 0
+                        fts.insert_entry(
+                            conn,
+                            id=e.id,
+                            path=path.name,
+                            prefix=prefix,
+                            timestamp=e.timestamp,
+                            tags=" ".join(e.tags),
+                            content=_strip_strike(e.body),
+                            superseded=superseded,
+                        )
+                        entry_count += 1
+            conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+        return file_count, entry_count
 
 
 _STRIKE_RE = re.compile(r"~~(.+?)~~", re.DOTALL)

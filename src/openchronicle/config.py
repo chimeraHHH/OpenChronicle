@@ -18,6 +18,10 @@ class ModelConfig:
     api_key: str = ""
     api_key_env: str = "OPENAI_API_KEY"
     max_tokens: int | None = None
+    # ``None`` preserves compatibility with existing config files while the
+    # LLM wrapper applies its bounded, safe defaults.
+    timeout_seconds: float | None = None
+    num_retries: int | None = None
 
 
 @dataclass
@@ -28,7 +32,9 @@ class CaptureConfig:
     debounce_seconds: float = 3.0  # for AXValueChanged bursts
     min_capture_gap_seconds: float = 2.0  # between consecutive captures
     dedup_interval_seconds: float = 1.0  # per-event-type dedup window
-    same_window_dedup_seconds: float = 5.0  # skip repeat non-focus capture in same window within this window
+    same_window_dedup_seconds: float = (
+        5.0  # skip repeat non-focus capture in same window within this window
+    )
     # Legacy timer knob (kept for back-compat; also treated as a floor on heartbeat)
     interval_minutes: int = 10
     # Tiered buffer retention:
@@ -37,12 +43,22 @@ class CaptureConfig:
     #   * screenshot (base64) is stripped from JSONs older than
     #     `screenshot_retention_hours` — it's 77% of the bytes and nothing
     #     downstream currently consumes it
-    #   * `buffer_max_mb` is a hard ceiling; when exceeded the oldest
-    #     already-absorbed files are deleted first (0 disables the cap)
+    #   * `buffer_max_mb` is a best-effort target; when exceeded the oldest
+    #     already-absorbed files are deleted first, but unprocessed data is
+    #     never evicted (0 disables size-based cleanup)
     buffer_retention_hours: int = 168
     screenshot_retention_hours: int = 24
     buffer_max_mb: int = 2000
-    include_screenshot: bool = True
+    # Privacy gate evaluated from active-window metadata before AX/screenshot.
+    # A non-empty allowlist restricts capture to those bundle identifiers.
+    allowed_bundle_ids: list[str] = field(default_factory=list)
+    excluded_bundle_ids: list[str] = field(default_factory=list)
+    excluded_app_names: list[str] = field(default_factory=list)
+    excluded_window_title_patterns: list[str] = field(default_factory=list)
+    deny_unknown_windows: bool = True
+    # Screenshots duplicate substantially more context than structured AX and
+    # are not consumed by the current memory pipeline, so opt in explicitly.
+    include_screenshot: bool = False
     screenshot_max_width: int = 1920
     screenshot_jpeg_quality: int = 80
     ax_depth: int = 100
@@ -122,8 +138,10 @@ class SearchConfig:
 
 @dataclass
 class MCPConfig:
-    auto_start: bool = True               # run an in-daemon MCP server
-    transport: str = "streamable-http"    # "streamable-http" | "sse" (deprecated 2026-04-01) | "stdio"
+    auto_start: bool = True  # run an in-daemon MCP server
+    transport: str = (
+        "streamable-http"  # "streamable-http" | "sse" (deprecated 2026-04-01) | "stdio"
+    )
     host: str = "127.0.0.1"
     port: int = 8742
 
@@ -161,7 +179,9 @@ def _as_dict(section: Any) -> dict:
 def _build_models(raw: dict) -> dict[str, ModelConfig]:
     # Build default first so stage sections can inherit only its explicitly-set values.
     default_data = _as_dict(raw.get("default", {}))
-    default_allowed = {k: v for k, v in default_data.items() if k in ModelConfig.__dataclass_fields__}
+    default_allowed = {
+        k: v for k, v in default_data.items() if k in ModelConfig.__dataclass_fields__
+    }
     default = ModelConfig(**default_allowed)
     models = {"default": default}
     for name, section in raw.items():
@@ -207,6 +227,8 @@ model = "gpt-5.4-nano"
 api_key_env = "OPENAI_API_KEY"
 # base_url = ""
 # api_key = ""          # overrides api_key_env if set
+# timeout_seconds = 120  # per-attempt provider I/O timeout; max 1800
+# num_retries = 2        # transient failures only; max 5 (3 total attempts)
 
 [models.compact]
 # Accuracy-sensitive — match or exceed the default.
@@ -236,8 +258,13 @@ dedup_interval_seconds = 1.0  # per-event-type dedup window
 same_window_dedup_seconds = 5.0  # don't re-capture the same bundle+window unless 5s have passed (or it's a focus change)
 buffer_retention_hours = 168           # 7 days; stale absorbed captures past this are deleted
 screenshot_retention_hours = 24        # after 24h, strip screenshot (77% of bytes) but keep AX+text
-buffer_max_mb = 2000                   # hard ceiling; oldest absorbed files evicted first (0 to disable)
-include_screenshot = true
+buffer_max_mb = 2000                   # best-effort target over absorbed files (0 to disable)
+allowed_bundle_ids = []                # non-empty = capture only these bundle IDs
+excluded_bundle_ids = []               # exact, case-insensitive
+excluded_app_names = []                # exact, case-insensitive
+excluded_window_title_patterns = []    # substring, case-insensitive
+deny_unknown_windows = true            # fail closed when active app identity is unavailable
+include_screenshot = false             # opt in; screenshots are not used downstream today
 screenshot_max_width = 1920
 screenshot_jpeg_quality = 80
 ax_depth = 100                # Electron apps (Claude Desktop, VS Code, Slack) have deep DOM; 8 only reaches the chrome
@@ -285,9 +312,22 @@ port = 8742
 
 
 def write_default_if_missing(path: Path | None = None) -> bool:
-    path = path or paths.config_file()
+    if path is None:
+        paths.ensure_dirs()
+        path = paths.config_file()
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if path.exists():
+        path.chmod(0o600)
         return False
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(DEFAULT_CONFIG_TEMPLATE)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        # Another process won the create race; preserve its configuration.
+        path.chmod(0o600)
+        return False
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(DEFAULT_CONFIG_TEMPLATE)
+        handle.flush()
+        os.fsync(handle.fileno())
     return True

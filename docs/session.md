@@ -1,6 +1,6 @@
 # Session
 
-A "session" is a bounded chunk of focused work. OpenChronicle's writer pipeline is driven by session boundaries — the reducer writes incremental *flush* entries every 5 min while the session is active, the classifier fires every 30 min over whatever entries landed since its last pass, and when the session closes a final reducer pass + terminal classifier catch-up cover any trailing window. Each stage advances its own bookmark on the sessions row (`flush_end`, `classified_end`) so entries are never double-processed.
+A "session" is a bounded chunk of focused work. OpenChronicle's writer pipeline is driven by session boundaries — the reducer writes incremental *flush* entries every 5 min while the session is active, the classifier fires every 30 min over whatever entries landed since its last pass, and when the session closes a final reducer pass + terminal classifier catch-up cover any trailing window. Each stage advances a progress bookmark on the sessions row (`flush_end`, `classified_end`) to avoid repeat work during normal operation. Reducer entry materialization is replay-idempotent and its flush watermark is recovered from durable entry metadata. Classifier scheduling is best-effort: a crash can duplicate tool work before bookmark advancement or miss the terminal pass after reducer completion, so classifier tools must deduplicate and callers must not treat the bookmark as an exactly-once guarantee.
 
 ## Three cut rules
 
@@ -44,6 +44,16 @@ stateDiagram-v2
 
 Rows live in the `sessions` table (see [writer.md](writer.md#sessions-table)). `flush_end` tracks the last reduced window boundary so the next flush (or the terminal reduce) only covers *new* timeline blocks; `classified_end` plays the same role for the classifier.
 
+Each active row also records the owning daemon PID and a per-process instance
+token. On startup, the singleton daemon lease is stronger evidence than a bare
+PID: rows from another process token are ended idempotently even if the OS has
+reused the old PID. Direct/library callers without that lease remain
+conservative and protect rows owned by a live process. Recovery ends rows at a
+safe inferred boundary, preferring the latest persisted timeline evidence and
+never ending before their start, after the restart, after a later session
+begins, or beyond `max_session_hours`. This makes a row left by `SIGKILL`
+eligible for the normal pending-reduction path.
+
 ## Flush tick (incremental reduce)
 
 While a session is still `active`, a daemon task wakes every `session.flush_minutes` (default **5**, clamped to a 5-min floor to keep LLM cost bounded) and:
@@ -57,6 +67,12 @@ The classifier does **not** fire per flush — it runs on its own separate caden
 
 Why 5-min minimum: the timeline stage is a verbatim-preserving normalizer, not a summarizer, so its blocks are narrow (default 1 min). A sub-5-min flush would mean many LLM calls over tiny block batches; at 5 min the flush consumes ~5 timeline blocks per call.
 
+Flush and terminal reduction for the same session share a session-scoped BSD
+file lock, so the daemon safety-net, async callback, and CLI catch-up cannot run
+that job concurrently across threads or processes. Terminal entries also use a
+deterministic entry ID: replay after a crash reuses the Markdown entry and
+repairs a missing FTS projection instead of appending it twice.
+
 ## Wiring
 
 `session/tick.py::build_manager` returns a `SessionManager` with two callbacks wired:
@@ -64,11 +80,12 @@ Why 5-min minimum: the timeline stage is a verbatim-preserving normalizer, not a
 - **`on_session_start`** — persists an `active` row immediately. A crash mid-session leaves a recoverable trace.
 - **`on_session_end`** — marks the row `ended`, then spawns `reduce_session_async`. On terminal-reduce success, the reducer's `on_done` callback fires the classifier over `[classified_end or session_start, now)` — the trailing window the 30-min tick didn't reach.
 
-Four daemon tasks back this up:
+Five daemon tasks back this up:
 
 - **`run_check_cuts`** — every `session.tick_seconds` (default 30s), calls `check_cuts()` so idle-gap and timeout cuts fire even when no events are arriving.
 - **`run_flush_tick`** — every `session.flush_minutes` (default 5), runs the reducer over the active session's new blocks and advances `flush_end`.
 - **`run_classifier_tick`** — every `classifier.interval_minutes` (default 30), classifies event-daily entries that landed since `classified_end` and advances it.
+- **`run_pending_reduction_tick`** — every 60s retries ended rows after the durable timeline watermark reaches the bucket containing their final event. A callback that arrives too early remains queued instead of being silently finalized.
 - **`run_daily_safety_net`** — at local `reducer.daily_tick_hour:minute` (default 23:55), force-ends the currently-open session and runs `reduce_all_pending` to catch anything stranded at `ended`/`failed`.
 
 ## CLI

@@ -5,7 +5,7 @@ The writer is two LLM stages wired behind session boundaries:
 1. **S2 reducer** (`writer/session_reducer.py`) — writes incremental `[flush]` entries during an active session and a final entry when it closes, both to `event-YYYY-MM-DD.md`.
 2. **Classifier** (`writer/classifier.py`) — runs on a timer during the active session, then one last trailing-window pass at the terminal reduce. Scans the newly-appended event-daily entries for durable facts and persists them to `user-/project-/tool-/topic-/person-/org-*.md` via a tool-call loop.
 
-Both the reducer and the classifier are periodic during long sessions. The reducer flushes every `session.flush_minutes` so event-daily surfaces activity in near-real-time; the classifier fires every `classifier.interval_minutes` (default 30, min 5) so durable facts are extracted in the same long-running session without waiting for it to end. Each stage tracks its own progress on the sessions row (`flush_end` for the reducer, `classified_end` for the classifier), so every entry is processed exactly once. Session boundaries come from `session/manager.py` (see [session.md](session.md)). No capture-level triage, no global writer loop.
+Both the reducer and the classifier are periodic during long sessions. The reducer flushes every `session.flush_minutes` so event-daily surfaces activity in near-real-time; the classifier fires every `classifier.interval_minutes` (default 30, min 5) so durable facts are extracted in the same long-running session without waiting to close. Each stage tracks progress on the sessions row (`flush_end` for the reducer, `classified_end` for the classifier). Reducer entry materialization is lock-serialized and replay-idempotent; a lightweight pending tick retries terminal callbacks that arrived before their timeline bucket. Classifier scheduling is best-effort across crashes: tool work can be repeated before bookmark advancement, while a crash after reducer completion can also miss the terminal pass. Its tools therefore deduplicate against memory, and `classified_end` is not an exactly-once contract. Session boundaries come from `session/manager.py` (see [session.md](session.md)).
 
 ## Triggers
 
@@ -14,6 +14,7 @@ Both the reducer and the classifier are periodic during long sessions. The reduc
 | Flush tick (every `session.flush_minutes`, min 5) | `flush_active_session` runs the reducer with `is_final=False` over new closed blocks since `flush_end`. Appends a `[flush]`-tagged entry to today's event-daily. The classifier does **not** fire. |
 | Classifier tick (every `classifier.interval_minutes`, min 5) | For the currently-active session, classifies entries appended since `classified_end` (fallback: `session_start`). On a committed pass advances `classified_end`. Silent no-op when no new entries landed since last tick. |
 | `SessionManager.on_session_end` callback | `reduce_session_async` spawns a daemon thread with `is_final=True`, covering whatever wasn't flushed yet. On success, its `on_done` callback invokes the classifier over the trailing window `[classified_end, now)` — whatever the 30-min tick hadn't reached yet. |
+| Pending reducer tick (every 60s) | Retries `ended` rows after the timeline producer watermark reaches their final wall-clock bucket, and due `failed` rows after backoff. Per-session locks make overlap with the immediate callback safe. |
 | Daily 23:55 safety-net cron | `reduce_all_pending` picks up any `ended`/`failed` session rows whose async work didn't finish (e.g. daemon crashed mid-reduce). Also force-ends the currently-open session so day boundaries are clean. |
 | `openchronicle writer run` (CLI) | Same as the safety net — useful manually after pulling new code or for recovery. |
 
@@ -21,12 +22,14 @@ Both the reducer and the classifier are periodic during long sessions. The reduc
 
 For each session that ended, `reduce_session`:
 
-1. Reads `timeline_blocks` in `[flush_end or session.start, session.end)` from SQLite. (For the terminal reduce, `session.end` is set; for a flush tick, the tick uses `now` as the upper bound and the session stays `active`.)
-2. If the range is empty, marks the session `reduced` (no-op, terminal only) and returns.
+1. Reads `timeline_blocks` in `[flush_end or session.start, session.end)` from SQLite. Flushes select only fully closed blocks; a terminal pass may include the wall-clock block straddling the exact session end.
+2. Before terminal finalization, requires the final bucket-end boundary to lie inside the durable timeline proof range `(processed_from, processed_through]` (or have an already-materialized straddling block). The reducer snapshots that range before reading blocks, preventing a newer watermark from certifying an older block read. If the bucket is still pending, the session remains `ended` for the 60s retry tick. Only a proven-empty range is marked `reduced` as a no-op.
 3. Renders the blocks into `prompts/session_reduce.md` and calls the `reducer` LLM stage with `json_mode=True`.
 4. Parses `{summary: str, sub_tasks: [str]}`. Each sub_task must look like `[HH:MM-HH:MM, <app>] <action>, involving <...>`.
 5. Appends one entry to `event-YYYY-MM-DD.md` (the date of `session.start`). Entry header: `**Session <sid>** (HH:MM–HH:MM)` for terminal reduces, or `**Session <sid> [flush]** (HH:MM–HH:MM)` for flush passes. Flush entries carry a `flush` tag alongside `sid:<sid>` so they're easy to filter later.
-6. Advances `flush_end` on the session row. For the terminal reduce, also sets `status=reduced`.
+6. A flush advances `flush_end`; a terminal reduce instead sets
+   `status=reduced`. Terminal materialization uses a deterministic entry ID so
+   crash replay reuses the existing Markdown entry and repairs its projection.
 
 ### Retry + heuristic fallback
 
@@ -87,11 +90,13 @@ CREATE TABLE sessions (
   next_retry_at TEXT,
   last_error TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  owner_pid INTEGER,                -- daemon that opened an active row
+  owner_token TEXT                  -- per-process instance identity
 );
 ```
 
-Lives in `index.db` alongside `entries` / `files` / `timeline_blocks`. The reducer uses it to bookkeep retries; the safety-net cron uses `status IN ('ended','failed')` to find anything still owed work.
+Lives in `index.db` alongside `entries` / `files` / `timeline_blocks`. The reducer uses it to bookkeep retries; the safety-net cron uses `status IN ('ended','failed')` to find anything still owed work. Existing databases gain nullable owner columns in place. A legacy active row with no owner identity is treated as an orphan and safely ended during the next startup recovery pass.
 
 ## Per-stage model picks
 

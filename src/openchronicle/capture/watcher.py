@@ -182,7 +182,10 @@ class AXWatcherProcess:
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                logger.debug("Invalid JSON from watcher: %s", line[:100])
+                # Watcher output can contain window titles or typed text. A
+                # malformed frame has not passed the privacy policy, so never
+                # echo its payload into a durable log.
+                logger.debug("Invalid JSON frame from watcher (%d chars)", len(line))
                 continue
             if event.get("event_type", "").startswith("_"):
                 logger.debug("Watcher internal event: %s", event.get("event_type"))

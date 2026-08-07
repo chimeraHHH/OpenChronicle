@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import time
 from dataclasses import dataclass
@@ -12,6 +13,21 @@ from ..config import Config, resolve_api_key
 from ..logger import get
 
 logger = get("openchronicle.writer")
+
+DEFAULT_TIMEOUT_SECONDS = 120.0
+DEFAULT_NUM_RETRIES = 2
+MAX_TIMEOUT_SECONDS = 1800.0
+MAX_NUM_RETRIES = 5
+_RETRY_BACKOFF_SECONDS = 1.0
+_MAX_RETRY_BACKOFF_SECONDS = 8.0
+_RETRYABLE_ERROR_NAMES = (
+    "Timeout",
+    "APIConnectionError",
+    "RateLimitError",
+    "InternalServerError",
+    "BadGatewayError",
+    "ServiceUnavailableError",
+)
 
 
 @dataclass
@@ -41,6 +57,8 @@ def call_llm(
 
     import litellm  # imported lazily to keep CLI startup fast
 
+    _disable_litellm_global_retries(litellm)
+
     model_cfg = cfg.model_for(stage)
     kwargs: dict[str, Any] = {
         "model": model_cfg.model,
@@ -59,8 +77,106 @@ def call_llm(
     if model_cfg.max_tokens:
         kwargs["max_tokens"] = model_cfg.max_tokens
 
-    logger.debug("llm call stage=%s model=%s", stage, model_cfg.model)
-    return litellm.completion(**kwargs)
+    timeout, retries = _resolved_limits(model_cfg)
+
+    # Keep retries here instead of nesting LiteLLM's own retry loop. This makes
+    # the total attempt count explicit and ensures configuration/authentication
+    # errors are never repeated. LiteLLM maps provider failures to the stable
+    # exception classes checked by _is_retryable_error().
+    kwargs["timeout"] = timeout
+    kwargs["num_retries"] = 0
+    max_attempts = retries + 1
+    for attempt in range(1, max_attempts + 1):
+        logger.debug(
+            "llm call stage=%s model=%s attempt=%d/%d",
+            stage,
+            model_cfg.model,
+            attempt,
+            max_attempts,
+        )
+        try:
+            return litellm.completion(**kwargs)
+        except Exception as exc:
+            if attempt >= max_attempts or not _is_retryable_error(litellm, exc):
+                raise
+            delay = min(
+                _RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)),
+                _MAX_RETRY_BACKOFF_SECONDS,
+            )
+            logger.warning(
+                "llm transient error stage=%s model=%s attempt=%d/%d error=%s; retrying in %.1fs",
+                stage,
+                model_cfg.model,
+                attempt,
+                max_attempts,
+                type(exc).__name__,
+                delay,
+            )
+            time.sleep(delay)
+
+    raise AssertionError("unreachable")
+
+
+def _is_retryable_error(litellm_module: Any, exc: Exception) -> bool:
+    """Return whether *exc* is an explicitly transient LiteLLM failure."""
+    retryable_types = tuple(
+        error_type
+        for name in _RETRYABLE_ERROR_NAMES
+        if isinstance((error_type := getattr(litellm_module, name, None)), type)
+        and issubclass(error_type, BaseException)
+    )
+    if isinstance(exc, (*retryable_types, TimeoutError, ConnectionError)):
+        return True
+
+    # Older LiteLLM versions and some Azure/OpenAI provider paths map 5xx to
+    # the generic APIError class. Fall back to HTTP status without retrying
+    # authentication, validation, or other permanent 4xx failures.
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    try:
+        status_code = int(status)
+    except (TypeError, ValueError):
+        return False
+    return status_code in {408, 409, 429} or status_code >= 500
+
+
+def _disable_litellm_global_retries(litellm_module: Any) -> None:
+    """Keep LiteLLM's process-global fallback from nesting retries.
+
+    The locked LiteLLM version treats request-level ``num_retries=0`` as
+    falsy and can fall back to ``litellm.num_retries``. OpenChronicle owns the
+    retry budget for this dedicated process, so clear that fallback as well.
+    """
+    if getattr(litellm_module, "num_retries", None) not in (None, 0):
+        logger.warning("clearing LiteLLM global retries; OpenChronicle owns retry accounting")
+    litellm_module.num_retries = 0
+
+
+def _resolved_limits(model_cfg: Any) -> tuple[float, int]:
+    timeout = (
+        DEFAULT_TIMEOUT_SECONDS if model_cfg.timeout_seconds is None else model_cfg.timeout_seconds
+    )
+    retries = DEFAULT_NUM_RETRIES if model_cfg.num_retries is None else model_cfg.num_retries
+
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+        or timeout > MAX_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            f"model timeout_seconds must be finite and in (0, {MAX_TIMEOUT_SECONDS:g}]"
+        )
+    if (
+        isinstance(retries, bool)
+        or not isinstance(retries, int)
+        or retries < 0
+        or retries > MAX_NUM_RETRIES
+    ):
+        raise ValueError(f"model num_retries must be an integer in [0, {MAX_NUM_RETRIES}]")
+    return float(timeout), retries
 
 
 def _mock_response(stage: str, messages, tools, json_mode):
@@ -103,23 +219,33 @@ def ping_stage(cfg: Config, stage: str, *, timeout: float = 5.0) -> PingResult:
     model_cfg = cfg.model_for(stage)
     if os.environ.get("OPENCHRONICLE_LLM_MOCK") == "1":
         return PingResult(
-            stage=stage, model=model_cfg.model, ok=True,
-            latency_ms=0, error=None, mocked=True,
+            stage=stage,
+            model=model_cfg.model,
+            ok=True,
+            latency_ms=0,
+            error=None,
+            mocked=True,
         )
 
     try:
         import litellm  # lazy import — keeps CLI startup fast
     except ImportError as exc:
         return PingResult(
-            stage=stage, model=model_cfg.model, ok=False,
-            latency_ms=None, error=f"ImportError: {exc}",
+            stage=stage,
+            model=model_cfg.model,
+            ok=False,
+            latency_ms=None,
+            error=f"ImportError: {exc}",
         )
+
+    _disable_litellm_global_retries(litellm)
 
     kwargs: dict[str, Any] = {
         "model": model_cfg.model,
         "messages": [{"role": "user", "content": "Reply with 'ok'."}],
         "max_tokens": 4,
         "timeout": timeout,
+        "num_retries": 0,
     }
     if model_cfg.base_url:
         kwargs["api_base"] = model_cfg.base_url
@@ -136,13 +262,19 @@ def ping_stage(cfg: Config, stage: str, *, timeout: float = 5.0) -> PingResult:
         if msg:
             label = f"{label}: {msg[:60]}"
         return PingResult(
-            stage=stage, model=model_cfg.model, ok=False,
-            latency_ms=None, error=label[:80],
+            stage=stage,
+            model=model_cfg.model,
+            ok=False,
+            latency_ms=None,
+            error=label[:80],
         )
     latency_ms = int((time.monotonic() - start) * 1000)
     return PingResult(
-        stage=stage, model=model_cfg.model, ok=True,
-        latency_ms=latency_ms, error=None,
+        stage=stage,
+        model=model_cfg.model,
+        ok=True,
+        latency_ms=latency_ms,
+        error=None,
     )
 
 
@@ -154,7 +286,9 @@ def extract_tool_calls(response: Any) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for c in calls:
         fn = getattr(c, "function", None) or c.get("function", {})
-        args_raw = getattr(fn, "arguments", None) if hasattr(fn, "arguments") else fn.get("arguments")
+        args_raw = (
+            getattr(fn, "arguments", None) if hasattr(fn, "arguments") else fn.get("arguments")
+        )
         name = getattr(fn, "name", None) if hasattr(fn, "name") else fn.get("name")
         try:
             args = json.loads(args_raw) if isinstance(args_raw, str) else (args_raw or {})

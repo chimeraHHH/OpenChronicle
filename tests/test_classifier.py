@@ -1,12 +1,10 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-
-import pytest
 
 from openchronicle import config as config_mod
 from openchronicle import paths
@@ -14,7 +12,6 @@ from openchronicle.store import entries as entries_mod
 from openchronicle.store import fts
 from openchronicle.writer import classifier as classifier_mod
 from openchronicle.writer import llm as llm_mod
-
 
 _TZ = timezone(timedelta(hours=8))
 
