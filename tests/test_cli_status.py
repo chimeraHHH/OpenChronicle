@@ -26,9 +26,10 @@ def test_status_renders_mocked_pings(ac_root: Path, monkeypatch: pytest.MonkeyPa
     assert "Model (timeline)" in out
     assert "Model (reducer)" in out
     assert "Model (classifier)" in out
+    assert "Model (daily_wrap)" in out
     assert "Model (compact)" in out
-    # All four stages share the default model, so they all show the mocked tick.
-    assert out.count("mocked") >= 4
+    # All five stages share the default model, so they all show the mocked tick.
+    assert out.count("mocked") >= 5
 
 
 def test_ping_stages_dedups_identical_configs(
@@ -36,9 +37,9 @@ def test_ping_stages_dedups_identical_configs(
 ) -> None:
     """Stages with identical (model, base_url, api_key) only ping the network once.
 
-    The default config gives every stage the same model, so a four-stage
+    The default config gives every stage the same model, so a five-stage
     status call should invoke ping_stage exactly once and reuse the result
-    via dataclasses.replace for the other three.
+    via dataclasses.replace for the other four.
     """
     monkeypatch.delenv("OPENCHRONICLE_LLM_MOCK", raising=False)
     call_count = {"n": 0}
@@ -59,10 +60,10 @@ def test_ping_stages_dedups_identical_configs(
     result = runner.invoke(cli.app, ["status"])
 
     assert result.exit_code == 0, result.output
-    # All four stages share the default model, so dedup collapses to one network call.
+    # All five stages share the default model, so dedup collapses to one network call.
     assert call_count["n"] == 1, f"expected 1 ping_stage call, got {call_count['n']}"
     # …but every stage row still shows a tick — the result was replicated, not skipped.
-    assert result.output.count("42 ms") == 4
+    assert result.output.count("42 ms") == 5
 
 
 def test_status_renders_probe_failure(ac_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:

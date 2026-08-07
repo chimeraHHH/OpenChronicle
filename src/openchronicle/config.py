@@ -131,6 +131,22 @@ class MemoryConfig:
 
 
 @dataclass
+class DailyWrapConfig:
+    # Opt-in on upgrades: enabling this schedules remote synthesis.
+    enabled: bool = False
+    timezone: str = ""  # empty = infer the system IANA timezone
+    # The daemon scheduler is introduced separately; these values define the
+    # intended post-midnight local schedule and are already available to it.
+    hour: int = 0
+    minute: int = 5
+    retry_seconds: int = 300
+    late_data_grace_hours: int = 6
+    # Minimum lease. The service raises it to cover the configured provider's
+    # full timeout/retry budget so two workers cannot duplicate remote calls.
+    lease_seconds: int = 300
+
+
+@dataclass
 class SearchConfig:
     default_top_k: int = 5
     filter_superseded_by_default: bool = True
@@ -156,6 +172,7 @@ class Config:
     classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
     writer: WriterConfig = field(default_factory=WriterConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
+    daily_wrap: DailyWrapConfig = field(default_factory=DailyWrapConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
@@ -214,6 +231,9 @@ def load(path: Path | None = None) -> Config:
         classifier=_build_dataclass(ClassifierConfig, _as_dict(raw.get("classifier"))),
         writer=_build_dataclass(WriterConfig, _as_dict(raw.get("writer"))),
         memory=_build_dataclass(MemoryConfig, _as_dict(raw.get("memory"))),
+        daily_wrap=_build_dataclass(
+            DailyWrapConfig, _as_dict(raw.get("daily_wrap"))
+        ),
         search=_build_dataclass(SearchConfig, _as_dict(raw.get("search"))),
         mcp=_build_dataclass(MCPConfig, _as_dict(raw.get("mcp"))),
     )
@@ -245,9 +265,13 @@ api_key_env = "OPENAI_API_KEY"
 # compressed) but output quality matters — consider a stronger model here.
 
 [models.classifier]
-# Extracts classifiable long-term facts from the day's event-daily entries
-# into user-/project-/topic-/tool-/person-/org- files via tool calls.
+# Extracts classifiable long-term facts from event-daily entries into an
+# evidence-linked local review inbox. It cannot write Markdown directly.
 # Accuracy-sensitive — pick a capable model.
+
+[models.daily_wrap]
+# Evidence-backed end-of-day synthesis. This stage has no tools and receives
+# only bounded, policy-filtered activity excerpts.
 
 [capture]
 event_driven = true           # capture on window/app/typing events via mac-ax-watcher
@@ -298,6 +322,15 @@ interval_minutes = 30      # durable-fact extraction cadence inside active sessi
 
 [memory]
 auto_dormant_days = 30
+
+[daily_wrap]
+enabled = false                  # opt in: scheduled runs may call a remote model
+timezone = ""                  # e.g. "Asia/Shanghai"; empty = infer system zone
+hour = 0                       # intended local post-midnight generation time
+minute = 5
+retry_seconds = 300            # failed-run retry and late-data recheck cadence
+late_data_grace_hours = 6      # revise yesterday's wrap during this window
+lease_seconds = 300            # minimum lease; auto-raised to provider call budget
 
 [search]
 default_top_k = 5

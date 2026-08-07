@@ -9,8 +9,9 @@ import os
 import shutil
 import signal
 import subprocess
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import typer
 from rich.console import Console
@@ -21,6 +22,7 @@ from . import config as config_mod
 from . import logger as logger_mod
 from .capture import filenames as capture_filenames
 from .capture import store_lock as capture_store
+from .memory_candidates import store as candidate_store
 from .store import entries as entries_mod
 from .store import files as files_mod
 from .store import fts, index_md
@@ -318,8 +320,37 @@ def status() -> None:
         tlb_count = tlb_row[0] if tlb_row else 0
         tlb_last = tlb_row[1] if tlb_row and tlb_row[1] else "(none)"
         table.add_row("Timeline", f"{tlb_count} blocks, last end: {tlb_last}")
+        candidate_row = conn.execute(
+            """
+            SELECT COUNT(*),
+                   SUM(status='pending'),
+                   SUM(status='conflict')
+              FROM memory_candidates
+            """
+        ).fetchone()
+        table.add_row(
+            "Review Inbox",
+            f"{candidate_row[0] or 0} total "
+            f"({candidate_row[1] or 0} pending, {candidate_row[2] or 0} conflict)",
+        )
+        wrap_row = conn.execute(
+            """
+            SELECT local_date, timezone, status, coverage_status, revision
+              FROM daily_wrap_jobs
+             ORDER BY local_date DESC, updated_at DESC LIMIT 1
+            """
+        ).fetchone()
+        if wrap_row:
+            table.add_row(
+                "Daily Wrap",
+                f"{wrap_row['local_date']} {wrap_row['timezone']} — "
+                f"{wrap_row['status']}/{wrap_row['coverage_status']} "
+                f"r{wrap_row['revision']}",
+            )
+        else:
+            table.add_row("Daily Wrap", "(none)")
 
-    stages = ("timeline", "reducer", "classifier", "compact")
+    stages = ("timeline", "reducer", "classifier", "daily_wrap", "compact")
     ping_results = _ping_stages(cfg, stages)
     for stage in stages:
         m = cfg.model_for(stage)
@@ -342,7 +373,7 @@ def _ping_stages(cfg: config_mod.Config, stages: tuple[str, ...]) -> dict:
     from .writer.llm import PingResult, ping_stage
 
     # Dedup by (model, base_url, resolved api key) — common case is one model
-    # for all four stages, which should hit the network once.
+    # for all stages, which should hit the network once.
     dedup: dict[tuple[str, str, str], list[str]] = {}
     for stage in stages:
         m = cfg.model_for(stage)
@@ -926,10 +957,285 @@ def writer_run() -> None:
     console.print(
         f"[bold]reduced={result.reduced} "
         f"classified={result.classified} "
+        f"candidates={len(result.candidate_ids)} "
         f"written={len(result.written_ids)}[/bold]"
     )
     for s in result.summaries:
         console.print(f"  - {s}")
+
+
+memory_app = typer.Typer(help="Review and manage proposed durable memories.")
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("candidates")
+def memory_candidates(
+    status: str = typer.Option(
+        "pending,conflict", "--status", help="Comma-separated candidate statuses."
+    ),
+    limit: int = typer.Option(100, "--limit", "-n"),
+) -> None:
+    """List the local review inbox without exposing it over MCP."""
+    cfg = _init()
+    from .services.memory import MemoryService
+
+    statuses = [value.strip() for value in status.split(",") if value.strip()]
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service.resume_pending_purges()
+        candidates = service.list_candidates(statuses=statuses or None, limit=limit)
+    table = Table("ID", "Status", "Kind", "Target", "Version", "Content")
+    for candidate in candidates:
+        table.add_row(
+            candidate.id,
+            candidate.status,
+            candidate.kind,
+            candidate.target_path,
+            str(candidate.version),
+            candidate.content.replace("\n", " ")[:80],
+        )
+    console.print(table)
+
+
+@memory_app.command("show")
+def memory_candidate_show(candidate_id: str) -> None:
+    """Show one proposal and its direct evidence."""
+    cfg = _init()
+    from .provenance import store as provenance_store
+    from .provenance.models import EvidenceRef
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service.resume_pending_purges()
+        candidate = service.get_candidate(candidate_id)
+        if candidate is None:
+            console.print(f"[red]Candidate not found: {candidate_id}[/red]")
+            raise typer.Exit(1)
+        payload = candidate.to_dict()
+        payload["evidence"] = [
+            ref.to_dict()
+            for ref in provenance_store.direct_sources(
+                conn, EvidenceRef(kind="memory_candidate", id=candidate_id)
+            )
+        ]
+    console.print_json(data=payload)
+
+
+@memory_app.command("edit")
+def memory_candidate_edit(
+    candidate_id: str,
+    content: str = typer.Option(..., "--content"),
+    tags: str = typer.Option("", "--tags", help="Comma-separated tags."),
+    version: int | None = typer.Option(None, "--version"),
+    conflict_key: str | None = typer.Option(None, "--conflict-key"),
+) -> None:
+    """Edit a pending proposal with optimistic version checking."""
+    cfg = _init()
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service.resume_pending_purges()
+        current = service.get_candidate(candidate_id)
+        if current is None:
+            raise typer.BadParameter(f"candidate not found: {candidate_id}")
+        updated = service.edit_candidate(
+            candidate_id,
+            expected_version=current.version if version is None else version,
+            content=content,
+            tags=[tag.strip() for tag in tags.split(",") if tag.strip()],
+            conflict_key=conflict_key,
+        )
+    console.print(f"[green]Updated {updated.id} to version {updated.version}.[/green]")
+
+
+@memory_app.command("approve")
+def memory_candidate_approve(
+    candidate_id: str,
+    version: int | None = typer.Option(None, "--version"),
+) -> None:
+    """Approve and idempotently materialize one reviewed proposal."""
+    cfg = _init()
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service.resume_pending_purges()
+        current = service.get_candidate(candidate_id)
+        if current is None:
+            raise typer.BadParameter(f"candidate not found: {candidate_id}")
+        approved = service.approve_candidate(
+            candidate_id,
+            expected_version=current.version if version is None else version,
+        )
+    console.print(
+        f"[green]Accepted {approved.id} as {approved.target_path}#"
+        f"{approved.applied_entry_id}.[/green]"
+    )
+
+
+@memory_app.command("reject")
+def memory_candidate_reject(
+    candidate_id: str,
+    reason: str = typer.Option("", "--reason"),
+    version: int | None = typer.Option(None, "--version"),
+) -> None:
+    """Reject a proposal while retaining its review history."""
+    cfg = _init()
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service.resume_pending_purges()
+        current = service.get_candidate(candidate_id)
+        if current is None:
+            raise typer.BadParameter(f"candidate not found: {candidate_id}")
+        rejected = service.reject_candidate(
+            candidate_id,
+            expected_version=current.version if version is None else version,
+            reason=reason,
+        )
+    console.print(f"[green]Rejected {rejected.id}.[/green]")
+
+
+@memory_app.command("forget")
+def memory_candidate_forget(
+    candidate_id: str,
+    yes: bool = typer.Option(False, "--yes", help="Confirm permanent cascading purge."),
+) -> None:
+    """Permanently purge a proposal, accepted entry, and derived wraps."""
+    if not yes:
+        confirmed = typer.confirm(
+            "Permanently delete this proposal and all accepted/derived data?"
+        )
+        if not confirmed:
+            raise typer.Abort()
+    cfg = _init()
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        result = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens
+        ).purge_candidate(candidate_id)
+    console.print(
+        f"[green]Purged {candidate_id}; entry_removed={result.removed_entry}; "
+        f"wraps_invalidated={len(result.invalidated_wraps)}.[/green]"
+    )
+
+
+provenance_app = typer.Typer(help="Inspect the local evidence graph.")
+app.add_typer(provenance_app, name="provenance")
+
+
+@provenance_app.command("trace")
+def provenance_trace(
+    kind: str,
+    artifact_id: str,
+    path: str = typer.Option("", "--path"),
+    depth: int = typer.Option(4, "--depth"),
+) -> None:
+    """Trace direct and transitive sources for a local artifact."""
+    _init()
+    from .provenance import store as provenance_store
+    from .provenance.models import EvidenceRef
+
+    with fts.cursor() as conn:
+        trace = provenance_store.trace_sources(
+            conn,
+            EvidenceRef(kind=kind, id=artifact_id, path=path),
+            max_depth=depth,
+        )
+    console.print_json(data={"count": len(trace), "sources": trace})
+
+
+daily_wrap_app = typer.Typer(help="Generate and read evidence-backed Daily Wraps.")
+app.add_typer(daily_wrap_app, name="daily-wrap")
+
+
+@daily_wrap_app.command("run")
+def daily_wrap_run(
+    day: str | None = typer.Option(None, "--date", help="Local date (YYYY-MM-DD)."),
+    timezone: str | None = typer.Option(None, "--timezone", help="IANA timezone."),
+) -> None:
+    """Generate or refresh one canonical Daily Wrap."""
+    cfg = _init()
+    from .daily_wrap import worker as daily_wrap_worker
+    from .daily_wrap.service import DailyWrapService
+
+    try:
+        zone_name = timezone or daily_wrap_worker.local_timezone_name(cfg)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    target_day = _daily_wrap_day(day, zone_name)
+    with fts.cursor() as conn:
+        row = DailyWrapService(conn, cfg).run(target_day, zone_name)
+    console.print_json(data=row.to_dict())
+
+
+@daily_wrap_app.command("show")
+def daily_wrap_show(
+    day: str | None = typer.Option(None, "--date", help="Local date (YYYY-MM-DD)."),
+    timezone: str | None = typer.Option(None, "--timezone", help="IANA timezone."),
+) -> None:
+    """Show the canonical wrap for one local day."""
+    cfg = _init()
+    from .daily_wrap import worker as daily_wrap_worker
+    from .daily_wrap.service import DailyWrapService
+
+    try:
+        zone_name = timezone or daily_wrap_worker.local_timezone_name(cfg)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    target_day = _daily_wrap_day(day, zone_name)
+    with fts.cursor() as conn:
+        row = DailyWrapService(conn, cfg).get(target_day, zone_name)
+    if row is None:
+        console.print(f"[yellow]No Daily Wrap for {target_day} ({zone_name}).[/yellow]")
+        raise typer.Exit(1)
+    console.print_json(data=row.to_dict())
+
+
+@daily_wrap_app.command("list")
+def daily_wrap_list(
+    limit: int = typer.Option(30, "--limit", "-n"),
+) -> None:
+    """List recent canonical wraps across timezones."""
+    cfg = _init()
+    from .daily_wrap.service import DailyWrapService
+
+    with fts.cursor() as conn:
+        rows = DailyWrapService(conn, cfg).list(limit=limit)
+    console.print_json(data={"count": len(rows), "wraps": [row.to_dict() for row in rows]})
+
+
+def _local_timezone_name() -> str:
+    configured = os.environ.get("TZ", "").strip()
+    if configured:
+        return configured
+    tzinfo = datetime.now().astimezone().tzinfo
+    key = getattr(tzinfo, "key", "")
+    if key:
+        return str(key)
+    with contextlib.suppress(OSError):
+        resolved = Path("/etc/localtime").resolve()
+        marker = "zoneinfo/"
+        if marker in str(resolved):
+            return str(resolved).split(marker, 1)[1]
+    raise typer.BadParameter("cannot infer IANA timezone; pass --timezone")
+
+
+def _daily_wrap_day(value: str | None, timezone: str) -> date:
+    try:
+        zone = ZoneInfo(timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise typer.BadParameter(f"unknown IANA timezone: {timezone}") from exc
+    if value is None:
+        return datetime.now(zone).date() - timedelta(days=1)
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter("date must be YYYY-MM-DD") from exc
 
 
 @app.command("capture-once")
@@ -986,7 +1292,18 @@ def rebuild_captures_index() -> None:
             )
             return
 
-        files = sorted(p for p in buf.iterdir() if p.is_file() and p.suffix == ".json")
+        with fts.cursor() as conn:
+            hidden_files = {
+                tombstone.artifact_id
+                for tombstone in candidate_store.list_tombstones(
+                    conn, kind="capture_file"
+                )
+            }
+        files = sorted(
+            p
+            for p in buf.iterdir()
+            if p.is_file() and p.suffix == ".json" and p.name not in hidden_files
+        )
         if not files:
             _delete_capture_rows(_all_capture_row_ids())
             console.print("[yellow]capture-buffer is empty; nothing to rebuild.[/yellow]")
@@ -1013,6 +1330,7 @@ def rebuild_captures_index() -> None:
                 (
                     p,
                     {
+                        "observation_id": _capture_text(data.get("observation_id")),
                         "timestamp": _capture_text(data.get("timestamp")),
                         "app_name": _capture_text(meta.get("app_name")),
                         "bundle_id": _capture_text(meta.get("bundle_id")),
@@ -1046,6 +1364,7 @@ def rebuild_captures_index() -> None:
                         fts.insert_capture(
                             conn,
                             id=p.stem,
+                            observation_id=record["observation_id"],
                             timestamp=record["timestamp"],
                             app_name=record["app_name"],
                             bundle_id=record["bundle_id"],
@@ -1166,20 +1485,90 @@ def _memory_clean_targets() -> list[Path]:
 def _clean_captures() -> int:
     with capture_store.capture_store_lock():
         captures = _capture_clean_targets()
-        # Preserve JSON when the searchable projection cannot be removed.
-        # Clear every row, not only rows matching current files: clean must also
-        # remove stale searchable content when the buffer is empty or missing.
-        # Once the database batch succeeds, individual unlink failures merely
-        # leave an unindexed authoritative file that rebuild can recover.
-        _delete_capture_rows(_all_capture_row_ids())
-        removed = 0
-        for p in captures:
+        canonical = [path for path in captures if path.suffix == ".json"]
+        # Commit deny-read markers and clear every searchable projection before
+        # touching authoritative files. A failed unlink remains hidden from raw
+        # reads and rebuilds, and the command reports failure instead of claiming
+        # the plaintext was removed.
+        with fts.cursor() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             try:
-                p.unlink()
+                for path in canonical:
+                    candidate_store.put_tombstone(
+                        conn, kind="capture_file", artifact_id=path.name
+                    )
+                conn.execute("DELETE FROM captures")
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        removed = 0
+        removed_paths: list[Path] = []
+        failures: list[OSError] = []
+        for path in captures:
+            try:
+                path.unlink()
                 removed += 1
-            except OSError:
-                pass
+                removed_paths.append(path)
+            except OSError as exc:
+                failures.append(exc)
+        with fts.cursor() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for path in removed_paths:
+                    if path.suffix == ".json":
+                        candidate_store.delete_tombstone(
+                            conn, kind="capture_file", artifact_id=path.name
+                        )
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        if failures:
+            raise RuntimeError(
+                f"capture cleanup incomplete: {len(failures)} file(s) could not be removed"
+            ) from failures[0]
         return removed
+
+
+_TIMELINE_AFFECTED_CANDIDATES_SQL = """
+WITH RECURSIVE descendants(kind, id, path) AS (
+    SELECT subject_kind, subject_id, subject_path
+      FROM provenance_edges
+     WHERE source_kind='timeline_block'
+    UNION
+    SELECT edge.subject_kind, edge.subject_id, edge.subject_path
+      FROM provenance_edges AS edge
+      JOIN descendants AS prior
+        ON edge.source_kind=prior.kind
+       AND edge.source_id=prior.id
+       AND edge.source_path=prior.path
+)
+SELECT DISTINCT candidate.id AS subject_id
+  FROM descendants
+  JOIN memory_candidates AS candidate
+    ON descendants.kind='memory_candidate' AND candidate.id=descendants.id
+ WHERE candidate.status IN ('pending', 'conflict')
+"""
+
+
+def _timeline_clean_counts(conn) -> dict[str, int]:
+    return {
+        "blocks": int(
+            conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
+        ),
+        "wraps": int(
+            conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0]
+        ),
+        "revisions": int(
+            conn.execute("SELECT COUNT(*) FROM daily_wrap_revisions").fetchone()[0]
+        ),
+        "candidates": len(
+            conn.execute(_TIMELINE_AFFECTED_CANDIDATES_SQL).fetchall()
+        ),
+    }
 
 
 def _clean_timeline() -> int:
@@ -1187,6 +1576,30 @@ def _clean_timeline() -> int:
         n = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
         conn.execute("BEGIN")
         try:
+            affected_candidates = conn.execute(
+                _TIMELINE_AFFECTED_CANDIDATES_SQL
+            ).fetchall()
+            conn.executemany(
+                """
+                UPDATE memory_candidates
+                   SET status='conflict',
+                       last_error='source timeline was explicitly deleted'
+                 WHERE id=? AND status IN ('pending', 'conflict')
+                """,
+                ((row["subject_id"],) for row in affected_candidates),
+            )
+            conn.execute("DELETE FROM daily_wrap_revisions")
+            conn.execute("DELETE FROM daily_wrap_jobs")
+            conn.execute(
+                """
+                DELETE FROM provenance_edges
+                 WHERE subject_kind IN (
+                           'timeline_block', 'daily_wrap',
+                           'daily_wrap_item', 'daily_wrap_revision'
+                       )
+                    OR source_kind='timeline_block'
+                """
+            )
             conn.execute("DELETE FROM timeline_blocks")
             conn.execute("DELETE FROM timeline_state")
             conn.execute("COMMIT")
@@ -1201,29 +1614,78 @@ def _clean_memory() -> tuple[int, int]:
     """Delete memory files/temp copies and reset indexes. Returns (files, entries)."""
     with files_mod.store_write_lock():
         targets = _memory_clean_targets()
-        # Privacy deletion follows the same fail-closed order as captures:
-        # clear every searchable projection transactionally before unlinking
-        # authoritative Markdown or crash-left temp copies. If SQLite is
-        # unavailable, plaintext remains recoverable and search state is not
-        # falsely presented as wiped.
+        canonical = [
+            path
+            for path in targets
+            if path.suffix == ".md" and path.parent == paths.memory_dir()
+        ]
+        # File-level deny markers close direct-read and rebuild paths if an
+        # unlink fails after projections have been cleared.
         with fts.cursor() as conn:
             entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE")
             try:
+                for path in canonical:
+                    candidate_store.put_tombstone(
+                        conn, kind="memory_file", artifact_id=path.name
+                    )
                 conn.execute("DELETE FROM entries")
                 conn.execute("DELETE FROM files")
+                conn.execute("DELETE FROM memory_candidates")
+                conn.execute("DELETE FROM daily_wrap_revisions")
+                conn.execute("DELETE FROM daily_wrap_jobs")
+                conn.execute(
+                    """
+                    DELETE FROM provenance_edges
+                     WHERE subject_kind IN (
+                           'memory_entry', 'memory_candidate',
+                           'daily_wrap', 'daily_wrap_item', 'daily_wrap_revision'
+                     )
+                        OR source_kind IN ('memory_entry', 'memory_candidate')
+                    """
+                )
                 conn.execute("COMMIT")
             except Exception:  # noqa: BLE001
                 if conn.in_transaction:
                     conn.execute("ROLLBACK")
                 raise
         removed = 0
+        removed_paths: list[Path] = []
+        failures: list[OSError] = []
         for path in targets:
             try:
                 path.unlink()
                 removed += 1
-            except OSError:
-                pass
+                removed_paths.append(path)
+            except OSError as exc:
+                failures.append(exc)
+        with fts.cursor() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for path in removed_paths:
+                    if path in canonical:
+                        candidate_store.delete_tombstone(
+                            conn, kind="memory_file", artifact_id=path.name
+                        )
+                if not failures:
+                    conn.execute(
+                        """
+                        DELETE FROM purge_tombstones
+                         WHERE kind IN (
+                               'memory_candidate', 'memory_entry',
+                               'memory_file', 'daily_wrap'
+                         )
+                        """
+                    )
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        if failures:
+            raise RuntimeError(
+                f"memory cleanup incomplete: {len(failures)} file(s) could not be removed"
+            ) from failures[0]
         return removed, entries
 
 
@@ -1256,11 +1718,17 @@ def clean_captures(
 def clean_timeline(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
-    """Delete all timeline blocks (short-window activity summaries)."""
+    """Delete timeline blocks, derived wraps, and dependent provenance."""
     _init()
     with fts.cursor() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
-    console.print(f"About to delete {count} timeline block(s).")
+        counts = _timeline_clean_counts(conn)
+    console.print(
+        f"About to delete {counts['blocks']} timeline block(s).\n"
+        f"This also permanently deletes {counts['wraps']} Daily Wrap(s), "
+        f"{counts['revisions']} wrap revision(s), their provenance, and marks "
+        f"{counts['candidates']} dependent pending/conflict candidate(s) as conflict."
+    )
+    _warn_if_running()
     if not _confirm("Proceed?", yes):
         console.print("[yellow]Aborted.[/yellow]")
         raise typer.Exit(1)
@@ -1272,16 +1740,26 @@ def clean_timeline(
 def clean_memory(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
-    """Delete all memory Markdown files and reset the FTS index."""
+    """Delete Markdown, review candidates, wraps, and memory provenance."""
     _init()
     mem = paths.memory_dir()
     memory_count = len(_memory_clean_targets())
     with fts.cursor() as conn:
         entry_count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         file_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        candidate_count = conn.execute(
+            "SELECT COUNT(*) FROM memory_candidates"
+        ).fetchone()[0]
+        wrap_count = conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0]
+        revision_count = conn.execute(
+            "SELECT COUNT(*) FROM daily_wrap_revisions"
+        ).fetchone()[0]
     console.print(
         f"About to delete {memory_count} memory file(s) under {mem} "
-        f"and reset {entry_count} entries / {file_count} files in the index."
+        f"and reset {entry_count} entries / {file_count} files in the index.\n"
+        f"This also permanently deletes {candidate_count} review candidate(s), "
+        f"{wrap_count} Daily Wrap(s), {revision_count} wrap revision(s), "
+        "purge intents, and their memory provenance."
     )
     _warn_if_running()
     if not _confirm("Proceed?", yes):
@@ -1289,7 +1767,8 @@ def clean_memory(
         raise typer.Exit(1)
     files, entries = _clean_memory()
     console.print(
-        f"[green]Deleted {files} Markdown file(s); cleared {entries} index entries.[/green]"
+        f"[green]Deleted {files} Markdown file(s); cleared {entries} index entries, "
+        "review candidates, Daily Wraps, and memory provenance.[/green]"
     )
 
 
@@ -1304,12 +1783,17 @@ def clean_all(
     with fts.cursor() as conn:
         entry_count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         tlb_count = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
+        candidate_count = conn.execute(
+            "SELECT COUNT(*) FROM memory_candidates"
+        ).fetchone()[0]
+        wrap_count = conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0]
 
     console.print(
         "[bold red]This will delete:[/bold red]\n"
         f"  - {capture_count} capture file(s)\n"
         f"  - {tlb_count} timeline block(s)\n"
         f"  - {memory_count} memory file(s) and {entry_count} index entries\n"
+        f"  - {candidate_count} review candidate(s) and {wrap_count} Daily Wrap(s)\n"
         f"  - writer state\n"
         "[bold]Config ({}) is kept.[/bold]".format(paths.config_file())
     )

@@ -102,6 +102,27 @@ def insert(conn: sqlite3.Connection, block: TimelineBlock) -> None:
     )
 
 
+def insert_or_get(conn: sqlite3.Connection, block: TimelineBlock) -> tuple[TimelineBlock, bool]:
+    """Insert a window once and return the identity that actually persisted."""
+    before = conn.total_changes
+    insert(conn, block)
+    created = conn.total_changes > before
+    persisted = get_window(conn, block.start_time, block.end_time)
+    if persisted is None:
+        raise RuntimeError("timeline block insert did not produce a persisted window")
+    return persisted, created
+
+
+def get_window(
+    conn: sqlite3.Connection, start: datetime, end: datetime
+) -> TimelineBlock | None:
+    row = conn.execute(
+        "SELECT * FROM timeline_blocks WHERE start_time=? AND end_time=? LIMIT 1",
+        (start.isoformat(), end.isoformat()),
+    ).fetchone()
+    return _row_to_block(row) if row else None
+
+
 def get_latest_end(conn: sqlite3.Connection) -> datetime | None:
     row = conn.execute(
         "SELECT end_time FROM timeline_blocks ORDER BY julianday(end_time) DESC LIMIT 1"

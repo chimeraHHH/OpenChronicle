@@ -3,16 +3,16 @@
 Runs after the S2 reducer successfully appends a session summary to
 ``event-YYYY-MM-DD.md``. Reads that entry plus a small window of the
 preceding entries of the same day, calls the ``classifier`` LLM stage,
-and lets it drive the same tool-call loop the old routing stage used
-(read_memory / search_memory / append / create / supersede / commit).
+and lets it retrieve context and stage grounded candidates in a local review
+inbox (read_memory / search_memory / propose_memory_candidate / commit).
 
-The prompt forbids writing back to ``event-*.md`` — event-daily is owned
-by the reducer. The classifier's *only* job is to distill durable
-facts into the non-event files.
+The classifier has no Markdown mutation tools. Event-daily remains reducer
+owned, and durable memories are materialized only after explicit review.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import dataclass, field
@@ -21,7 +21,9 @@ from typing import Any
 
 from ..config import Config
 from ..logger import get
+from ..memory_candidates import store as candidate_store
 from ..prompts import load as load_prompt
+from ..provenance.models import EvidenceRef, content_digest, timeline_block_digest
 from ..store import entries as entries_mod
 from ..store import files as files_mod
 from ..store import fts
@@ -44,6 +46,7 @@ class ClassifyResult:
     summary: str = ""
     written_ids: list[str] = field(default_factory=list)
     created_paths: list[str] = field(default_factory=list)
+    candidate_ids: list[str] = field(default_factory=list)
     iterations: int = 0
     skipped_reason: str = ""
 
@@ -75,6 +78,13 @@ def classify_window(
 
     with fts.cursor() as conn:
         entries_mod.write_preset_files(conn)
+        if candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=event_daily_path
+        ):
+            return ClassifyResult(
+                session_id=session_id,
+                skipped_reason="event memory file is pending permanent purge",
+            )
 
         focus_entries = _focus_entries_in_range(
             event_daily_path=event_daily_path,
@@ -88,8 +98,8 @@ def classify_window(
                 skipped_reason="no session entries in window",
             )
 
-        timeline_text = _render_timeline_blocks(conn, start, end)
-        prior_day_text = _render_prior_day(start) if include_prior_day else ""
+        timeline_text, timeline_evidence = _render_timeline_blocks(conn, start, end)
+        prior_day_text = _render_prior_day(conn, start) if include_prior_day else ""
 
         context = _assemble_context(
             event_daily_path=event_daily_path,
@@ -103,6 +113,10 @@ def classify_window(
             session_id=session_id,
             event_daily_path=event_daily_path,
             context=context,
+            initial_evidence=[
+                *_entry_evidence(event_daily_path, focus_entries),
+                *timeline_evidence,
+            ],
         )
 
 
@@ -168,6 +182,13 @@ def _classify_untimed(
 ) -> ClassifyResult:
     with fts.cursor() as conn:
         entries_mod.write_preset_files(conn)
+        if candidate_store.is_tombstoned(
+            conn, kind="memory_file", artifact_id=event_daily_path
+        ):
+            return ClassifyResult(
+                session_id=session_id,
+                skipped_reason="event memory file is pending permanent purge",
+            )
         focus_entries = _focus_entries(
             event_daily_path=event_daily_path,
             session_id=session_id,
@@ -189,6 +210,7 @@ def _classify_untimed(
             session_id=session_id,
             event_daily_path=event_daily_path,
             context=context,
+            initial_evidence=_entry_evidence(event_daily_path, focus_entries),
         )
 
 
@@ -266,10 +288,10 @@ def _focus_entries(
 
 def _render_timeline_blocks(
     conn: sqlite3.Connection, start: datetime, end: datetime,
-) -> str:
+) -> tuple[str, list[EvidenceRef]]:
     rows = conn.execute(
         """
-        SELECT start_time, end_time, entries, apps_used
+        SELECT id, start_time, end_time, entries, apps_used
           FROM timeline_blocks
          WHERE end_time > ? AND start_time < ?
          ORDER BY start_time ASC
@@ -277,8 +299,9 @@ def _render_timeline_blocks(
         (start.isoformat(), end.isoformat()),
     ).fetchall()
     if not rows:
-        return "(no timeline blocks recorded for this session)"
+        return "(no timeline blocks recorded for this session)", []
     out: list[str] = []
+    evidence: list[EvidenceRef] = []
     for r in rows:
         try:
             s = datetime.fromisoformat(r["start_time"]).strftime("%H:%M")
@@ -286,18 +309,34 @@ def _render_timeline_blocks(
         except (TypeError, ValueError):
             s, e = r["start_time"], r["end_time"]
         entries = json.loads(r["entries"] or "[]")
-        header = f"[{s}-{e}]"
+        ref = EvidenceRef(
+            kind="timeline_block",
+            id=r["id"],
+            timestamp=r["start_time"],
+            content_hash=timeline_block_digest(
+                start=r["start_time"],
+                end=r["end_time"],
+                entries=entries,
+                apps=json.loads(r["apps_used"] or "[]"),
+            ),
+        )
+        evidence.append(ref)
+        header = f"[{s}-{e}] [evidence:{ref.key}]"
         if not entries:
             out.append(f"{header} (no notable activity)")
             continue
         out.append(header)
         out.extend(f"  - {entry}" for entry in entries)
-    return "\n".join(out)
+    return "\n".join(out), evidence
 
 
-def _render_prior_day(session_start: datetime) -> str:
+def _render_prior_day(conn: sqlite3.Connection, session_start: datetime) -> str:
     prior_date = (session_start - timedelta(days=1)).strftime("%Y-%m-%d")
     name = f"event-{prior_date}.md"
+    if candidate_store.is_tombstoned(
+        conn, kind="memory_file", artifact_id=name
+    ):
+        return ""
     path = files_mod.memory_path(name)
     if not path.exists():
         return ""
@@ -328,7 +367,16 @@ def _assemble_context(
     parts: list[str] = [f"Source file: {event_daily_path}", ""]
     parts.append("## Session entries (focus — classify these)")
     for e in focus_entries:
-        parts.append(f"### [{e.timestamp}] {{id: {e.id}}}")
+        ref = EvidenceRef(
+            kind="memory_entry",
+            id=e.id,
+            path=event_daily_path,
+            timestamp=e.timestamp,
+            content_hash=content_digest(e.body),
+        )
+        parts.append(
+            f"### [{e.timestamp}] {{id: {e.id}}} [evidence:{ref.key}]"
+        )
         body = e.body.strip()
         if body:
             parts.append(body)
@@ -379,6 +427,7 @@ def _run_tool_loop(
     session_id: str,
     event_daily_path: str,
     context: str,
+    initial_evidence: list[EvidenceRef],
 ) -> ClassifyResult:
     system = load_prompt("classifier.md")
     schema = load_prompt("schema.md")
@@ -397,7 +446,14 @@ def _run_tool_loop(
         {"role": "user", "content": user_msg},
     ]
 
-    state = tools_mod.CommitState()
+    state = tools_mod.CommitState(
+        allowed_evidence={ref.key: ref for ref in initial_evidence},
+        producer_run_key=_classifier_run_key(
+            session_id=session_id,
+            event_daily_path=event_daily_path,
+            evidence=initial_evidence,
+        ),
+    )
     max_iter = cfg.writer.max_tool_iterations
 
     for iteration in range(max_iter):
@@ -405,7 +461,7 @@ def _run_tool_loop(
             resp = llm_mod.call_llm(
                 cfg, "classifier",
                 messages=messages,
-                tools=tools_mod.TOOL_SCHEMAS,
+                tools=tools_mod.CLASSIFIER_TOOL_SCHEMAS,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning(
@@ -439,24 +495,11 @@ def _run_tool_loop(
         for i, call in enumerate(tool_calls):
             name = call["name"]
             args = call["arguments"] or {}
-            # Hard guard: never let the classifier write back to event-*.
-            if name in {"append", "create", "supersede", "flag_compact"}:
-                target_path = str(args.get("path") or "")
-                if target_path.startswith("event-"):
-                    result = {
-                        "error": (
-                            f"forbidden: classifier cannot write to {target_path}. "
-                            "event-daily is owned by the reducer."
-                        ),
-                    }
-                    messages.append(_tool_response(assistant_msg, i, name, result))
-                    continue
-
-            if name not in tools_mod.TOOL_NAMES:
+            if name not in tools_mod.CLASSIFIER_TOOL_NAMES:
                 result = {"error": f"unknown tool: {name}"}
             else:
                 try:
-                    result = tools_mod.dispatch(
+                    result = tools_mod.dispatch_classifier(
                         name, args, conn=conn,
                         soft_limit_tokens=cfg.writer.soft_limit_tokens,
                         state=state,
@@ -473,6 +516,7 @@ def _run_tool_loop(
                 summary=state.summary,
                 written_ids=list(state.written_ids),
                 created_paths=list(state.created_paths),
+                candidate_ids=list(state.candidate_ids),
                 iterations=iteration + 1,
             )
 
@@ -482,8 +526,40 @@ def _run_tool_loop(
         summary=state.summary,
         written_ids=list(state.written_ids),
         created_paths=list(state.created_paths),
+        candidate_ids=list(state.candidate_ids),
         iterations=max_iter,
     )
+
+
+def _entry_evidence(
+    path: str, entries: list[files_mod.ParsedEntry]
+) -> list[EvidenceRef]:
+    return [
+        EvidenceRef(
+            kind="memory_entry",
+            id=entry.id,
+            path=path,
+            timestamp=entry.timestamp,
+            content_hash=content_digest(entry.body),
+        )
+        for entry in entries
+    ]
+
+
+def _classifier_run_key(
+    *,
+    session_id: str,
+    event_daily_path: str,
+    evidence: list[EvidenceRef],
+) -> str:
+    material = ["classifier-run-v1", session_id, event_daily_path]
+    material.extend(
+        sorted(
+            f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}"
+            for ref in evidence
+        )
+    )
+    return hashlib.sha256("\0".join(material).encode()).hexdigest()
 
 
 def _tool_response(

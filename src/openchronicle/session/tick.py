@@ -249,12 +249,11 @@ def build_manager(
                 session_end=result.end_time,
                 window_start=window_start,
             )
-            if classify.committed and classify.written_ids:
+            if classify.committed and classify.candidate_ids:
                 logger.info(
-                    "classifier %s: wrote %d entries into %s",
+                    "classifier %s: staged %d memory candidate(s) for review",
                     result.session_id,
-                    len(classify.written_ids),
-                    ", ".join(classify.created_paths) or "existing files",
+                    len(classify.candidate_ids),
                 )
             elif classify.skipped_reason:
                 logger.info(
@@ -371,12 +370,11 @@ async def run_classifier_tick(cfg: Config, manager: SessionManager) -> None:
                 include_prior_day=window_start == session_start,
             )
 
-            if result.committed and result.written_ids:
+            if result.committed and result.candidate_ids:
                 logger.info(
-                    "classifier tick %s: wrote %d entries into %s",
+                    "classifier tick %s: staged %d memory candidate(s) for review",
                     session_id,
-                    len(result.written_ids),
-                    ", ".join(result.created_paths) or "existing files",
+                    len(result.candidate_ids),
                 )
             elif result.skipped_reason:
                 logger.info(

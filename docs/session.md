@@ -29,7 +29,7 @@ stateDiagram-v2
     [*] --> active: on_session_start
 
     active --> active: flush tick (every flush_minutes)<br/>flush_end advanced, [flush] entry appended
-    active --> active: classifier tick (every interval_minutes)<br/>classified_end advanced, durable facts maybe written
+    active --> active: classifier tick (every interval_minutes)<br/>classified_end advanced, candidates maybe proposed
 
     active --> ended: on_session_end<br/>(idle-gap / soft-cut / timeout /<br/>daemon-shutdown / 23:55 safety-net)
 

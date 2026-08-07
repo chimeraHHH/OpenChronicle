@@ -8,10 +8,14 @@ from typing import Any
 
 from openchronicle import config as config_mod
 from openchronicle import paths
+from openchronicle.memory_candidates import store as candidate_store
+from openchronicle.provenance.models import EvidenceRef, content_digest
 from openchronicle.store import entries as entries_mod
+from openchronicle.store import files as files_mod
 from openchronicle.store import fts
 from openchronicle.writer import classifier as classifier_mod
 from openchronicle.writer import llm as llm_mod
+from openchronicle.writer import tools as writer_tools
 
 _TZ = timezone(timedelta(hours=8))
 
@@ -52,21 +56,35 @@ def _seed_event_daily(day: str) -> tuple[str, str]:
     return name, entry_id
 
 
-def test_classifier_appends_durable_preference(ac_root: Path, monkeypatch) -> None:
+def test_classifier_stages_grounded_preference_for_review(ac_root: Path, monkeypatch) -> None:
     day = "2026-04-21"
     name, entry_id = _seed_event_daily(day)
 
-    # Scripted LLM: iter 1 → search, iter 2 → append, iter 3 → commit.
+    parsed = files_mod.read_file(paths.memory_dir() / name)
+    source_entry = next(entry for entry in parsed.entries if entry.id == entry_id)
+    evidence_token = EvidenceRef(
+        kind="memory_entry",
+        id=entry_id,
+        path=name,
+        timestamp=source_entry.timestamp,
+        content_hash=content_digest(source_entry.body),
+    ).key
+
+    # Scripted LLM: iter 1 → search, iter 2 → proposal, iter 3 → commit.
     script = [
         _response([_tool_call(
             "search_memory", {"query": "Cursor over VSCode"}, cid="c1",
         )]),
         _response([_tool_call(
-            "append",
+            "propose_memory_candidate",
             {
+                "kind": "preference",
                 "path": "user-preferences.md",
                 "content": "User prefers Cursor over VSCode because of its AI tab-complete.",
                 "tags": ["editor", "preference"],
+                "evidence_tokens": [evidence_token],
+                "confidence": 0.95,
+                "conflict_key": "preferred-editor",
             },
             cid="c2",
         )]),
@@ -77,6 +95,13 @@ def test_classifier_appends_durable_preference(ac_root: Path, monkeypatch) -> No
 
     def fake_call_llm(cfg, stage, *, messages, tools=None, json_mode=False):
         assert stage == "classifier"
+        names = {tool["function"]["name"] for tool in tools}
+        assert names == {
+            "read_memory",
+            "search_memory",
+            "propose_memory_candidate",
+            "commit",
+        }
         return script.pop(0)
 
     monkeypatch.setattr(llm_mod, "call_llm", fake_call_llm)
@@ -87,16 +112,22 @@ def test_classifier_appends_durable_preference(ac_root: Path, monkeypatch) -> No
     )
 
     assert result.committed is True
-    assert len(result.written_ids) == 1
+    assert result.written_ids == []
+    assert len(result.candidate_ids) == 1
     assert "Cursor-over-VSCode" in result.summary
 
     # Event-daily was NOT modified.
     evt = (paths.memory_dir() / name).read_text()
     assert evt.count("**Session sess_abc**") == 1
 
-    # user-preferences.md got the new entry.
+    # Review-first: user-preferences.md is unchanged until explicit approval.
     pref = (paths.memory_dir() / "user-preferences.md").read_text()
-    assert "Cursor over VSCode" in pref
+    assert "Cursor over VSCode" not in pref
+    with fts.cursor() as conn:
+        candidate = candidate_store.get(conn, result.candidate_ids[0])
+        assert candidate is not None
+        assert candidate.status == "pending"
+        assert candidate.content.startswith("User prefers Cursor")
 
 
 def test_classifier_rejects_event_write(ac_root: Path, monkeypatch) -> None:
@@ -163,3 +194,102 @@ def test_classifier_skips_when_event_daily_missing(ac_root: Path) -> None:
     )
     assert result.committed is False
     assert "no entries" in result.skipped_reason
+
+
+def test_classifier_tools_bound_retrieval_and_hide_event_entries(
+    ac_root: Path,
+) -> None:
+    event_name, _ = _seed_event_daily("2026-04-24")
+    with fts.cursor() as conn:
+        state = writer_tools.CommitState()
+        assert "error" in writer_tools.tool_read_memory(
+            conn, path=event_name, state=state
+        )
+        assert "error" in writer_tools.tool_read_memory(
+            conn, path="user-profile.md", tail_n=0, state=state
+        )
+        assert "error" in writer_tools.tool_read_memory(
+            conn, path="user-profile.md", tail_n=21, state=state
+        )
+        assert "error" in writer_tools.tool_search_memory(
+            conn, query="Cursor", top_k=0, state=state
+        )
+        assert "error" in writer_tools.tool_search_memory(
+            conn, query="Cursor", top_k=21, state=state
+        )
+        result = writer_tools.tool_search_memory(
+            conn, query="Cursor", top_k=20, state=state
+        )
+    assert result["results"] == []
+
+
+def test_classifier_search_revalidates_index_and_tombstones(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn, name="project-search.md", description="search", tags=["project"]
+        )
+        entry_id = entries_mod.append_entry(
+            conn,
+            name="project-search.md",
+            content="STALE_SEARCH_SECRET",
+            tags=["private"],
+        )
+        state = writer_tools.CommitState()
+        assert writer_tools.tool_search_memory(
+            conn, query="STALE_SEARCH_SECRET", state=state
+        )["results"]
+        candidate_store.put_tombstone(
+            conn,
+            kind="memory_entry",
+            artifact_id=entry_id,
+            path="project-search.md",
+        )
+        assert writer_tools.tool_search_memory(
+            conn, query="STALE_SEARCH_SECRET", state=state
+        )["results"] == []
+
+
+def test_failed_candidate_proposal_does_not_consume_idempotency_slot(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn, name="project-source.md", description="source", tags=["project"]
+        )
+        entries_mod.append_entry(
+            conn,
+            name="project-source.md",
+            content="The migration is complete.",
+            tags=["milestone"],
+        )
+        state = writer_tools.CommitState(producer_run_key="run-slot-test")
+        read = writer_tools.tool_read_memory(
+            conn, path="project-source.md", state=state
+        )
+        token = read["entries"][0]["evidence_token"]
+        rejected = writer_tools.tool_propose_memory_candidate(
+            conn,
+            kind="project_fact",
+            path="project-target.md",
+            content="<!-- oc-provenance: {} -->",
+            tags=["project"],
+            evidence_tokens=[token],
+            confidence=0.9,
+            conflict_key="",
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+        accepted = writer_tools.tool_propose_memory_candidate(
+            conn,
+            kind="project_fact",
+            path="project-target.md",
+            content="The migration is complete.",
+            tags=["project"],
+            evidence_tokens=[token],
+            confidence=0.9,
+            conflict_key="",
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+    assert "error" in rejected
+    assert accepted["proposal_slot"] == 0

@@ -50,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_files_prefix ON files(prefix);
 CREATE TABLE IF NOT EXISTS captures (
     rowid INTEGER PRIMARY KEY AUTOINCREMENT,
     id TEXT UNIQUE NOT NULL,
+    observation_id TEXT,
     timestamp TEXT NOT NULL,
     app_name TEXT,
     bundle_id TEXT,
@@ -127,19 +128,44 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    # Best-effort local erasure: overwrite deleted SQLite cells instead of
+    # leaving plaintext in freelist pages. WAL truncation is requested after
+    # explicit forget operations; filesystem snapshots remain outside this
+    # process's guarantees.
+    conn.execute("PRAGMA secure_delete=ON")
     # Make the auto-checkpoint pages explicit (this is also the SQLite default).
     # Auto-checkpoint resets the WAL pointer but never shrinks the file —
     # the daemon calls ``checkpoint()`` from the daily tick so the
     # ``.db-wal`` and ``.db-shm`` sidecars don't drift unbounded.
     conn.execute("PRAGMA wal_autocheckpoint=1000")
     conn.executescript(SCHEMA)
+    _migrate_capture_schema(conn)
+    from ..daily_wrap import store as daily_wrap_store
+    from ..memory_candidates import store as candidate_store
+    from ..provenance import store as provenance_store
     from ..session import store as session_store
     from ..timeline import store as timeline_store
 
     timeline_store.ensure_schema(conn)
     session_store.ensure_schema(conn)
+    provenance_store.ensure_schema(conn)
+    candidate_store.ensure_schema(conn)
+    daily_wrap_store.ensure_schema(conn)
     _secure_db_files(db_path)
     return conn
+
+
+def _migrate_capture_schema(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(captures)")}
+    if "observation_id" not in columns:
+        conn.execute("ALTER TABLE captures ADD COLUMN observation_id TEXT")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_captures_observation
+        ON captures(observation_id)
+        WHERE observation_id IS NOT NULL AND observation_id <> ''
+        """
+    )
 
 
 def _secure_db_files(db_path: Path) -> None:
@@ -367,6 +393,7 @@ class CaptureHit:
     url: str
     snippet: str  # FTS5 snippet() with the matched tokens highlighted
     rank: float  # bm25 score (lower = better); 0.0 for non-search recent()
+    observation_id: str = ""
 
 
 def insert_capture(
@@ -381,15 +408,17 @@ def insert_capture(
     focused_value: str,
     visible_text: str,
     url: str,
+    observation_id: str = "",
 ) -> None:
     """Upsert one capture row. Triggers keep captures_fts in sync."""
     conn.execute(
         """
         INSERT INTO captures
-            (id, timestamp, app_name, bundle_id, window_title,
+            (id, observation_id, timestamp, app_name, bundle_id, window_title,
              focused_role, focused_value, visible_text, url)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
+            observation_id=excluded.observation_id,
             timestamp=excluded.timestamp,
             app_name=excluded.app_name,
             bundle_id=excluded.bundle_id,
@@ -401,6 +430,7 @@ def insert_capture(
         """,
         (
             id,
+            observation_id or None,
             timestamp,
             app_name,
             bundle_id,
@@ -435,7 +465,13 @@ def search_captures(
     safe_query = _safe_fts_query(query)
     if not safe_query or safe_query == '""':
         return []
-    clauses = ["captures_fts MATCH ?"]
+    clauses = [
+        "captures_fts MATCH ?",
+        "NOT EXISTS ("
+        "SELECT 1 FROM purge_tombstones AS p "
+        "WHERE p.kind='capture_file' AND p.artifact_id=(c.id || '.json')"
+        ")",
+    ]
     args: list[Any] = [safe_query]
     if since is not None:
         clauses.append("c.timestamp >= ?")
@@ -447,7 +483,7 @@ def search_captures(
         clauses.append("LOWER(c.app_name) LIKE ?")
         args.append(f"%{app_name.lower()}%")
     sql = (
-        "SELECT c.id, c.timestamp, c.app_name, c.bundle_id, c.window_title, "
+        "SELECT c.id, c.observation_id, c.timestamp, c.app_name, c.bundle_id, c.window_title, "
         "       c.focused_role, c.focused_value, c.url, "
         "       snippet(captures_fts, -1, '[', ']', '…', 16) AS snippet, "
         "       bm25(captures_fts) AS rank "
@@ -469,6 +505,7 @@ def search_captures(
             url=r["url"] or "",
             snippet=r["snippet"] or "",
             rank=r["rank"],
+            observation_id=r["observation_id"] or "",
         )
         for r in rows
     ]
@@ -483,7 +520,12 @@ def recent_captures(
     limit: int = 20,
 ) -> list[CaptureHit]:
     """Newest-first capture rows without keyword filtering — used by current_context."""
-    clauses: list[str] = []
+    clauses: list[str] = [
+        "NOT EXISTS ("
+        "SELECT 1 FROM purge_tombstones AS p "
+        "WHERE p.kind='capture_file' AND p.artifact_id=(captures.id || '.json')"
+        ")"
+    ]
     args: list[Any] = []
     if since is not None:
         clauses.append("timestamp >= ?")
@@ -496,7 +538,7 @@ def recent_captures(
         args.append(f"%{app_name.lower()}%")
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = (
-        "SELECT id, timestamp, app_name, bundle_id, window_title, "
+        "SELECT id, observation_id, timestamp, app_name, bundle_id, window_title, "
         "       focused_role, focused_value, url "
         f"  FROM captures {where} "
         " ORDER BY timestamp DESC LIMIT ?"
@@ -515,6 +557,7 @@ def recent_captures(
             url=r["url"] or "",
             snippet="",
             rank=0.0,
+            observation_id=r["observation_id"] or "",
         )
         for r in rows
     ]

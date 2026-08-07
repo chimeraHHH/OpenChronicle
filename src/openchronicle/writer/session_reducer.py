@@ -39,6 +39,7 @@ from ..capture import filenames as capture_filenames
 from ..config import Config
 from ..logger import get
 from ..prompts import load as load_prompt
+from ..provenance.models import EvidenceRef, content_digest, timeline_block_digest
 from ..session import store as session_store
 from ..store import entries as entries_mod
 from ..store import files as files_mod
@@ -408,6 +409,7 @@ def _reduce_window_locked(
         sub_tasks=sub_tasks,
         heuristic=not succeeded,
         is_final=is_final,
+        blocks=blocks,
     )
 
     if is_final:
@@ -840,6 +842,7 @@ def _repair_existing_event_entry(
         content=entry.body,
         tags=entry.tags,
         entry_id=entry.id,
+        evidence_refs=entry.evidence_refs,
     )
     return entry
 
@@ -903,6 +906,7 @@ def _recover_materialized_flushes(
                 content=entry.body,
                 tags=entry.tags,
                 entry_id=entry.id,
+                evidence_refs=entry.evidence_refs,
             )
             if latest is None or _instant(materialized_end) > _instant(latest):
                 latest = materialized_end
@@ -938,6 +942,7 @@ def _append_event_entry(
     sub_tasks: list[str],
     heuristic: bool,
     is_final: bool,
+    blocks: list[timeline_store.TimelineBlock],
 ) -> tuple[str, str, bool]:
     day = start_time.strftime("%Y-%m-%d")
     name = _event_daily_name(start_time)
@@ -968,11 +973,43 @@ def _append_event_entry(
         end_time=end_time,
         is_final=is_final,
     )
+    evidence_refs = [
+        EvidenceRef(
+            kind="session",
+            id=session_id,
+            timestamp=start_time.isoformat(),
+            content_hash=content_digest(
+                json.dumps(
+                    {
+                        "start": start_time.isoformat(),
+                        "end": end_time.isoformat(),
+                        "final": is_final,
+                    },
+                    sort_keys=True,
+                )
+            ),
+        )
+    ]
+    evidence_refs.extend(
+        EvidenceRef(
+            kind="timeline_block",
+            id=block.id,
+            timestamp=block.start_time.isoformat(),
+            content_hash=timeline_block_digest(
+                start=block.start_time.isoformat(),
+                end=block.end_time.isoformat(),
+                entries=block.entries,
+                apps=block.apps_used,
+            ),
+        )
+        for block in blocks
+    )
     entry_id, created = entries_mod.append_entry_once(
         conn,
         name=name,
         content=body,
         tags=tags,
         entry_id=stable_id,
+        evidence_refs=evidence_refs,
     )
     return entry_id, name, created

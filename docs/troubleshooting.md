@@ -87,15 +87,27 @@ openchronicle writer run
 
 This runs the same code path the daily 23:55 cron uses.
 
-## Classifier never writes durable facts
+## Classifier never proposes durable facts
 
-This is often correct behavior — the classifier's default action is an empty commit. It should only write when it sees a fact that would still matter in six months.
+This is often correct behavior — the classifier's default action is an empty commit. It should only propose a fact that would still matter in six months.
 
 Signs it's misbehaving rather than doing its job:
 
 - `classifier ended without commit at iter N` in `writer.log` — the model bailed without calling `commit`. Usually means the stage model is too weak to follow the tool-call protocol. Try a stronger `[models.classifier]`.
-- `forbidden: classifier cannot write to event-*` — the classifier tried to write back to an event-daily file. This is always rejected. If every session triggers it, the classifier prompt isn't landing; check that `classifier.md` exists under `src/openchronicle/prompts/`.
-- Classifier writes duplicates every session — the stage model is skipping its `search_memory` dedup check. Upgrade the model, don't add code.
+- `event-daily is reducer-owned and cannot receive candidates` — the classifier tried to target an `event-*` file. This is always rejected. If every session triggers it, the classifier prompt isn't landing; check that `classifier.md` exists under `src/openchronicle/prompts/`.
+- Repeated runs show one candidate with a replay-mismatch error — this is the idempotency guard preserving the first durable proposal when a provider retry changes wording. Review that original candidate instead of expecting a second card.
+- A candidate will not appear in Markdown until `openchronicle memory approve <id>` succeeds. Approval rechecks every cited source and rejects missing or changed evidence.
+
+## Scheduled Daily Wrap is not running
+
+Scheduled synthesis is deliberately disabled on fresh installs and upgrades.
+Set `enabled = true` under `[daily_wrap]`, restart the daemon, and inspect
+`~/.openchronicle/logs/daily-wrap.log`. Use `openchronicle daily-wrap run
+--date YYYY-MM-DD --timezone Area/City` for an explicit one-off run. A failed
+refresh keeps the last successful wrap visible and records the failed attempt;
+it does not replace good output with an error.
+When `--timezone` is omitted, the CLI uses `[daily_wrap].timezone` and then the
+system IANA zone, in the same order as the scheduler.
 
 ## Timeline blocks not appearing
 
