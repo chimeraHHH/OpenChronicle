@@ -84,6 +84,25 @@ Exit criteria include zero excluded-data leakage across every sink, no capture
 overwrite under same-time bursts, no stranded sessions after kill/restart, no
 duplicate reduction, and a seven-day soak without data corruption.
 
+Classifier delivery is tracked separately in
+[#4](https://github.com/chimeraHHH/OpenChronicle/issues/4). The current branch
+implements a durable outbox/state machine, deterministic delivery/producer
+keys, lease-fenced proposal/commit transactions, typed committed receipts,
+post-receipt bookmark finalization, exact-entry/typed-empty terminal recovery,
+reducer cleanup-generation fencing, status counts, and fault tests across the
+main crash/concurrency boundaries. The reviewed local tree passes the full
+Python suite on both supported Python versions plus the desktop frontend and
+native-core gates; an independent red-team pass found no remaining reproducible
+P0/P1. This is still not an issue-closure claim: #4 should close only after the
+Draft PR's remote CI/review confirms the same tree and the stack is merged. The
+guarantee covers replay-safe local candidate delivery; it does not promise
+exactly-once provider invocation and does not convert delivery commit into user
+approval.
+
+Stage 0 remains open after #4 as well: its broader privacy, supervision,
+model-call, crash-recovery, and seven-day-soak exit criteria must be evaluated
+as a set. No item above should be read as a claim that Stage 0 is complete.
+
 ### Stage 1 — memory product and Daily Wrap
 
 - [x] Shared typed `ContextService` and `MemoryService`, with read-only MCP adapters.
@@ -135,7 +154,8 @@ privacy UX is validated on a signed macOS build.
 | Object | Source of truth | Derived state |
 |---|---|---|
 | Observation | Versioned append-only capture envelope | Capture FTS |
-| Timeline, session, jobs | SQLite | Daily event Markdown |
+| Timeline and session | SQLite | Daily event Markdown |
+| Classifier delivery job/receipt | SQLite `classifier_jobs` outbox | Status/log summaries |
 | Long-term fact | Markdown entry with machine-readable provenance | SQLite FTS |
 | Memory candidate | Typed SQLite state | Review UI |
 | Suggestion, plan, action, approval | Typed SQLite state | Product UI |
@@ -174,7 +194,7 @@ action needs a verified postcondition.
 ## Current implementation order
 
 1. CI and reproducible baseline.
-2. Runtime/session/model-call reliability.
+2. Runtime/session/model-call reliability, including #4 fault-test acceptance.
 3. Observation identity, event fidelity, atomic private persistence.
 4. Capture policy, redaction, and retention.
 5. Provenance spine and memory candidates. **Implemented on the Stage 1 branch.**

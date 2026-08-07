@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +29,8 @@ class CommitState:
     allowed_evidence: dict[str, EvidenceRef] = field(default_factory=dict)
     producer_run_key: str = ""
     next_proposal_slot: int = 0
+    commit_callback: Callable[[CommitState], None] | None = None
+    mutation_guard: Callable[[sqlite3.Connection], None] | None = None
 
 
 # ─── tool implementations ────────────────────────────────────────────────
@@ -221,6 +224,7 @@ def tool_propose_memory_candidate(
             conflict_key=conflict_key,
             producer_run_key=state.producer_run_key,
             proposal_slot=proposal_slot,
+            transaction_guard=state.mutation_guard,
         )
     except (ValueError, FileNotFoundError) as exc:
         return {"error": str(exc)}
@@ -317,8 +321,13 @@ def tool_flag_compact(
 
 
 def tool_commit(state: CommitState, *, summary: str) -> dict[str, Any]:
-    state.committed = True
     state.summary = summary
+    if state.commit_callback is not None:
+        # The durable delivery path persists its receipt here, after all prior
+        # proposal tools have committed but before callers may advance their
+        # progress bookmark.
+        state.commit_callback(state)
+    state.committed = True
     return {"ok": True}
 
 

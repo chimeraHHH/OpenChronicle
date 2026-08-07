@@ -305,6 +305,33 @@ def status() -> None:
             )
         else:
             table.add_row("Sessions", "(none)")
+        classifier_rows = conn.execute(
+            """
+            SELECT status, COUNT(*) AS n
+              FROM classifier_jobs
+             GROUP BY status
+            """
+        ).fetchall()
+        classifier_counts = {str(row["status"]): int(row["n"]) for row in classifier_rows}
+        terminal_owed = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM sessions
+                 WHERE classifier_terminal_pending=1
+                """
+            ).fetchone()[0]
+        )
+        if classifier_counts or terminal_owed:
+            parts = [
+                f"{name}={classifier_counts[name]}"
+                for name in ("pending", "running", "failed", "committed")
+                if classifier_counts.get(name)
+            ]
+            if terminal_owed:
+                parts.append(f"terminal-owed={terminal_owed}")
+            table.add_row("Classifier Delivery", ", ".join(parts) or "idle")
+        else:
+            table.add_row("Classifier Delivery", "idle")
         active = fts.list_files(conn, include_dormant=False)
         dormant = [
             f for f in fts.list_files(conn, include_dormant=True) if f.status == "dormant"
@@ -1573,10 +1600,11 @@ def _timeline_clean_counts(conn) -> dict[str, int]:
 
 
 def _clean_timeline() -> int:
-    with fts.cursor() as conn:
+    with files_mod.review_operation_lock(), fts.cursor() as conn:
         n = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
-        conn.execute("BEGIN")
+        conn.execute("BEGIN IMMEDIATE")
         try:
+            fts.bump_content_generation(conn, "reducer")
             affected_candidates = conn.execute(
                 _TIMELINE_AFFECTED_CANDIDATES_SQL
             ).fetchall()
@@ -1591,6 +1619,21 @@ def _clean_timeline() -> int:
             )
             conn.execute("DELETE FROM daily_wrap_revisions")
             conn.execute("DELETE FROM daily_wrap_jobs")
+            conn.execute("DELETE FROM classifier_jobs")
+            conn.execute(
+                """
+                UPDATE sessions
+                   SET classified_end=COALESCE(
+                           end_time, flush_end, classified_end, start_time
+                       ),
+                       classifier_terminal_pending=0,
+                       classifier_terminal_entry_id='',
+                       classifier_terminal_path='',
+                       classifier_terminal_noop=0,
+                       updated_at=?
+                """,
+                (datetime.now().astimezone().isoformat(),),
+            )
             conn.execute(
                 """
                 DELETE FROM provenance_edges
@@ -1613,7 +1656,10 @@ def _clean_timeline() -> int:
 
 def _clean_memory() -> tuple[int, int]:
     """Delete memory files/temp copies and reset indexes. Returns (files, entries)."""
-    with files_mod.store_write_lock():
+    # Fence classifier proposal transactions as well as Markdown writers. A
+    # worker holding an old classifier lease cannot recreate a candidate after
+    # this explicit local reset because its job row is deleted atomically.
+    with files_mod.review_operation_lock(), files_mod.store_write_lock():
         targets = _memory_clean_targets()
         canonical = [
             path
@@ -1626,6 +1672,7 @@ def _clean_memory() -> tuple[int, int]:
             entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
             conn.execute("BEGIN IMMEDIATE")
             try:
+                fts.bump_content_generation(conn, "reducer")
                 for path in canonical:
                     candidate_store.put_tombstone(
                         conn, kind="memory_file", artifact_id=path.name
@@ -1633,6 +1680,21 @@ def _clean_memory() -> tuple[int, int]:
                 conn.execute("DELETE FROM entries")
                 conn.execute("DELETE FROM files")
                 conn.execute("DELETE FROM memory_candidates")
+                conn.execute("DELETE FROM classifier_jobs")
+                conn.execute(
+                    """
+                    UPDATE sessions
+                       SET classified_end=COALESCE(
+                               end_time, flush_end, classified_end, start_time
+                           ),
+                           classifier_terminal_pending=0,
+                           classifier_terminal_entry_id='',
+                           classifier_terminal_path='',
+                           classifier_terminal_noop=0,
+                           updated_at=?
+                    """,
+                    (datetime.now().astimezone().isoformat(),),
+                )
                 conn.execute("DELETE FROM daily_wrap_revisions")
                 conn.execute("DELETE FROM daily_wrap_jobs")
                 conn.execute(

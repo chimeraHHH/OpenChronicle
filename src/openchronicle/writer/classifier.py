@@ -14,19 +14,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ..capture import filenames as capture_filenames
 from ..config import Config
 from ..logger import get
 from ..memory_candidates import store as candidate_store
 from ..prompts import load as load_prompt
+from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, content_digest, timeline_block_digest
 from ..store import entries as entries_mod
 from ..store import files as files_mod
 from ..store import fts
+from . import classifier_jobs
 from . import llm as llm_mod
 from . import tools as tools_mod
 
@@ -49,6 +54,9 @@ class ClassifyResult:
     candidate_ids: list[str] = field(default_factory=list)
     iterations: int = 0
     skipped_reason: str = ""
+    error: str = ""
+    producer_run_key: str = ""
+    input_digest: str = ""
 
 
 def classify_window(
@@ -59,6 +67,10 @@ def classify_window(
     start: datetime,
     end: datetime,
     include_prior_day: bool = False,
+    delivery_job_id: str = "",
+    delivery_lease_token: str = "",
+    focus_entry_ids: list[str] | None = None,
+    allow_empty_delivery: bool = False,
 ) -> ClassifyResult:
     """Classify event-daily entries for ``session_id`` within ``[start, end)``.
 
@@ -77,25 +89,95 @@ def classify_window(
         return ClassifyResult(session_id=session_id, skipped_reason="reducer disabled")
 
     with fts.cursor() as conn:
-        entries_mod.write_preset_files(conn)
+        if delivery_job_id:
+            classifier_jobs.assert_lease(
+                conn,
+                job_id=delivery_job_id,
+                lease_token=delivery_lease_token,
+            )
+        else:
+            entries_mod.write_preset_files(conn)
         if candidate_store.is_tombstoned(
             conn, kind="memory_file", artifact_id=event_daily_path
         ):
+            if delivery_job_id:
+                raise classifier_jobs.ClassifierJobInputChanged(
+                    "classifier source is pending permanent purge"
+                )
+            input_digest = _delivery_input_digest(
+                event_daily_path=event_daily_path,
+                session_id=session_id,
+                start=start,
+                end=end,
+                evidence=[],
+            )
+            run_key = _classifier_run_key(
+                session_id=session_id,
+                event_daily_path=event_daily_path,
+                evidence=[],
+            )
+            if delivery_job_id:
+                run_key = classifier_jobs.make_producer_run_key(delivery_job_id)
+            if delivery_job_id:
+                classifier_jobs.bind_input(
+                    conn,
+                    job_id=delivery_job_id,
+                    lease_token=delivery_lease_token,
+                    input_digest=input_digest,
+                    producer_run_key=run_key,
+                )
             return ClassifyResult(
                 session_id=session_id,
                 skipped_reason="event memory file is pending permanent purge",
+                producer_run_key=run_key,
+                input_digest=input_digest,
             )
 
         focus_entries = _focus_entries_in_range(
+            conn=conn,
             event_daily_path=event_daily_path,
             session_id=session_id,
             start=start,
             end=end,
+            focus_entry_ids=focus_entry_ids,
+            strict_coverage=bool(delivery_job_id),
         )
+        delivery_run_key = _classifier_run_key(
+            session_id=session_id,
+            event_daily_path=event_daily_path,
+            evidence=[],
+        )
+        if delivery_job_id:
+            delivery_run_key = classifier_jobs.make_producer_run_key(delivery_job_id)
         if not focus_entries:
+            if delivery_job_id and not allow_empty_delivery:
+                raise classifier_jobs.ClassifierJobInputChanged(
+                    "durably materialized classifier window has no reducer entry"
+                )
+            input_digest = _delivery_input_digest(
+                event_daily_path=event_daily_path,
+                session_id=session_id,
+                start=start,
+                end=end,
+                evidence=[],
+            )
+            if delivery_job_id:
+                classifier_jobs.bind_input(
+                    conn,
+                    job_id=delivery_job_id,
+                    lease_token=delivery_lease_token,
+                    input_digest=input_digest,
+                    producer_run_key=delivery_run_key,
+                )
             return ClassifyResult(
                 session_id=session_id,
-                skipped_reason="no session entries in window",
+                skipped_reason=(
+                    classifier_jobs.EMPTY_TERMINAL_SKIP
+                    if allow_empty_delivery
+                    else "no session entries in window"
+                ),
+                producer_run_key=delivery_run_key,
+                input_digest=input_digest,
             )
 
         timeline_text, timeline_evidence = _render_timeline_blocks(conn, start, end)
@@ -108,15 +190,78 @@ def classify_window(
             prior_day_text=prior_day_text,
         )
 
+        initial_evidence = [
+            *_entry_evidence(event_daily_path, focus_entries),
+            *timeline_evidence,
+        ]
+        delivery_run_key = _classifier_run_key(
+            session_id=session_id,
+            event_daily_path=event_daily_path,
+            evidence=initial_evidence,
+        )
+        if delivery_job_id:
+            delivery_run_key = classifier_jobs.make_producer_run_key(delivery_job_id)
+        input_digest = _delivery_input_digest(
+            event_daily_path=event_daily_path,
+            session_id=session_id,
+            start=start,
+            end=end,
+            evidence=initial_evidence,
+        )
+        if delivery_job_id:
+            classifier_jobs.bind_input(
+                conn,
+                job_id=delivery_job_id,
+                lease_token=delivery_lease_token,
+                input_digest=input_digest,
+                producer_run_key=delivery_run_key,
+            )
+
+        def validate_delivery_input() -> None:
+            if not delivery_job_id:
+                return
+            if candidate_store.is_tombstoned(
+                conn, kind="memory_file", artifact_id=event_daily_path
+            ):
+                raise classifier_jobs.ClassifierJobInputChanged(
+                    "classifier source became pending permanent purge"
+                )
+            current_focus = _focus_entries_in_range(
+                conn=conn,
+                event_daily_path=event_daily_path,
+                session_id=session_id,
+                start=start,
+                end=end,
+                focus_entry_ids=focus_entry_ids,
+                strict_coverage=True,
+            )
+            _, current_timeline = _render_timeline_blocks(conn, start, end)
+            current_digest = _delivery_input_digest(
+                event_daily_path=event_daily_path,
+                session_id=session_id,
+                start=start,
+                end=end,
+                evidence=[
+                    *_entry_evidence(event_daily_path, current_focus),
+                    *current_timeline,
+                ],
+            )
+            if current_digest != input_digest:
+                raise classifier_jobs.ClassifierJobInputChanged(
+                    f"classifier input changed for delivery {delivery_job_id}"
+                )
+
         return _run_tool_loop(
             cfg, conn,
             session_id=session_id,
             event_daily_path=event_daily_path,
             context=context,
-            initial_evidence=[
-                *_entry_evidence(event_daily_path, focus_entries),
-                *timeline_evidence,
-            ],
+            initial_evidence=initial_evidence,
+            delivery_job_id=delivery_job_id,
+            delivery_lease_token=delivery_lease_token,
+            producer_run_key=delivery_run_key,
+            input_digest=input_digest,
+            validate_delivery_input=validate_delivery_input,
         )
 
 
@@ -215,8 +360,14 @@ def _classify_untimed(
 
 
 def _focus_entries_in_range(
-    *, event_daily_path: str, session_id: str,
-    start: datetime, end: datetime,
+    *,
+    conn: sqlite3.Connection,
+    event_daily_path: str,
+    session_id: str,
+    start: datetime,
+    end: datetime,
+    focus_entry_ids: list[str] | None = None,
+    strict_coverage: bool = False,
 ) -> list[files_mod.ParsedEntry]:
     path = files_mod.memory_path(event_daily_path)
     if not path.exists():
@@ -226,9 +377,35 @@ def _focus_entries_in_range(
     except Exception:  # noqa: BLE001
         return []
     sid_tag = f"sid:{session_id}"
+    required_ids = set(focus_entry_ids or [])
     matches: list[files_mod.ParsedEntry] = []
     for e in parsed.entries:
         if sid_tag not in e.tags:
+            continue
+        if e.id in required_ids:
+            matches.append(e)
+            continue
+        encoded_end = next(
+            (
+                tag.removeprefix("oc-window-end:")
+                for tag in e.tags
+                if tag.startswith("oc-window-end:")
+            ),
+            "",
+        )
+        covered_end = capture_filenames.parse_capture_stem(encoded_end)
+        if covered_end is not None:
+            covered_cmp = _align_tz(covered_end, start)
+            if start < covered_cmp <= end:
+                matches.append(e)
+            continue
+        if strict_coverage:
+            # New reducer entries carry an explicit coverage boundary. Older
+            # entries do not, so they cannot safely be assigned to a durable
+            # periodic window. Ignore those ambiguous legacy entries here;
+            # terminal upgrade recovery supplies its exact entry ID, which is
+            # handled above, while a periodic window with no proven entry
+            # fails closed in ``classify_window``.
             continue
         ts = _parse_entry_ts(e.timestamp)
         if ts is None:
@@ -241,6 +418,28 @@ def _focus_entries_in_range(
         end_cmp = end
         if start_cmp <= ts_cmp < end_cmp:
             matches.append(e)
+    missing_required = required_ids - {entry.id for entry in matches}
+    if missing_required:
+        raise classifier_jobs.ClassifierJobInputChanged(
+            "required terminal classifier entry is missing or changed: "
+            + ", ".join(sorted(missing_required))
+        )
+    invalid = [
+        entry.id
+        for entry in matches
+        if not entry.provenance_valid
+        or not entries_mod.dependency_sources_are_live(conn, entry.evidence_refs)
+        or any(
+            source.kind in ("observation", "timeline_block")
+            and not provenance_store.is_current(conn, source)
+            for source in entry.evidence_refs
+        )
+    ]
+    if invalid:
+        raise classifier_jobs.ClassifierJobInputChanged(
+            "classifier focus evidence is missing, changed, or malformed: "
+            + ", ".join(sorted(invalid))
+        )
     return matches
 
 
@@ -251,6 +450,12 @@ def _align_tz(ts: datetime, ref: datetime) -> datetime:
     if ts.tzinfo is None and ref.tzinfo is not None:
         return ts.replace(tzinfo=ref.tzinfo)
     return ts.replace(tzinfo=None)
+
+
+def _instant(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        value = value.astimezone()
+    return value.astimezone(UTC)
 
 
 def _parse_entry_ts(text: str) -> datetime | None:
@@ -293,11 +498,23 @@ def _render_timeline_blocks(
         """
         SELECT id, start_time, end_time, entries, apps_used
           FROM timeline_blocks
-         WHERE end_time > ? AND start_time < ?
-         ORDER BY start_time ASC
+         WHERE julianday(end_time) > julianday(?) - 2
+           AND julianday(start_time) < julianday(?) + 2
         """,
         (start.isoformat(), end.isoformat()),
     ).fetchall()
+    filtered: list[tuple[datetime, sqlite3.Row]] = []
+    for row in rows:
+        row_start = _parse_entry_ts(row["start_time"])
+        row_end = _parse_entry_ts(row["end_time"])
+        if (
+            row_start is not None
+            and row_end is not None
+            and _instant(row_end) > _instant(start)
+            and _instant(row_start) < _instant(end)
+        ):
+            filtered.append((_instant(row_start), row))
+    rows = [row for _, row in sorted(filtered, key=lambda item: item[0])]
     if not rows:
         return "(no timeline blocks recorded for this session)", []
     out: list[str] = []
@@ -428,6 +645,11 @@ def _run_tool_loop(
     event_daily_path: str,
     context: str,
     initial_evidence: list[EvidenceRef],
+    delivery_job_id: str = "",
+    delivery_lease_token: str = "",
+    producer_run_key: str = "",
+    input_digest: str = "",
+    validate_delivery_input: Callable[[], None] | None = None,
 ) -> ClassifyResult:
     system = load_prompt("classifier.md")
     schema = load_prompt("schema.md")
@@ -448,22 +670,94 @@ def _run_tool_loop(
 
     state = tools_mod.CommitState(
         allowed_evidence={ref.key: ref for ref in initial_evidence},
-        producer_run_key=_classifier_run_key(
+        producer_run_key=producer_run_key
+        or _classifier_run_key(
             session_id=session_id,
             event_daily_path=event_daily_path,
             evidence=initial_evidence,
         ),
     )
+    if bool(delivery_job_id) != bool(delivery_lease_token):
+        raise ValueError("classifier delivery job and lease token must be provided together")
+    lease_seconds = max(
+        30,
+        int(getattr(cfg.classifier, "lease_seconds", 300)),
+        math.ceil(llm_mod.call_budget_seconds(cfg, "classifier")) + 60,
+    )
+    if delivery_job_id and lease_seconds > 21_600:
+        raise ValueError("classifier provider call budget exceeds the maximum safe lease")
+    if delivery_job_id:
+
+        def persist_commit(commit_state: tools_mod.CommitState) -> None:
+            with files_mod.review_operation_lock():
+                classifier_jobs.record_commit(
+                    conn,
+                    job_id=delivery_job_id,
+                    lease_token=delivery_lease_token,
+                    producer_run_key=commit_state.producer_run_key,
+                    result={
+                        "committed": True,
+                        "summary": commit_state.summary,
+                        "written_ids": list(commit_state.written_ids),
+                        "created_paths": list(commit_state.created_paths),
+                        "candidate_ids": list(commit_state.candidate_ids),
+                        "skipped_reason": "",
+                    },
+                    transaction_guard=(
+                        (lambda _connection: validate_delivery_input())
+                        if validate_delivery_input is not None
+                        else None
+                    ),
+                )
+
+        state.commit_callback = persist_commit
+
+        def guard_mutation(connection: sqlite3.Connection) -> None:
+            classifier_jobs.assert_lease(
+                connection,
+                job_id=delivery_job_id,
+                lease_token=delivery_lease_token,
+            )
+            if validate_delivery_input is not None:
+                validate_delivery_input()
+
+        state.mutation_guard = guard_mutation
     max_iter = cfg.writer.max_tool_iterations
+    last_error = ""
+    iterations = 0
 
     for iteration in range(max_iter):
+        iterations = iteration + 1
         try:
+            if delivery_job_id:
+                classifier_jobs.renew(
+                    conn,
+                    job_id=delivery_job_id,
+                    lease_token=delivery_lease_token,
+                    lease_seconds=lease_seconds,
+                )
             resp = llm_mod.call_llm(
                 cfg, "classifier",
                 messages=messages,
                 tools=tools_mod.CLASSIFIER_TOOL_SCHEMAS,
             )
+            if delivery_job_id:
+                # Renew after provider I/O as well so tool-side mutations have
+                # a full fenced interval even when the call used most of its
+                # configured timeout budget.
+                classifier_jobs.renew(
+                    conn,
+                    job_id=delivery_job_id,
+                    lease_token=delivery_lease_token,
+                    lease_seconds=lease_seconds,
+                )
+        except (
+            classifier_jobs.ClassifierJobInputChanged,
+            classifier_jobs.ClassifierJobLostLease,
+        ):
+            raise
         except Exception as exc:  # noqa: BLE001
+            last_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
                 "classifier %s: LLM call failed at iter %d: %s",
                 session_id, iteration, exc,
@@ -489,6 +783,7 @@ def _run_tool_loop(
         messages.append(assistant_msg)
 
         if not tool_calls:
+            last_error = "classifier ended without an explicit commit"
             logger.info("classifier %s: ended without commit at iter %d", session_id, iteration)
             break
 
@@ -504,10 +799,20 @@ def _run_tool_loop(
                         soft_limit_tokens=cfg.writer.soft_limit_tokens,
                         state=state,
                     )
+                except (
+                    classifier_jobs.ClassifierJobInputChanged,
+                    classifier_jobs.ClassifierJobLostLease,
+                ):
+                    raise
                 except Exception as exc:  # noqa: BLE001
                     result = {"error": f"tool crashed: {exc}"}
                     logger.exception("classifier tool %s failed", name)
             messages.append(_tool_response(assistant_msg, i, name, result))
+            if state.committed:
+                # Commit is terminal. Ignoring any later calls in the same
+                # assistant batch prevents effects from landing after the
+                # durable receipt was written.
+                break
 
         if state.committed:
             return ClassifyResult(
@@ -517,7 +822,9 @@ def _run_tool_loop(
                 written_ids=list(state.written_ids),
                 created_paths=list(state.created_paths),
                 candidate_ids=list(state.candidate_ids),
-                iterations=iteration + 1,
+                iterations=iterations,
+                producer_run_key=state.producer_run_key,
+                input_digest=input_digest,
             )
 
     return ClassifyResult(
@@ -527,7 +834,10 @@ def _run_tool_loop(
         written_ids=list(state.written_ids),
         created_paths=list(state.created_paths),
         candidate_ids=list(state.candidate_ids),
-        iterations=max_iter,
+        iterations=iterations,
+        error=last_error or "classifier exhausted tool iterations without commit",
+        producer_run_key=state.producer_run_key,
+        input_digest=input_digest,
     )
 
 
@@ -553,6 +863,30 @@ def _classifier_run_key(
     evidence: list[EvidenceRef],
 ) -> str:
     material = ["classifier-run-v1", session_id, event_daily_path]
+    material.extend(
+        sorted(
+            f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}"
+            for ref in evidence
+        )
+    )
+    return hashlib.sha256("\0".join(material).encode()).hexdigest()
+
+
+def _delivery_input_digest(
+    *,
+    event_daily_path: str,
+    session_id: str,
+    start: datetime,
+    end: datetime,
+    evidence: list[EvidenceRef],
+) -> str:
+    material = [
+        "classifier-input-v1",
+        session_id,
+        event_daily_path,
+        start.isoformat(),
+        end.isoformat(),
+    ]
     material.extend(
         sorted(
             f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}"

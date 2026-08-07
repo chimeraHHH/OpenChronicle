@@ -33,6 +33,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TEXT NOT NULL,
     flush_end TEXT,
     classified_end TEXT,
+    classifier_terminal_pending INTEGER NOT NULL DEFAULT 0,
+    classifier_terminal_entry_id TEXT NOT NULL DEFAULT '',
+    classifier_terminal_path TEXT NOT NULL DEFAULT '',
+    classifier_terminal_noop INTEGER NOT NULL DEFAULT 0,
     owner_pid INTEGER,
     owner_token TEXT
 );
@@ -40,7 +44,12 @@ CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_start ON sessions(start_time);
 CREATE INDEX IF NOT EXISTS idx_sessions_retry ON sessions(next_retry_at)
     WHERE status = 'failed';
+CREATE TABLE IF NOT EXISTS session_schema_migrations (
+    name TEXT PRIMARY KEY
+);
 """
+
+_TERMINAL_OBLIGATION_MIGRATION = "classifier-terminal-obligation-v1"
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
@@ -50,10 +59,62 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN flush_end TEXT")
     if "classified_end" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN classified_end TEXT")
+    if "classifier_terminal_pending" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN classifier_terminal_pending INTEGER NOT NULL DEFAULT 0"
+        )
+    if "classifier_terminal_entry_id" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN classifier_terminal_entry_id TEXT NOT NULL DEFAULT ''"
+        )
+    if "classifier_terminal_path" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN classifier_terminal_path TEXT NOT NULL DEFAULT ''"
+        )
+    if "classifier_terminal_noop" not in cols:
+        conn.execute(
+            "ALTER TABLE sessions ADD COLUMN classifier_terminal_noop INTEGER NOT NULL DEFAULT 0"
+        )
     if "owner_pid" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN owner_pid INTEGER")
     if "owner_token" not in cols:
         conn.execute("ALTER TABLE sessions ADD COLUMN owner_token TEXT")
+    # The completion marker is written only after the idempotent repair. SQLite
+    # DDL can commit before a process death; if that happens, the absent marker
+    # makes the next open retry instead of permanently losing an obligation.
+    migration_done = conn.execute(
+        "SELECT 1 FROM session_schema_migrations WHERE name=?",
+        (_TERMINAL_OBLIGATION_MIGRATION,),
+    ).fetchone()
+    if migration_done is not None:
+        return
+    rows = conn.execute(
+        """
+        SELECT id, start_time, end_time, classified_end FROM sessions
+         WHERE status='reduced' AND end_time IS NOT NULL
+           AND classifier_terminal_pending=0
+        """
+    ).fetchall()
+    for row in rows:
+        start = _parse_datetime(row["start_time"])
+        end = _parse_datetime(row["end_time"])
+        classified = _parse_datetime(row["classified_end"])
+        if start is None or end is None:
+            continue
+        cursor = classified or start
+        if _instant(cursor) < _instant(end):
+            conn.execute(
+                """
+                UPDATE sessions
+                   SET classifier_terminal_pending=1
+                 WHERE id=? AND classifier_terminal_pending=0
+                """,
+                (row["id"],),
+            )
+    conn.execute(
+        "INSERT OR IGNORE INTO session_schema_migrations(name) VALUES (?)",
+        (_TERMINAL_OBLIGATION_MIGRATION,),
+    )
 
 
 @dataclass
@@ -69,6 +130,10 @@ class SessionRow:
     updated_at: datetime | None = None
     flush_end: datetime | None = None
     classified_end: datetime | None = None
+    classifier_terminal_pending: bool = False
+    classifier_terminal_entry_id: str = ""
+    classifier_terminal_path: str = ""
+    classifier_terminal_noop: bool = False
     owner_pid: int | None = None
     owner_token: str | None = None
 
@@ -140,11 +205,93 @@ def mark_ended(conn: sqlite3.Connection, session_id: str, end_time: datetime) ->
     return result.rowcount == 1
 
 
-def mark_reduced(conn: sqlite3.Connection, session_id: str) -> None:
+def mark_reduced(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    terminal_entry_id: str = "",
+    terminal_path: str = "",
+    terminal_noop: bool = False,
+) -> None:
     conn.execute(
-        "UPDATE sessions SET status='reduced', updated_at=? WHERE id=?",
-        (datetime.now().astimezone().isoformat(), session_id),
+        """
+        UPDATE sessions
+           SET classifier_terminal_pending=CASE
+                   WHEN status!='reduced'
+                     OR classifier_terminal_entry_id<>?
+                     OR classifier_terminal_path<>?
+                     OR classifier_terminal_noop<>?
+                   THEN 1 ELSE classifier_terminal_pending END,
+               status='reduced',
+               classifier_terminal_entry_id=?, classifier_terminal_path=?,
+               classifier_terminal_noop=?,
+               updated_at=?
+         WHERE id=?
+        """,
+        (
+            terminal_entry_id,
+            terminal_path,
+            1 if terminal_noop else 0,
+            terminal_entry_id,
+            terminal_path,
+            1 if terminal_noop else 0,
+            datetime.now().astimezone().isoformat(),
+            session_id,
+        ),
     )
+
+
+def clear_classifier_terminal_pending(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    terminal_entry_id: str,
+) -> bool:
+    result = conn.execute(
+        """
+        UPDATE sessions
+           SET classifier_terminal_pending=0, updated_at=?
+         WHERE id=? AND classifier_terminal_pending=1
+           AND classifier_terminal_entry_id=?
+        """,
+        (
+            datetime.now().astimezone().isoformat(),
+            session_id,
+            terminal_entry_id,
+        ),
+    )
+    return result.rowcount == 1
+
+
+def backfill_classifier_terminal_intent(
+    conn: sqlite3.Connection,
+    session_id: str,
+    *,
+    terminal_entry_id: str,
+    terminal_path: str,
+    terminal_noop: bool,
+) -> bool:
+    """Attach upgrade-time terminal evidence without rearming newer work."""
+    if not terminal_path:
+        raise ValueError("terminal classifier path is required")
+    result = conn.execute(
+        """
+        UPDATE sessions
+           SET classifier_terminal_entry_id=?, classifier_terminal_path=?,
+               classifier_terminal_noop=?,
+               updated_at=?
+         WHERE id=? AND classifier_terminal_pending=1
+           AND classifier_terminal_entry_id='' AND classifier_terminal_path=''
+        """,
+        (
+            terminal_entry_id,
+            terminal_path,
+            1 if terminal_noop else 0,
+            datetime.now().astimezone().isoformat(),
+            session_id,
+        ),
+    )
+    return result.rowcount == 1
 
 
 def mark_failed(
@@ -220,6 +367,30 @@ def list_active(conn: sqlite3.Connection) -> list[SessionRow]:
         "SELECT * FROM sessions WHERE status='active' ORDER BY start_time ASC"
     ).fetchall()
     return [_to_row(r) for r in rows]
+
+
+def list_reduced_needing_classification(conn: sqlite3.Connection) -> list[SessionRow]:
+    """Return terminal sessions whose classifier bookmark has not reached the end.
+
+    Comparisons happen on parsed instants rather than ISO text so rows spanning
+    UTC-offset changes cannot be skipped by lexical ordering.
+    """
+    rows = conn.execute(
+        """
+        SELECT * FROM sessions
+         WHERE status='reduced' AND end_time IS NOT NULL
+         ORDER BY start_time ASC
+        """
+    ).fetchall()
+    pending: list[SessionRow] = []
+    for raw in rows:
+        row = _to_row(raw)
+        if row.end_time is None:
+            continue
+        cursor = row.classified_end or row.start_time
+        if row.classifier_terminal_pending or _instant(cursor) < _instant(row.end_time):
+            pending.append(row)
+    return pending
 
 
 def next_session_start_after(conn: sqlite3.Connection, start_time: datetime) -> datetime | None:
@@ -403,6 +574,17 @@ def _to_row(r: sqlite3.Row) -> SessionRow:
         owner_token = str(r["owner_token"]) if r["owner_token"] else None
     except (IndexError, KeyError, TypeError, ValueError):
         owner_token = None
+    classifier_terminal_pending = False
+    classifier_terminal_entry_id = ""
+    classifier_terminal_path = ""
+    classifier_terminal_noop = False
+    try:
+        classifier_terminal_pending = bool(r["classifier_terminal_pending"])
+        classifier_terminal_entry_id = str(r["classifier_terminal_entry_id"] or "")
+        classifier_terminal_path = str(r["classifier_terminal_path"] or "")
+        classifier_terminal_noop = bool(r["classifier_terminal_noop"])
+    except (IndexError, KeyError, TypeError, ValueError):
+        pass
     return SessionRow(
         id=r["id"],
         start_time=_dt(r["start_time"]) or datetime.now().astimezone(),
@@ -415,6 +597,10 @@ def _to_row(r: sqlite3.Row) -> SessionRow:
         updated_at=_dt(r["updated_at"]),
         flush_end=flush_end,
         classified_end=classified_end,
+        classifier_terminal_pending=classifier_terminal_pending,
+        classifier_terminal_entry_id=classifier_terminal_entry_id,
+        classifier_terminal_path=classifier_terminal_path,
+        classifier_terminal_noop=classifier_terminal_noop,
         owner_pid=owner_pid,
         owner_token=owner_token,
     )

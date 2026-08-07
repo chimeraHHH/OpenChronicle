@@ -200,11 +200,39 @@ Setting `enabled = false` disables both the S2 reducer and the classifier. Sessi
 ```toml
 [classifier]
 interval_minutes = 30           # durable-fact extraction cadence inside active sessions (min 5)
+retry_seconds = 60              # durable delivery base backoff (effective 1..3600)
+lease_seconds = 300             # minimum claim/renewal lease (effective min 30)
 ```
 
-While a session is active, the classifier wakes up every `interval_minutes` and proposes durable facts from event-daily entries written since its last pass. The terminal reduce (at session end) attempts one more pass over whatever trailing window the tick did not reach. Successful passes advance `classified_end`. A stable run key plus proposal slot makes crash replay idempotent even when provider wording changes. Proposals remain pending until explicit local review; classifier tools cannot mutate Markdown.
+While a session is active, `interval_minutes` controls how much new reducer
+coverage must accumulate between `classified_end` (or session start) and the
+durable `flush_end` before a periodic delivery is requested. Terminal reduction
+stores a separate exact-entry request, or a typed zero-block proof, for the
+trailing/final range. Only a
+durable commit-or-skip receipt followed by atomic finalization advances
+`classified_end`. Stable job/run keys plus proposal slots make local effects
+replay-safe even when a provider call repeats. Proposals remain pending until
+explicit local review; classifier tools cannot mutate Markdown.
 
-Values `< 5` are clamped to 5 to keep LLM cost bounded. Pair with `[session] flush_minutes`: the reducer flushes at a higher frequency than the classifier, so a classifier tick always has fresh entries to look at.
+`interval_minutes` values below 5 are clamped to 5. Pair it with
+`session.flush_minutes`: the reducer normally materializes event entries more
+frequently than the classifier requests them.
+
+`retry_seconds` is the base delay for an unreceipted failed delivery. The
+worker applies exponential backoff capped at 3600 seconds; the configured base
+is clamped to 1–3600. The same value also influences how often the daemon looks
+for new, expired, committed, or due work, but that polling sleep is separately
+clamped to 5–60 seconds. It does not configure the LLM client's internal retry
+policy.
+
+`lease_seconds` is the minimum SQLite ownership lease used to claim and renew a
+classifier job. The effective lease is at least 30 seconds and is automatically
+raised to cover the classifier provider's complete call budget plus a 60-second
+margin. The worker renews immediately before and after each provider call. An
+effective value above 21600 seconds (six hours) fails closed rather than running
+without a bounded fence. Lease expiry does not cancel an in-flight provider;
+it prevents that stale worker from persisting proposals or a receipt after a
+replacement worker claims a new token.
 
 ## `[writer]`
 

@@ -43,6 +43,13 @@ CREATE TABLE IF NOT EXISTS files (
 CREATE INDEX IF NOT EXISTS idx_files_status ON files(status);
 CREATE INDEX IF NOT EXISTS idx_files_prefix ON files(prefix);
 
+CREATE TABLE IF NOT EXISTS content_generations (
+    scope TEXT PRIMARY KEY,
+    generation INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO content_generations(scope, generation)
+VALUES ('reducer', 0);
+
 -- Mirrors capture-buffer/*.json S1 fields for keyword search. The JSON file on
 -- disk stays authoritative for screenshots (not duplicated here). Populated
 -- write-through from capture/scheduler; rows removed by cleanup_buffer when the
@@ -145,12 +152,14 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     from ..provenance import store as provenance_store
     from ..session import store as session_store
     from ..timeline import store as timeline_store
+    from ..writer import classifier_jobs
 
     timeline_store.ensure_schema(conn)
     session_store.ensure_schema(conn)
     provenance_store.ensure_schema(conn)
     candidate_store.ensure_schema(conn)
     daily_wrap_store.ensure_schema(conn)
+    classifier_jobs.ensure_schema(conn)
     _secure_db_files(db_path)
     return conn
 
@@ -201,6 +210,26 @@ def checkpoint(mode: str = "TRUNCATE") -> tuple[int, int, int]:
         if row is None:
             return (0, 0, 0)
         return (int(row[0]), int(row[1]), int(row[2]))
+
+
+def content_generation(conn: sqlite3.Connection, scope: str) -> int:
+    row = conn.execute(
+        "SELECT generation FROM content_generations WHERE scope=?",
+        (scope,),
+    ).fetchone()
+    if row is None:
+        raise ValueError(f"unknown content generation scope: {scope}")
+    return int(row[0])
+
+
+def bump_content_generation(conn: sqlite3.Connection, scope: str) -> int:
+    result = conn.execute(
+        "UPDATE content_generations SET generation=generation+1 WHERE scope=?",
+        (scope,),
+    )
+    if result.rowcount != 1:
+        raise ValueError(f"unknown content generation scope: {scope}")
+    return content_generation(conn, scope)
 
 
 # ─── files table ───────────────────────────────────────────────────────────

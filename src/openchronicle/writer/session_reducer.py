@@ -28,7 +28,7 @@ import json
 import re
 import sqlite3
 import threading
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -63,6 +63,19 @@ _MAX_RETRIES: int = len(_RETRY_BACKOFF_MINUTES)
 _REDUCTION_LOCK_SHARDS = 256
 
 
+class ReducerInputChanged(RuntimeError):
+    """A privacy reset invalidated evidence read by an in-flight reducer."""
+
+
+@contextmanager
+def _publish_fence(conn: sqlite3.Connection, generation: int):
+    """Serialize publish with clean and reject pre-clean reducer snapshots."""
+    with files_mod.review_operation_lock():
+        if fts.content_generation(conn, "reducer") != generation:
+            raise ReducerInputChanged("reducer input was invalidated by explicit cleanup")
+        yield
+
+
 @dataclass
 class ReduceResult:
     session_id: str
@@ -95,30 +108,33 @@ def reduce_session(
     this is safe to call from a background thread.
     """
     with files_mod.file_lock(_reduction_lock_path(session_id)), fts.cursor() as conn:
+        generation = fts.content_generation(conn, "reducer")
         existing = session_store.get_by_id(conn, session_id)
         if existing is None:
-            session_store.insert(
-                conn,
-                session_store.SessionRow(
-                    id=session_id,
-                    start_time=start_time,
-                    end_time=end_time,
-                    status="ended",
-                ),
-            )
+            with _publish_fence(conn, generation):
+                session_store.insert(
+                    conn,
+                    session_store.SessionRow(
+                        id=session_id,
+                        start_time=start_time,
+                        end_time=end_time,
+                        status="ended",
+                    ),
+                )
             existing = session_store.get_by_id(conn, session_id)
-        recovered_flush_end = _recover_materialized_flushes(
-            conn,
-            session_id=session_id,
-            session_start=start_time,
-            upper_bound=end_time,
-        )
         flush_end = existing.flush_end if existing and existing.flush_end else None
-        if recovered_flush_end is not None and (
-            flush_end is None or _instant(recovered_flush_end) > _instant(flush_end)
-        ):
-            session_store.set_flush_end(conn, session_id, recovered_flush_end)
-            flush_end = recovered_flush_end
+        with _publish_fence(conn, generation):
+            recovered_flush_end = _recover_materialized_flushes(
+                conn,
+                session_id=session_id,
+                session_start=start_time,
+                upper_bound=end_time,
+            )
+            if recovered_flush_end is not None and (
+                flush_end is None or _instant(recovered_flush_end) > _instant(flush_end)
+            ):
+                session_store.set_flush_end(conn, session_id, recovered_flush_end)
+                flush_end = recovered_flush_end
         window_start = (
             flush_end
             if flush_end is not None and _instant(flush_end) > _instant(start_time)
@@ -133,6 +149,7 @@ def reduce_session(
             window_start=window_start,
             window_end=end_time,
             is_final=True,
+            generation=generation,
         )
 
 
@@ -152,34 +169,37 @@ def flush_active_session(
     flush covers the missed window).
     """
     with files_mod.file_lock(_reduction_lock_path(session_id)), fts.cursor() as conn:
+        generation = fts.content_generation(conn, "reducer")
         existing = session_store.get_by_id(conn, session_id)
         if existing is None:
-            session_store.insert(
-                conn,
-                session_store.SessionRow(
-                    id=session_id,
-                    start_time=session_start,
-                    status="active",
-                ),
-            )
+            with _publish_fence(conn, generation):
+                session_store.insert(
+                    conn,
+                    session_store.SessionRow(
+                        id=session_id,
+                        start_time=session_start,
+                        status="active",
+                    ),
+                )
             existing = session_store.get_by_id(conn, session_id)
 
         if existing is not None and existing.status in ("reduced", "ended"):
             # Session already closed from under us — nothing to flush.
             return None
 
-        recovered_flush_end = _recover_materialized_flushes(
-            conn,
-            session_id=session_id,
-            session_start=session_start,
-            upper_bound=now,
-        )
         flush_end = existing.flush_end if existing and existing.flush_end else None
-        if recovered_flush_end is not None and (
-            flush_end is None or _instant(recovered_flush_end) > _instant(flush_end)
-        ):
-            session_store.set_flush_end(conn, session_id, recovered_flush_end)
-            flush_end = recovered_flush_end
+        with _publish_fence(conn, generation):
+            recovered_flush_end = _recover_materialized_flushes(
+                conn,
+                session_id=session_id,
+                session_start=session_start,
+                upper_bound=now,
+            )
+            if recovered_flush_end is not None and (
+                flush_end is None or _instant(recovered_flush_end) > _instant(flush_end)
+            ):
+                session_store.set_flush_end(conn, session_id, recovered_flush_end)
+                flush_end = recovered_flush_end
         window_start = (
             flush_end
             if flush_end is not None and _instant(flush_end) > _instant(session_start)
@@ -197,6 +217,7 @@ def flush_active_session(
             window_start=window_start,
             window_end=now,
             is_final=False,
+            generation=generation,
         )
         return result if result.written else None
 
@@ -217,16 +238,18 @@ def _reduce_window_locked(
     window_start: datetime,
     window_end: datetime,
     is_final: bool,
+    generation: int,
 ) -> ReduceResult:
     existing = session_store.get_by_id(conn, session_id)
     if existing is None and is_final and session_end is not None:
-        session_store.insert(
-            conn,
-            session_store.SessionRow(
-                id=session_id, start_time=session_start, end_time=session_end,
-                status="ended",
-            ),
-        )
+        with _publish_fence(conn, generation):
+            session_store.insert(
+                conn,
+                session_store.SessionRow(
+                    id=session_id, start_time=session_start, end_time=session_end,
+                    status="ended",
+                ),
+            )
         existing = session_store.get_by_id(conn, session_id)
 
     # Read coverage before blocks. If the producer commits between these two
@@ -245,24 +268,52 @@ def _reduce_window_locked(
         if is_final
         else max((block.end_time for block in blocks), key=_instant, default=window_start)
     )
-    event_daily_name = _event_daily_name(window_start)
+    # A session owns one event-daily file even when an incremental flush
+    # crosses local midnight. This keeps downstream delivery keyed to the
+    # session rather than to whichever window happened to run last.
+    event_daily_name = _event_daily_name(session_start)
     stable_id = _event_entry_id(
         session_id=session_id,
         start_time=window_start,
         end_time=materialized_end,
         is_final=is_final,
     )
-    materialized_entry = _repair_existing_event_entry(
-        conn,
-        name=event_daily_name,
-        entry_id=stable_id,
-    )
-    if materialized_entry is not None:
-        already_reduced = existing is not None and existing.status == "reduced"
-        if is_final:
-            session_store.mark_reduced(conn, session_id)
+    materialized_entry: files_mod.ParsedEntry | None = None
+    candidate_names = [
+        event_daily_name,
+        *(
+            name
+            for name in _event_daily_names_between(session_start, window_end)
+            if name != event_daily_name
+        ),
+    ]
+    with _publish_fence(conn, generation):
+        for candidate_name in candidate_names:
+            materialized_entry = _repair_existing_event_entry(
+                conn,
+                name=candidate_name,
+                entry_id=stable_id,
+            )
+            if materialized_entry is not None:
+                # Upgrades may find a pre-outbox cross-midnight entry in the
+                # old window-start daily file. Keep its authoritative location
+                # rather than copying the deterministic ID into the new path.
+                event_daily_name = candidate_name
+                break
+        if materialized_entry is not None:
+            already_reduced = existing is not None and existing.status == "reduced"
+            if is_final:
+                session_store.mark_reduced(
+                    conn,
+                    session_id,
+                    terminal_entry_id=stable_id,
+                    terminal_path=event_daily_name,
+                )
+            else:
+                session_store.set_flush_end(conn, session_id, materialized_end)
         else:
-            session_store.set_flush_end(conn, session_id, materialized_end)
+            already_reduced = False
+    if materialized_entry is not None:
         logger.info(
             "session %s replay recovered materialized entry %s",
             session_id,
@@ -315,7 +366,13 @@ def _reduce_window_locked(
                 "session %s: terminal reduce has 0 blocks in %s → %s, marking reduced (no-op)",
                 session_id, window_start.isoformat(), window_end.isoformat(),
             )
-            session_store.mark_reduced(conn, session_id)
+            with _publish_fence(conn, generation):
+                session_store.mark_reduced(
+                    conn,
+                    session_id,
+                    terminal_path=event_daily_name,
+                    terminal_noop=True,
+                )
         else:
             logger.debug(
                 "session %s: flush has 0 new blocks since %s",
@@ -376,11 +433,13 @@ def _reduce_window_locked(
             next_retry_at = datetime.now().astimezone() + timedelta(
                 minutes=_RETRY_BACKOFF_MINUTES[retry_count]
             )
-            session_store.mark_failed(
-                conn, session_id,
-                error="reducer LLM call failed or returned unparseable JSON",
-                next_retry_at=next_retry_at,
-            )
+            with _publish_fence(conn, generation):
+                session_store.mark_failed(
+                    conn,
+                    session_id,
+                    error="reducer LLM call failed or returned unparseable JSON",
+                    next_retry_at=next_retry_at,
+                )
             logger.warning(
                 "session %s: reducer failed (retry %d/%d), next attempt at %s",
                 session_id, retry_count + 1, _MAX_RETRIES, next_retry_at.isoformat(),
@@ -400,25 +459,32 @@ def _reduce_window_locked(
         sub_tasks = _heuristic_payload(blocks)["sub_tasks"]
     sub_tasks = [_attach_drill_down_breadcrumb(s) for s in sub_tasks]
 
-    entry_id, path_name, entry_created = _append_event_entry(
-        conn,
-        session_id=session_id,
-        start_time=window_start,
-        end_time=materialized_end,
-        summary=summary,
-        sub_tasks=sub_tasks,
-        heuristic=not succeeded,
-        is_final=is_final,
-        blocks=blocks,
-    )
+    with _publish_fence(conn, generation):
+        entry_id, path_name, entry_created = _append_event_entry(
+            conn,
+            event_daily_name=event_daily_name,
+            session_id=session_id,
+            start_time=window_start,
+            end_time=materialized_end,
+            summary=summary,
+            sub_tasks=sub_tasks,
+            heuristic=not succeeded,
+            is_final=is_final,
+            blocks=blocks,
+        )
 
-    if is_final:
-        # ``flush_end`` is incremental progress, not terminal completion. Do
-        # not advance it before the terminal status: if the process dies after
-        # the Markdown rename, replay must select the same window and stable ID.
-        session_store.mark_reduced(conn, session_id)
-    else:
-        session_store.set_flush_end(conn, session_id, materialized_end)
+        if is_final:
+            # ``flush_end`` is incremental progress, not terminal completion.
+            # Keep the append and durable terminal intent under one reset
+            # generation fence so explicit cleanup cannot split them.
+            session_store.mark_reduced(
+                conn,
+                session_id,
+                terminal_entry_id=entry_id,
+                terminal_path=path_name,
+            )
+        else:
+            session_store.set_flush_end(conn, session_id, materialized_end)
 
     if not entry_created:
         logger.info("session %s replay reused existing entry %s", session_id, entry_id)
@@ -794,6 +860,91 @@ def _event_daily_names_between(start_time: datetime, end_time: datetime) -> list
     return names
 
 
+def recover_legacy_terminal_intent(
+    conn: sqlite3.Connection,
+    session: session_store.SessionRow,
+) -> tuple[str, str, bool] | None:
+    """Recover the exact terminal reducer entry for a pre-outbox session.
+
+    Older ``reduced`` rows did not persist the final entry ID or path. The
+    deterministic reducer ID lets an upgrade bind that evidence without a new
+    model call, including the former cross-midnight path convention. ``None``
+    means the row cannot yet be proved complete and must remain pending.
+    """
+    if session.end_time is None:
+        return None
+    window_start = session.flush_end or session.start_time
+    expected_id = _event_entry_id(
+        session_id=session.id,
+        start_time=window_start,
+        end_time=session.end_time,
+        is_final=True,
+    )
+    legacy_path = _event_daily_name(window_start)
+    canonical_path = _event_daily_name(session.start_time)
+    candidates = [
+        legacy_path,
+        canonical_path,
+        *(
+            name
+            for name in _event_daily_names_between(session.start_time, session.end_time)
+            if name not in (legacy_path, canonical_path)
+        ),
+    ]
+    for name in candidates:
+        path = files_mod.memory_path(name)
+        if not path.exists():
+            continue
+        try:
+            parsed = files_mod.read_file(path)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "session %s cannot verify legacy terminal file %s: %s",
+                session.id,
+                name,
+                exc,
+            )
+            return None
+        entry = next((item for item in parsed.entries if item.id == expected_id), None)
+        if entry is not None:
+            if f"sid:{session.id}" not in entry.tags:
+                logger.warning(
+                    "session %s legacy terminal entry %s has the wrong session tag",
+                    session.id,
+                    expected_id,
+                )
+                return None
+            return expected_id, name, False
+
+    indexed = conn.execute(
+        "SELECT path FROM entries WHERE id=? LIMIT 1",
+        (expected_id,),
+    ).fetchone()
+    if indexed is not None:
+        logger.warning(
+            "session %s legacy terminal entry %s is indexed but not materialized",
+            session.id,
+            expected_id,
+        )
+        return None
+
+    # A terminal reducer with any trailing timeline evidence always wrote an
+    # entry (using a heuristic fallback after exhausted model retries). Only a
+    # truly empty trailing window is allowed to bind an empty terminal ID.
+    if _blocks_for_session(
+        conn,
+        window_start,
+        session.end_time,
+        complete_only=False,
+    ):
+        logger.warning(
+            "session %s has terminal evidence but no recoverable reducer entry",
+            session.id,
+        )
+        return None
+    return "", canonical_path, True
+
+
 def _window_end_tag(end_time: datetime) -> str:
     return f"oc-window-end:{capture_filenames.safe_timestamp(end_time.isoformat())}"
 
@@ -935,6 +1086,7 @@ def _ensure_event_daily_file(conn: sqlite3.Connection, name: str, *, day: str) -
 def _append_event_entry(
     conn: sqlite3.Connection,
     *,
+    event_daily_name: str,
     session_id: str,
     start_time: datetime,
     end_time: datetime,
@@ -944,8 +1096,8 @@ def _append_event_entry(
     is_final: bool,
     blocks: list[timeline_store.TimelineBlock],
 ) -> tuple[str, str, bool]:
-    day = start_time.strftime("%Y-%m-%d")
-    name = _event_daily_name(start_time)
+    name = event_daily_name
+    day = name.removeprefix("event-").removesuffix(".md")
     _ensure_event_daily_file(conn, name, day=day)
 
     marker = "" if is_final else " [flush]"

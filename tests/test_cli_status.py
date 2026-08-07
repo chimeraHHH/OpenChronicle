@@ -288,6 +288,7 @@ def test_status_renders_new_fields(ac_root: Path) -> None:
     assert "Uptime" in result.output
     assert "Health" in result.output
     assert "Last Capture" in result.output
+    assert "Classifier Delivery" in result.output
 
 
 def test_status_shows_version(ac_root: Path) -> None:
