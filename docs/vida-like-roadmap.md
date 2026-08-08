@@ -18,6 +18,11 @@ A separate **Action Plane** will own proactive suggestions, typed plans,
 deterministic policy checks, user approvals, capability-scoped execution,
 verification, audit, and undo.
 
+The point-in-time official-source research and capability gap map live in
+[vida-public-product-research.md](vida-public-product-research.md). Public
+marketing claims are inputs, not independent quality evidence or permission to
+copy Vida's code, assets, brand, or private implementation.
+
 The memory classifier must never receive file, browser, messaging, or other
 side-effecting tools. Screen-derived text is untrusted data, not an instruction
 source.
@@ -54,14 +59,18 @@ Memory Candidate        Suggestion ranker
 
 ## Product slices
 
-The first pilot targets five independently specified workflows:
+The public-parity pilot targets Vida's five publicly named workflows. An
+OpenChronicle-specific work-resumption slice is kept separately because Vida's
+current public “Resume Rescue” means job-application résumé preparation, not
+reconstructing interrupted work.
 
 | Workflow | Clean-room behavior | Initial autonomy |
 |---|---|---|
 | Daily Wrap | Evidence-backed summary of completed, open, and blocked work | Suggest |
 | Prompt Rescue | Prepare a stronger prompt from selected text and project context | Prepare; never submit |
 | Reply Rescue | Prepare an evidence-backed reply draft in the user's style | Prepare; never send |
-| Resume Rescue | Reconstruct the last state and next step after an interruption | Suggest / Prepare |
+| Résumé Rescue | Prepare a job-targeted résumé from user-selected experience, documents, and reviewed memory | Prepare; never submit an application |
+| Work Resumption | Reconstruct the last state and next step after an interruption | Suggest / Prepare |
 | Workspace Cleanup | Preview a scoped file move/rename plan with conflicts and undo | Prepare, then approved Act |
 
 Sending, publishing, permanent deletion, payment, unrestricted shell, and
@@ -125,6 +134,24 @@ guarantee covers replay-safe local candidate delivery; it does not promise
 exactly-once provider invocation and does not convert delivery commit into user
 approval.
 
+Process-level runtime validation is tracked in
+[#2](https://github.com/chimeraHHH/OpenChronicle/issues/2). The current runtime
+branch adds authenticated test-only `SIGKILL` boundaries, fresh-process daemon
+restart/PID tests, deterministic capture/Markdown/index reconciliation,
+a shared suspend-aware daemon-generation clock for capture/session/timeline,
+exact persisted capture timestamps, wake-before-refresh session cuts,
+receipt-gated capture cleanup, a parent-owned provider process deadline, and a
+closed-schema 10,000-capture/soak harness. Late captures can re-materialize an
+unconsumed timeline block; a consumed or invalid block instead preserves raw
+evidence and stalls the watermark. This is fail-closed safety, not automatic
+convergence, because downstream cascade replay is not implemented or validated.
+Local 10,000-capture replay evidence passes, but #2 remains open: no qualifying
+24-hour run has been recorded, the synthetic storage worker does not measure
+the production daemon queue, and downstream-level cascade recovery has not
+been demonstrated. An unsigned report proves only internal consistency;
+trusted runner logs and the reported artifact digest are still required to
+establish its origin.
+
 Stage 0 remains open after #4 as well: its broader privacy, supervision,
 model-call, crash-recovery, and seven-day-soak exit criteria must be evaluated
 as a set. No item above should be read as a claim that Stage 0 is complete.
@@ -152,7 +179,8 @@ privacy UX is validated on a signed macOS build.
 
 - Privacy-filtered real-time path independent of the minute timeline.
 - Opportunity detectors, ranking, dedupe, cooldown, quiet hours, and daily budget.
-- Prompt Rescue, Reply Rescue, and Resume Rescue without side effects.
+- Prompt Rescue, Reply Rescue, Résumé Rescue, and Work Resumption without side
+  effects.
 - Feedback and proactive-quality evaluation.
 
 ### Stage 3 — safe Action Plane
@@ -220,7 +248,9 @@ action needs a verified postcondition.
 ## Current implementation order
 
 1. CI and reproducible baseline.
-2. Runtime/session/model-call reliability, including #4 fault-test acceptance.
+2. Runtime/session/model-call reliability under #2; the current Draft remains
+   incomplete until a qualifying 24-hour soak, real production-daemon queue
+   evidence, and downstream cascade-replay acceptance are recorded.
 3. Observation identity, event fidelity, atomic private persistence.
 4. Capture policy, redaction, exact-window identity, and retention. **#3 is in
    progress; implementation and an AX/privacy audit protocol exist, but live

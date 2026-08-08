@@ -25,6 +25,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from ..config import Config
+from ..local_time import local_now
 from ..logger import get
 from ..store import fts
 from ..writer import classifier_delivery, classifier_jobs, session_reducer
@@ -56,9 +57,16 @@ def _pid_is_alive(pid: int) -> bool:
 
 
 def _instant(value: datetime) -> datetime:
-    if value.tzinfo is None:
+    if value.tzinfo is None or value.utcoffset() is None:
         value = value.astimezone()
     return value.astimezone(UTC)
+
+
+def _add_elapsed(value: datetime, delta: timedelta) -> datetime:
+    """Add real elapsed time without losing the local display timezone."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value + delta
+    return (_instant(value) + delta).astimezone(value.tzinfo)
 
 
 def _earlier(left: datetime, right: datetime) -> datetime:
@@ -81,7 +89,7 @@ def _infer_recovery_end(
     # a fast restart must not use the upstream one-minute fallback beyond the
     # restart boundary, where it could overlap the new boot's first session.
     upper_bound = _later(start, restart_time)
-    ceiling = start + timedelta(hours=max(0, max_session_hours))
+    ceiling = _add_elapsed(start, timedelta(hours=max(0, max_session_hours)))
     upper_bound = _earlier(upper_bound, ceiling)
 
     next_start = session_store.next_session_start_after(conn, start)
@@ -93,7 +101,7 @@ def _infer_recovery_end(
         start=start,
         end=upper_bound,
     )
-    candidate = block_end or (start + _EMPTY_SESSION_FALLBACK)
+    candidate = block_end or _add_elapsed(start, _EMPTY_SESSION_FALLBACK)
     return _earlier(upper_bound, _later(start, candidate))
 
 
@@ -115,7 +123,7 @@ def recover_orphan_sessions(
     Updates are conditional on ``status='active'``, so retrying after a crash
     during recovery is idempotent.
     """
-    restart_time = now or datetime.now().astimezone()
+    restart_time = now or local_now()
     owner_is_alive = pid_is_alive or _pid_is_alive
     recovered = 0
 
@@ -161,6 +169,7 @@ def build_manager(
     cfg: Config,
     *,
     daemon_lease_held: bool = False,
+    clock: Callable[[], datetime] = local_now,
 ) -> SessionManager:
     """Construct a SessionManager whose end-callback wires the reducer."""
 
@@ -169,6 +178,7 @@ def build_manager(
     try:
         recovered = recover_orphan_sessions(
             cfg,
+            now=clock(),
             daemon_lease_held=daemon_lease_held,
         )
         if recovered:
@@ -249,6 +259,7 @@ def build_manager(
         on_session_start=_on_start,
         on_session_persist=_persist_end,
         on_session_end=_on_end,
+        clock=clock,
     )
 
 
@@ -291,7 +302,7 @@ async def run_flush_tick(cfg: Config, manager: SessionManager) -> None:
                 cfg,
                 session_id=session_id,
                 session_start=session_start,
-                now=datetime.now().astimezone(),
+                now=local_now(),
             )
         except asyncio.CancelledError:
             raise
@@ -359,13 +370,23 @@ async def run_pending_reduction_tick(cfg: Config) -> None:
             logger.error("pending reducer tick failed: %s", exc, exc_info=True)
 
 
-def _seconds_until_next_local(hour: int, minute: int) -> float:
+def _seconds_until_next_local(
+    hour: int,
+    minute: int,
+    *,
+    now: datetime | None = None,
+) -> float:
     """Seconds from now until the next local-time HH:MM."""
-    now = datetime.now().astimezone()
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
+    now = now or local_now()
+    if now.tzinfo is None or now.utcoffset() is None:
+        now = now.astimezone()
+    # Pick the first occurrence of an ambiguous fall-back time so this daily
+    # job cannot fire twice on the same local date. A nonexistent spring time
+    # maps through UTC to its corresponding post-gap instant.
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0, fold=0)
+    if _instant(target) <= _instant(now):
         target = target + timedelta(days=1)
-    return (target - now).total_seconds()
+    return (_instant(target) - _instant(now)).total_seconds()
 
 
 async def run_daily_safety_net(cfg: Config, manager: SessionManager) -> None:

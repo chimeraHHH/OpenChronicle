@@ -9,6 +9,7 @@ from datetime import datetime
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from ..config import CaptureConfig
+from ..provenance.models import canonical_digest
 
 
 @dataclass(frozen=True)
@@ -387,6 +388,31 @@ def evaluate_stored_observation(
     if _has_window_title_filters(cfg) and not _is_single_window_content_observation(observation):
         return CaptureDecision(False, "unverifiable_window_content")
     return CaptureDecision(True)
+
+
+def stored_observation_policy_digest(cfg: CaptureConfig) -> str:
+    """Stable identity for every policy field used at delayed capture egress."""
+    return canonical_digest(
+        {
+            "version": 2,
+            "allowed_bundle_ids": cfg.allowed_bundle_ids,
+            "excluded_bundle_ids": cfg.excluded_bundle_ids,
+            "excluded_app_names": cfg.excluded_app_names,
+            "excluded_window_title_patterns": cfg.excluded_window_title_patterns,
+            "allowed_url_patterns": cfg.allowed_url_patterns,
+            "excluded_url_patterns": cfg.excluded_url_patterns,
+            "deny_unknown_windows": cfg.deny_unknown_windows,
+            # ``evaluate_window`` rejects a malformed screenshot flag even
+            # though the valid True/False choice does not change delayed text
+            # egress. Bind the validity bit so retired raw evidence cannot
+            # attest a block under a configuration the evaluator would deny,
+            # without needlessly invalidating history when pixels are toggled.
+            "include_screenshot_is_boolean": isinstance(
+                cfg.include_screenshot,
+                bool,
+            ),
+        }
+    )
 
 
 def _has_window_title_filters(cfg: CaptureConfig) -> bool:

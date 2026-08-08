@@ -7,6 +7,7 @@ import sqlite3
 import time
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from openchronicle import config as config_mod
 from openchronicle.provenance import store as provenance_store
@@ -297,6 +298,31 @@ def test_timeline_inference_is_bounded_by_restart_and_max_duration(
     )
 
     assert _row("sess_bounded").end_time == restart_time
+
+
+def test_pending_reduction_lower_bound_uses_elapsed_time_across_fallback(
+    ac_root: Path,
+) -> None:
+    zone = ZoneInfo("America/New_York")
+    end = datetime(2026, 11, 1, 1, 30, tzinfo=zone, fold=1)
+    _insert_active("sess_dst_bound", end - timedelta(days=1), owner_pid=0)
+    with fts.cursor() as conn:
+        session_store.mark_ended(conn, "sess_dst_bound", end)
+        candidate = session_store.earliest_pending_reduction_start(
+            conn,
+            max_session_hours=1,
+        )
+
+    assert candidate is not None
+    assert candidate.astimezone(UTC) == datetime(
+        2026,
+        11,
+        1,
+        1,
+        30,
+        tzinfo=zone,
+        fold=0,
+    ).astimezone(UTC)
 
 
 def test_owner_pid_schema_migrates_legacy_active_rows() -> None:

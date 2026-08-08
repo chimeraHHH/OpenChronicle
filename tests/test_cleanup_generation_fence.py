@@ -17,8 +17,13 @@ from openchronicle import cli, paths
 from openchronicle import config as config_mod
 from openchronicle.capture import filenames as capture_filenames
 from openchronicle.capture import scheduler as capture_scheduler
+from openchronicle.privacy import policy as privacy_policy
 from openchronicle.provenance import store as provenance_store
-from openchronicle.provenance.models import EvidenceRef, observation_digest
+from openchronicle.provenance.models import (
+    EvidenceRef,
+    observation_digest,
+    timeline_block_sources_digest,
+)
 from openchronicle.session import store as session_store
 from openchronicle.store import fts
 from openchronicle.timeline import aggregator
@@ -80,18 +85,59 @@ def _seed_ended_session(session_id: str, start: datetime, end: datetime) -> None
         (paths.capture_buffer_dir() / capture_name).write_text(
             json.dumps(capture), encoding="utf-8"
         )
+        sources = [
+            EvidenceRef(
+                kind="observation",
+                id=observation_id,
+                path=capture_name,
+                timestamp=start.isoformat(),
+                content_hash=observation_digest(capture),
+            )
+        ]
         provenance_store.replace_sources(
             conn,
             subject=EvidenceRef(kind="timeline_block", id=block.id),
-            sources=[
-                EvidenceRef(
-                    kind="observation",
-                    id=observation_id,
-                    path=capture_name,
-                    timestamp=start.isoformat(),
-                    content_hash=observation_digest(capture),
+            sources=sources,
+        )
+        block.source_digest = timeline_block_sources_digest(sources)
+        block.projection_digest = timeline_store.projection_digest(block)
+        conn.execute(
+            "UPDATE timeline_blocks SET source_digest=?, projection_digest=? WHERE id=?",
+            (block.source_digest, block.projection_digest, block.id),
+        )
+        timeline_store.activate_capture_receipts(conn)
+        timeline_store.record_capture_receipts(
+            conn,
+            bindings=[
+                (
+                    capture_name,
+                    observation_id,
+                    observation_digest(capture),
+                    start.isoformat(),
                 )
             ],
+            window_start=start,
+            window_end=end,
+        )
+        timeline_store.record_window_receipt(
+            conn,
+            timeline_store.make_window_receipt(
+                window_start=start,
+                window_end=end,
+                bindings=[
+                    (
+                        capture_name,
+                        observation_id,
+                        observation_digest(capture),
+                        start.isoformat(),
+                    )
+                ],
+                policy_digest=privacy_policy.stored_observation_policy_digest(
+                    config_mod.CaptureConfig(deny_unknown_windows=False)
+                ),
+                outcome="block",
+                block=block,
+            ),
         )
         session_store.insert(
             conn,
@@ -378,6 +424,7 @@ def test_raw_retention_cannot_cross_final_reducer_revalidation_and_publish(
             return capture_scheduler.cleanup_buffer(
                 retention_hours=1,
                 processed_before_ts=(end + timedelta(days=1)).isoformat(),
+                capture_config=cfg.capture,
             )
         finally:
             cleanup_finished.set()

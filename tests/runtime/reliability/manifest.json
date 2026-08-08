@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "minimum_replay_capture_count": 10000,
+  "minimum_soak_duration_seconds": 86400,
+  "production_daemon_queue_evidence_required": true,
+  "maximum_sample_interval_seconds": 60,
+  "sample_timing_tolerance_seconds": 2,
+  "maximum_terminal_sample_gap_seconds": 90,
+  "minimum_metric_coverage_ratio": 0.95,
+  "limits": {
+    "max_rss_bytes": 536870912,
+    "max_cpu_percent": 200.0,
+    "max_fd_count": 256,
+    "max_thread_count": 32,
+    "max_child_process_count": 0,
+    "max_db_bytes": 536870912,
+    "max_wal_bytes": 67108864,
+    "max_shm_bytes": 16777216,
+    "max_owned_temp_file_count": 1,
+    "max_owned_temp_bytes": 1048576,
+    "max_capture_buffer_bytes": 1073741824,
+    "max_capture_file_count": 100000
+  }
+}

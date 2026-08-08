@@ -2,10 +2,12 @@
 
 The integration path (status command rendering ✓ / ✗) is covered in
 ``test_cli_status.py``. These tests pin down ping_stage's own contract:
-mock-env shortcut, success latency, error label format, and truncation.
+mock-env shortcut, success latency, and sanitized error labels.
 """
 
 from __future__ import annotations
+
+import builtins
 
 import pytest
 
@@ -33,19 +35,23 @@ def test_ping_stage_mock_env_returns_mocked(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_ping_stage_success_records_latency(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A normal litellm.completion return yields ok=True with a non-negative latency."""
+    """Ping delegates to the child without importing LiteLLM in the parent."""
     monkeypatch.delenv("OPENCHRONICLE_LLM_MOCK", raising=False)
-    import litellm
-
     calls: list[dict] = []
-    monkeypatch.setattr(litellm, "num_retries", 3)
+    real_import = builtins.__import__
 
-    def fake_completion(**kwargs):
-        assert litellm.num_retries == 0
+    def guarded_import(name, *args, **kwargs):
+        if name == "litellm" or name.startswith("litellm."):
+            raise AssertionError("ping parent attempted to import LiteLLM")
+        return real_import(name, *args, **kwargs)
+
+    def fake_attempt(kwargs, *, timeout_seconds):
+        assert timeout_seconds == kwargs["timeout"]
         calls.append(kwargs)
         return object()  # ping_stage doesn't read the response
 
-    monkeypatch.setattr(litellm, "completion", fake_completion)
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    monkeypatch.setattr(llm_mod, "_run_provider_attempt", fake_attempt)
     cfg = _cfg_with_model()
 
     res = llm_mod.ping_stage(cfg, "reducer")
@@ -60,29 +66,27 @@ def test_ping_stage_success_records_latency(monkeypatch: pytest.MonkeyPatch) -> 
     assert calls[0]["num_retries"] == 0
 
 
-def test_ping_stage_failure_label_includes_class_and_message(
+def test_ping_stage_failure_label_excludes_provider_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A raised exception becomes 'ClassName: <first-line>' truncated to 80 chars."""
+    """Provider-controlled exception text never enters status output."""
     monkeypatch.delenv("OPENCHRONICLE_LLM_MOCK", raising=False)
-    import litellm
 
     class AuthenticationError(Exception):
         pass
 
-    def boom(**kwargs):
+    def boom(_kwargs, *, timeout_seconds):  # noqa: ARG001
         raise AuthenticationError("Invalid api key sk-bo***ee")
 
-    monkeypatch.setattr(litellm, "completion", boom)
+    monkeypatch.setattr(llm_mod, "_run_provider_attempt", boom)
     cfg = _cfg_with_model()
 
     res = llm_mod.ping_stage(cfg, "classifier")
 
     assert res.ok is False
-    assert res.error is not None
-    assert res.error.startswith("AuthenticationError")
-    assert "Invalid api key" in res.error
-    assert len(res.error) <= 80
+    assert res.error == "AuthenticationError"
+    assert "Invalid api key" not in res.error
+    assert "sk-bo" not in res.error
 
 
 def test_ping_stage_failure_with_empty_message_falls_back_to_class(
@@ -90,15 +94,13 @@ def test_ping_stage_failure_with_empty_message_falls_back_to_class(
 ) -> None:
     """When str(exc) is empty, the error label is just the class name."""
     monkeypatch.delenv("OPENCHRONICLE_LLM_MOCK", raising=False)
-    import litellm
-
     class Timeout(Exception):
         pass
 
-    def boom(**kwargs):
+    def boom(_kwargs, *, timeout_seconds):  # noqa: ARG001
         raise Timeout()
 
-    monkeypatch.setattr(litellm, "completion", boom)
+    monkeypatch.setattr(llm_mod, "_run_provider_attempt", boom)
     cfg = _cfg_with_model()
 
     res = llm_mod.ping_stage(cfg, "compact")
@@ -107,18 +109,16 @@ def test_ping_stage_failure_with_empty_message_falls_back_to_class(
     assert res.error == "Timeout"
 
 
-def test_ping_stage_truncates_long_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Error labels are capped so a verbose provider message can't blow up status output."""
+def test_ping_stage_truncates_long_error_class(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Even an unusual exception class cannot expand status without bound."""
     monkeypatch.delenv("OPENCHRONICLE_LLM_MOCK", raising=False)
-    import litellm
 
-    class ProviderError(Exception):
-        pass
+    long_error = type("Provider" + "X" * 100, (Exception,), {})
 
-    def boom(**kwargs):
-        raise ProviderError("x" * 500)
+    def boom(_kwargs, *, timeout_seconds):  # noqa: ARG001
+        raise long_error("SECRET")
 
-    monkeypatch.setattr(litellm, "completion", boom)
+    monkeypatch.setattr(llm_mod, "_run_provider_attempt", boom)
     cfg = _cfg_with_model()
 
     res = llm_mod.ping_stage(cfg, "timeline")
@@ -126,3 +126,4 @@ def test_ping_stage_truncates_long_error_message(monkeypatch: pytest.MonkeyPatch
     assert res.ok is False
     assert res.error is not None
     assert len(res.error) <= 80
+    assert "SECRET" not in res.error

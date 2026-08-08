@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import re
@@ -34,6 +35,7 @@ from openchronicle.services import context as context_mod
 from openchronicle.services.context import ContextService
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
+from openchronicle.writer import llm as llm_mod
 
 
 def test_daily_wrap_store_migrates_published_digest(tmp_path: Path) -> None:
@@ -1513,6 +1515,55 @@ async def test_scheduler_cancellation_does_not_join_sync_provider_thread(
             break
         await asyncio.sleep(0.01)
     assert finished.is_set()
+
+
+@pytest.mark.asyncio
+async def test_daemon_runtime_tracks_and_drains_daily_wrap_thread(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cfg = config_mod.Config()
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocking_run(*args, **kwargs):
+        started.set()
+        try:
+            assert release.wait(timeout=5)
+            return "wrap-id"
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(daily_wrap_worker, "run_for_day", blocking_run)
+    runtime = llm_mod.begin_daemon_provider_runtime()
+    token = llm_mod.bind_daemon_provider_runtime(runtime)
+    task = asyncio.create_task(
+        daily_wrap_worker._run_for_day_async(cfg, date(2026, 4, 21), "UTC")
+    )
+    try:
+        while not started.is_set():
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=0.5)
+
+        assert not finished.is_set()
+        assert len(runtime.worker_threads) == 1
+        assert next(iter(runtime.worker_threads)).is_alive()
+
+        llm_mod.cancel_daemon_provider_runtime(runtime)
+        release.set()
+        llm_mod.drain_daemon_provider_runtime(runtime)
+        assert finished.is_set()
+        assert runtime.worker_threads == set()
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        llm_mod.finish_daemon_provider_runtime(runtime)
+        llm_mod.reset_daemon_provider_runtime(token)
 
 
 @pytest.mark.asyncio

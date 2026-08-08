@@ -15,6 +15,7 @@ from ..config import Config
 from ..logger import get
 from ..services.memory import MemoryService
 from ..store import fts
+from ..writer import llm as llm_mod
 from . import store
 from .service import DailyWrapService
 
@@ -163,13 +164,12 @@ async def _monitor_day(cfg: Config, timezone: str, local_day: date) -> None:
 
 
 async def _run_for_day_async(cfg: Config, local_day: date, timezone: str) -> str:
-    """Run a synchronous provider call without making daemon shutdown join it.
+    """Run a synchronous provider call on a cancellable one-shot thread.
 
-    Python's default asyncio executor joins outstanding threads when
-    ``asyncio.run`` exits. Provider timeouts can be minutes, so a normal
-    ``asyncio.to_thread`` would make SIGTERM appear to hang. This dedicated
-    daemon thread is cooperatively fenced from publishing, and its lease is
-    revoked before cancellation returns.
+    This avoids pinning Python's default executor. When hosted by the daemon,
+    the provider lifecycle registers and joins the concrete thread before the
+    singleton lease is released. Direct scheduler use remains non-joining on
+    task cancellation; its claim is still revoked before cancellation returns.
     """
     loop = asyncio.get_running_loop()
     result_future: asyncio.Future[str] = loop.create_future()
@@ -209,6 +209,10 @@ async def _run_for_day_async(cfg: Config, local_day: date, timezone: str) -> str
         daemon=True,
     )
     thread.start()
+    # Registration is deliberately adjacent to ``start`` with no await in
+    # between. Shutdown can then join a worker even if it has not reached its
+    # first model call yet.
+    llm_mod.track_daemon_provider_worker(thread)
     try:
         return await result_future
     except asyncio.CancelledError:

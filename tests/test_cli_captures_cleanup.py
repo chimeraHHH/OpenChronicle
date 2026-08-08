@@ -44,6 +44,63 @@ def test_clean_captures_removes_matching_index_rows(ac_root) -> None:
     assert rows == []
 
 
+@pytest.mark.parametrize("tamper_root", [False, True])
+def test_clean_captures_finalizes_or_invalidates_window_receipt(
+    ac_root,
+    monkeypatch,
+    tamper_root: bool,
+) -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from openchronicle.capture import scheduler
+    from openchronicle.config import Config
+    from openchronicle.memory_candidates import store as candidate_store
+    from openchronicle.store import fts
+    from openchronicle.timeline import store as timeline_store
+    from openchronicle.timeline import tick as timeline_tick
+
+    zone = timezone(timedelta(hours=8))
+    start = datetime(2026, 4, 25, 23, 0, tzinfo=zone)
+    end = start + timedelta(minutes=1)
+    cfg = Config()
+    cfg.capture.deny_unknown_windows = False
+    cfg.timeline.window_minutes = 1
+    cfg.timeline.cold_lookback_minutes = 0
+    monkeypatch.setattr(timeline_tick, "_now", lambda: end)
+    monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
+    path = scheduler._write_capture(
+        {
+            "timestamp": (start + timedelta(seconds=10)).isoformat(),
+            "window_meta": {
+                "app_name": "Notes",
+                "bundle_id": "com.example.notes",
+                "title": "Explicit capture cleanup",
+            },
+            "visible_text": "explicit cleanup receipt",
+        }
+    )
+    assert timeline_tick._run_once(cfg) == 1
+    if tamper_root:
+        with fts.cursor() as conn:
+            conn.execute("UPDATE timeline_window_receipts SET receipt_digest='tampered'")
+
+    assert cli._clean_captures() == 1
+    assert not path.exists()
+    with fts.cursor() as conn:
+        assert timeline_store.capture_receipt_paths(conn) == set()
+        if tamper_root:
+            assert conn.execute("SELECT COUNT(*) FROM timeline_window_receipts").fetchone()[0] == 0
+            assert timeline_store.get_processed_range(conn) is None
+        else:
+            retired = timeline_store.window_receipts_in_raw_states(conn, "retired")
+            assert len(retired) == 1
+        assert not candidate_store.is_tombstoned(
+            conn,
+            kind="capture_file",
+            artifact_id=path.name,
+        )
+
+
 def test_clean_captures_retains_json_when_index_delete_fails(
     ac_root,
     monkeypatch,
@@ -79,9 +136,7 @@ def test_clean_captures_retains_json_when_index_delete_fails(
 
     assert capture_path.exists()
     with fts.cursor() as conn:
-        assert conn.execute(
-            "SELECT id FROM captures WHERE id='private'"
-        ).fetchone() is not None
+        assert conn.execute("SELECT id FROM captures WHERE id='private'").fetchone() is not None
 
 
 def test_clean_captures_unlink_failure_stays_hidden_from_read_and_rebuild(
@@ -137,9 +192,7 @@ def test_clean_captures_unlink_failure_stays_hidden_from_read_and_rebuild(
     cli.rebuild_captures_index()
     cfg = Config()
     cfg.capture.deny_unknown_windows = False
-    assert mcp_captures.search_captures(
-        cfg=cfg, query="CAPTURE_UNLINK_PRIVATE_MARKER"
-    ) == []
+    assert mcp_captures.search_captures(cfg=cfg, query="CAPTURE_UNLINK_PRIVATE_MARKER") == []
     assert mcp_captures.read_recent_capture(cfg=cfg) is None
 
 
@@ -368,22 +421,114 @@ def test_rebuild_captures_index_clears_invalid_same_stem_row(
 
     assert capture_path.exists()
     with fts.cursor() as conn:
-        assert conn.execute(
-            "SELECT id FROM captures WHERE id='invalid'"
-        ).fetchone() is None
+        assert conn.execute("SELECT id FROM captures WHERE id='invalid'").fetchone() is None
+
+
+def test_capture_reconcile_skips_duplicate_observation_without_rolling_back(
+    ac_root,
+) -> None:
+    from openchronicle import paths
+    from openchronicle.capture import reconcile
+    from openchronicle.store import fts
+
+    payload = {
+        "observation_id": "obs_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "timestamp": "2026-04-25T22:01:00+08:00",
+        "window_meta": {"app_name": "Notes", "title": "Public duplicate fixture"},
+        "visible_text": "PUBLIC_DUPLICATE_FIXTURE",
+    }
+    for name in ("a.json", "b.json"):
+        (paths.capture_buffer_dir() / name).write_text(json.dumps(payload), encoding="utf-8")
+
+    stats = reconcile.reconcile_capture_index()
+
+    assert stats.scanned == 2
+    assert stats.indexed == 1
+    assert stats.skipped == 1
+    with fts.cursor() as conn:
+        rows = conn.execute("SELECT id, observation_id FROM captures").fetchall()
+        assert [(row["id"], row["observation_id"]) for row in rows] == [
+            ("a", payload["observation_id"])
+        ]
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+
+
+def test_capture_reconcile_duplicate_winner_ignores_prior_projection(
+    ac_root,
+) -> None:
+    from openchronicle import paths
+    from openchronicle.capture import reconcile
+    from openchronicle.store import fts
+
+    payload = {
+        "observation_id": "obs_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "timestamp": "2026-04-25T22:01:00+08:00",
+        "window_meta": {"app_name": "Notes", "title": "Stable winner fixture"},
+        "visible_text": "PUBLIC_STABLE_WINNER_FIXTURE",
+    }
+    for name in ("a.json", "b.json"):
+        (paths.capture_buffer_dir() / name).write_text(json.dumps(payload), encoding="utf-8")
+    with fts.cursor() as conn:
+        fts.insert_capture(
+            conn,
+            id="b",
+            observation_id=payload["observation_id"],
+            timestamp=payload["timestamp"],
+            app_name="Notes",
+            bundle_id="",
+            window_title="Prior crash winner",
+            focused_role="",
+            focused_value="",
+            visible_text="PUBLIC_PRIOR_WINNER",
+            url="",
+        )
+
+    first = reconcile.reconcile_capture_index()
+    second = reconcile.reconcile_capture_index()
+
+    assert first.removed == 1
+    assert second.removed == 0
+    assert first.indexed == second.indexed == 1
+    assert first.skipped == second.skipped == 1
+    with fts.cursor() as conn:
+        rows = conn.execute("SELECT id, observation_id, visible_text FROM captures").fetchall()
+        assert [tuple(row) for row in rows] == [
+            ("a", payload["observation_id"], payload["visible_text"])
+        ]
+        assert conn.execute("PRAGMA quick_check").fetchone()[0] == "ok"
 
 
 def test_cleanup_and_rebuild_share_capture_store_lock(ac_root, monkeypatch) -> None:
+    from datetime import datetime, timedelta, timezone
+
     from openchronicle.capture import scheduler
+    from openchronicle.config import Config
     from openchronicle.store import fts
+    from openchronicle.timeline import tick as timeline_tick
 
     monkeypatch.setattr(cli, "_init", lambda: None)
     capture = {
         "timestamp": "2026-04-25T22:01:00+08:00",
-        "window_meta": {"app_name": "Notes", "title": "Race"},
+        "window_meta": {
+            "app_name": "Notes",
+            "bundle_id": "com.example.notes",
+            "title": "Race",
+        },
         "visible_text": "NO_ORPHAN_AFTER_RACE",
     }
     capture_path = scheduler._write_capture(capture)
+    cfg = Config()
+    cfg.capture.deny_unknown_windows = False
+    cfg.timeline.window_minutes = 1
+    cfg.timeline.cold_lookback_minutes = 0
+    window_end = datetime(2026, 4, 25, 22, 2, tzinfo=timezone(timedelta(hours=8)))
+    monkeypatch.setattr(timeline_tick, "_now", lambda: window_end)
+    monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
+    monkeypatch.setenv(
+        "OPENCHRONICLE_LLM_MOCK_JSON",
+        json.dumps({"entries": ["[Notes] receipt-backed cleanup race"]}),
+    )
+    assert timeline_tick._run_once(cfg) == 1
     old = time.time() - 10 * 24 * 3600
     os.utime(capture_path, (old, old))
 
@@ -403,6 +548,7 @@ def test_cleanup_and_rebuild_share_capture_store_lock(ac_root, monkeypatch) -> N
         kwargs={
             "retention_hours": 1,
             "processed_before_ts": "2099-01-01T00:00:00+00:00",
+            "capture_config": cfg.capture,
         },
     )
     rebuild_thread = threading.Thread(target=cli.rebuild_captures_index)
@@ -418,6 +564,7 @@ def test_cleanup_and_rebuild_share_capture_store_lock(ac_root, monkeypatch) -> N
     assert not rebuild_thread.is_alive()
     assert not capture_path.exists()
     with fts.cursor() as conn:
-        assert conn.execute(
-            "SELECT id FROM captures WHERE id=?", (capture_path.stem,)
-        ).fetchone() is None
+        assert (
+            conn.execute("SELECT id FROM captures WHERE id=?", (capture_path.stem,)).fetchone()
+            is None
+        )
