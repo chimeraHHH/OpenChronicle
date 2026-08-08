@@ -4,7 +4,26 @@ A "session" is a bounded chunk of focused work. OpenChronicle's writer pipeline 
 
 ## Three cut rules
 
-Implemented in `session/manager.py`, enforced in `check_cuts()` and on every `on_event()`. All times are local.
+Implemented in `session/manager.py`, enforced in `check_cuts()` and on every
+persisted capture. A normal daemon generation creates one `MonotonicWallClock`
+and shares it with capture persistence, the session manager, and the timeline
+producer. It anchors the host's IANA-local wall time once at startup, then
+advances it from a suspend-aware monotonic source. System sleep counts as real
+idle time, while a later manual/NTP wall-clock jump cannot split the three
+pipelines into incompatible timestamp domains. A restart deliberately creates
+a new generation and wall anchor; retained evidence and durable producer state
+are then reconciled rather than pretending the clock is continuous across
+processes.
+
+The scheduler assigns the capture's authoritative timestamp while it holds the
+capture-store lock, immediately before atomic JSON/FTS publication. Only after
+that write succeeds does it pass the same timestamp to
+`SessionManager.on_persisted_capture`; content-deduplicated or failed captures
+do not refresh the session. Before accepting an incoming frame, the manager
+checks idle and maximum-duration cuts using suspend-aware elapsed time. Thus the
+first frame after wake closes a stale session at its previous last event, then
+starts a new session at the frame's exact persisted timestamp. It cannot erase
+an overnight idle gap by refreshing the old session first.
 
 ### 1. Hard cut (idle gap)
 
@@ -105,6 +124,15 @@ Five daemon tasks back this up:
 - **`run_classifier_tick`** — polls every 5–60 seconds, requests periodic coverage only after the configured cadence has accumulated behind durable `flush_end`, recovers terminal intents, and drains due/expired jobs. A receipt plus finalization, not the scheduler tick, advances `classified_end`.
 - **`run_pending_reduction_tick`** — every 60s retries ended rows after the durable timeline watermark reaches the bucket containing their final event. A callback that arrives too early remains queued instead of being silently finalized.
 - **`run_daily_safety_net`** — at local `reducer.daily_tick_hour:minute` (default 23:55), force-ends the currently-open session and runs `reduce_all_pending` to catch anything stranded at `ended`/`failed`.
+
+Timeline coverage is a prerequisite, not something session progress may
+silently outrun. If a late capture changes an already-inspected block that has
+no downstream consumer, timeline may replace that block and retry normally. If
+the old block has already contributed to reducer/session progress or another
+derived artifact, the producer retains the raw late capture, rewinds/stalls its
+watermark before that window, and fails closed. Automatic downstream cascade
+replay is not implemented yet; an operator-visible scoped replay/repair path is
+still required for convergence. See [timeline.md](timeline.md#coverage-receipts-and-late-evidence).
 
 ## Classifier recovery boundary
 

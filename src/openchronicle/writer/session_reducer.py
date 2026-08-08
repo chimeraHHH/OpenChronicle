@@ -37,6 +37,7 @@ from typing import Any
 from .. import paths
 from ..capture import filenames as capture_filenames
 from ..config import Config
+from ..local_time import local_timezone
 from ..logger import get
 from ..memory_candidates import store as candidate_store
 from ..privacy.egress import model_egress_lock, privacy_egress_lock
@@ -69,6 +70,10 @@ _REDUCTION_LOCK_SHARDS = 256
 
 class ReducerInputChanged(RuntimeError):
     """A privacy reset invalidated evidence read by an in-flight reducer."""
+
+
+class TimelineProjectionInvalid(RuntimeError):
+    """An intersecting timeline row cannot safely prove content or emptiness."""
 
 
 @contextmanager
@@ -269,12 +274,27 @@ def _reduce_window_locked(
     # range and defer. Reading blocks first and a newer watermark second could
     # incorrectly certify an empty stale block snapshot.
     processed_range = timeline_store.get_processed_range(conn) if is_final else None
-    blocks = _blocks_for_session(
-        conn,
-        window_start,
-        window_end,
-        complete_only=not is_final,
-    )
+    try:
+        blocks = _blocks_for_session(
+            conn,
+            window_start,
+            window_end,
+            complete_only=not is_final,
+        )
+    except TimelineProjectionInvalid as exc:
+        # A continuous watermark says the producer inspected this interval; it
+        # does not turn a damaged populated row into a proven-empty window.
+        # Keep terminal rows pending (and active flush cursors unchanged) until
+        # the derived projection is repaired or explicitly cleaned/replayed.
+        logger.warning("session %s: timeline projection gap: %s", session_id, exc)
+        return ReduceResult(
+            session_id=session_id,
+            succeeded=False,
+            written=False,
+            start_time=session_start,
+            end_time=session_end,
+            is_final=is_final,
+        )
     materialized_end = (
         window_end
         if is_final
@@ -721,7 +741,7 @@ def _blocks_for_session(
     """
     rows = conn.execute(
         """
-        SELECT id FROM timeline_blocks
+        SELECT id, start_time, end_time FROM timeline_blocks
          WHERE julianday(start_time) > julianday(?) - 2
            AND julianday(start_time) < julianday(?) + 2
            AND julianday(end_time) > julianday(?) - 2
@@ -732,18 +752,24 @@ def _blocks_for_session(
     for r in rows:
         block_id = r["id"]
         if not isinstance(block_id, str):
-            logger.warning("session reducer skipped corrupt timeline block identity")
+            raise TimelineProjectionInvalid("corrupt timeline block identity")
+        try:
+            raw_start = datetime.fromisoformat(r["start_time"])
+            raw_end = datetime.fromisoformat(r["end_time"])
+            intersects = _instant(raw_end) > _instant(start) and _instant(
+                raw_start
+            ) < _instant(end)
+        except (TypeError, ValueError) as exc:
+            raise TimelineProjectionInvalid(
+                f"timeline block {block_id} has an invalid window"
+            ) from exc
+        if not intersects:
             continue
         block = timeline_store.get_by_id(conn, block_id)
         if block is None:
-            logger.warning(
-                "session reducer skipped timeline block with stale projection or sources: %s",
-                block_id,
+            raise TimelineProjectionInvalid(
+                f"timeline block {block_id} has stale projection or sources"
             )
-            continue
-        intersects = _instant(block.end_time) > _instant(start) and _instant(
-            block.start_time
-        ) < _instant(end)
         complete = _instant(block.end_time) <= _instant(end)
         if intersects and (complete or not complete_only):
             blocks.append(block)
@@ -759,7 +785,21 @@ def _terminal_timeline_ready(
     processed_range: tuple[datetime, datetime] | None,
 ) -> bool:
     """Prove the bucket containing ``session_end`` is no longer pending."""
-    target = timeline_store.ceil_to_window(session_end, window_minutes)
+    if processed_range is not None:
+        # The producer persists its original grid anchor as processed_from and
+        # keeps that elapsed grid through DST, rollback, and restart. Deriving
+        # readiness from the same anchor avoids both fixed-offset round-trip
+        # errors and an unnecessary extra empty window after a transition.
+        target = timeline_store.ceil_to_grid(
+            session_end,
+            processed_range[0],
+            window_minutes,
+        )
+    else:
+        # Legacy databases without a lower bound cannot reconstruct the old
+        # grid. Re-enter the current IANA zone for the migration block bridge.
+        timeline_end = _instant(session_end).astimezone(local_timezone())
+        target = timeline_store.ceil_to_window(timeline_end, window_minutes)
     if timeline_store.range_covers(processed_range, target):
         return True
 

@@ -21,6 +21,7 @@ import frontmatter
 
 from .. import paths
 from ..provenance.models import EvidenceRef
+from ..testing import failpoints
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -53,7 +54,9 @@ def atomic_write_text(path: Path, content: str) -> None:
         # silently flip group/other-read bits set by the user.
         with contextlib.suppress(FileNotFoundError):
             os.chmod(tmp_path, path.stat().st_mode & 0o7777)
+        failpoints.hit("memory.markdown.before_rename")
         os.replace(tmp_path, path)
+        failpoints.hit("memory.markdown.after_rename")
         # Persist the directory entry so a power loss right after the
         # rename can't leave the dir pointing at neither old nor new.
         # macOS APFS sometimes returns EINVAL on directory fsync; the

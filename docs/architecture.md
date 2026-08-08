@@ -58,7 +58,7 @@ flowchart LR
     end
 
     W --> S0
-    BUF -. pre_capture_hook<br/>(post-write · skipped on content-dedup) .-> SM
+    BUF -. on_persisted_capture<br/>(exact timestamp · post-write · skipped on dedup) .-> SM
     BUF --> TL
     S2 --> ED
     BLOCKS -. grounding .-> CLF
@@ -105,13 +105,15 @@ sequenceDiagram
         CG-->>P: verified JPEG + final identity
         P->>P: final focused-window identity check
     end
-    P->>BUF: private normal v4/v2 or URL-metadata v5/v3 JSON
+    P->>BUF: assign shared-clock timestamp under lock<br/>publish private JSON + capture FTS
     Note right of BUF: content-fingerprint dedup<br/>drops consecutive duplicates
-    BUF->>SM: pre_capture_hook → on_event<br/>(post-write · skipped on content-dedup)
+    BUF->>SM: on_persisted_capture(exact timestamp)<br/>(post-write · skipped on content-dedup)
+    SM->>SM: cut stale pre-sleep session first<br/>then admit wake frame
 
     Note over TL,BUF: timeline tick · every 60 s
-    TL->>BUF: scan closed 1-min windows
+    TL->>BUF: snapshot closed 1-min windows<br/>using the same daemon clock
     TL->>DB: LLM → insert timeline_blocks
+    TL->>DB: exact capture receipts → advance watermark
 
     Note over SM,R: flush tick · every 5 min
     SM->>R: reduce(flush_end → now)
@@ -148,23 +150,61 @@ Defined in `src/openchronicle/daemon.py`.
 
 | Task | Purpose |
 |---|---|
-| `capture` | Consumes bounded, identity-only watcher events and requires one exact focused-window identity across native metadata and AX collection. App/window policy runs before AX. Active URL policy rejects unsupported bundles before AX; a known browser adapter then requires one explicit HTTP(S) address from an exact stable identifier, a complete-tree receipt, a full-tree deny scan, and matching evidence from two snapshots. Successful URL observations are schema-v5/policy-v3 `url_metadata_only`: URL and identity only, with raw AX/focused content/pixels omitted and text/titles cleared. The two reads reduce but cannot atomically eliminate browser navigation races. With URL policy off, optional pixels target only the verified `CGWindowID`. Any required-stage failure drops the observation; only a successful private JSON reaches `SessionManager.on_event`. Heartbeat catches quiet periods. |
-| `timeline` | Every 60s scans closed wall-clock windows (default 1 min), runs the `timeline` LLM stage for populated windows, and records the inspected interval `[processed_from, processed_through)` (bucket-end proof `(processed_from, processed_through]`) across populated and proven-empty windows. A cold start backfills retained captures/pending sessions in bounded pages. Cleans buffer files only behind the valid upper bound. |
+| `capture` | Consumes bounded, identity-only watcher events and requires one exact focused-window identity across native metadata and AX collection. App/window policy runs before AX. Active URL policy rejects unsupported bundles before AX; a known browser adapter then requires one explicit HTTP(S) address from an exact stable identifier, a complete-tree receipt, a full-tree deny scan, and matching evidence from two snapshots. Successful URL observations are schema-v5/policy-v3 `url_metadata_only`: URL and identity only, with raw AX/focused content/pixels omitted and text/titles cleared. The two reads reduce but cannot atomically eliminate browser navigation races. With URL policy off, optional pixels target only the verified `CGWindowID`. Any required-stage failure drops the observation. The successful JSON receives the shared daemon clock's exact timestamp under the capture-store lock, then that same post-write timestamp reaches `SessionManager.on_persisted_capture`; failed or content-deduplicated observations do not refresh the session. Heartbeat catches quiet periods. |
+| `timeline` | Every 60s scans closed windows (default 1 min) on the shared daemon clock, runs the `timeline` LLM stage for populated windows, and records `[processed_from, processed_through)` across populated and proven-empty windows. A cold start backfills retained captures/pending sessions in bounded pages. Exact path/content receipts commit before watermark advance; cleanup additionally requires a matching per-capture receipt, not only the upper bound. Late evidence may replace an unconsumed block, but a consumed/invalid block leaves a durable gap and stalls coverage. |
 | `session` | Every `session.tick_seconds` (default 30), calls `SessionManager.check_cuts()` so idle-gap and timeout cuts fire even when the dispatcher is quiet. |
 | `flush` | Every `session.flush_minutes` (default 5, clamped to 5-min floor), runs the reducer incrementally over the active session's newly closed timeline blocks (~5 of them at defaults) and appends `[flush]`-tagged partial entries to today's event-daily. |
 | `classifier-tick` | Polls every 5–60 seconds. When an active session has at least `classifier.interval_minutes` (default 30, min 5) of unclassified, durably flushed coverage, requests/coalesces a periodic job through `flush_end`; also recovers terminal intents and drains committed, pending, expired-running, and due-failed jobs. |
 | `pending-reducer` | Every 60s retries durable `ended`/due-`failed` rows. A terminal callback that beats the timeline producer remains `ended` until its final bucket lies inside the producer's durable coverage range. |
 | `daily-safety-net` | Once per local day at `reducer.daily_tick_hour:minute` (default 23:55), force-ends the currently-open session and reduces every stranded `ended`/`failed` session row — the "we survived a crash or midnight rollover" safety net. |
-| `daily-wrap` | Opt-in worker (disabled by default). After the configured post-midnight time, synthesizes the previous IANA-local day, retries/rechecks within the late-data grace window, and revises one canonical grounded wrap. Provider calls run on cancellable dedicated daemon threads; shutdown revokes the matching lease without waiting for a stuck provider. |
+| `daily-wrap` | Opt-in worker (disabled by default). After the configured post-midnight time, synthesizes the previous IANA-local day, retries/rechecks within the late-data grace window, and revises one canonical grounded wrap. Its orchestration runs on a cancellable dedicated daemon thread; the matching lease is revoked before shutdown returns. |
 | `mcp` | Hosts the Reader MCP server inside the daemon. Exponential backoff on crash. |
 
-The session cutter itself does not have a dedicated task — it runs inline on every persisted, non-duplicate watcher or heartbeat capture via the `pre_capture_hook` wired in `daemon.py`. Ordinary session-end callbacks spawn the reducer on a daemon thread; graceful shutdown persists the same `ended` row but deliberately leaves dispatch to the next lease holder. If the final timeline bucket is still pending, the durable row stays queued for `pending-reducer`. A successful terminal write persists its exact entry identity and an owed-classification bit before any callback. The callback accelerates outbox recovery but is not required for correctness. `flush_end` proves reducer materialization; `classified_end` records only finalized, contiguous classifier coverage.
+Every non-mock LLM attempt, regardless of stage, crosses a separate fresh
+process boundary. The parent sends a size-limited request on stdin, accepts one
+size-limited response envelope, and owns retries. A worker that exceeds the
+outer monotonic deadline is terminated as a process group and reaped; late
+output cannot publish into the daemon. This is a local cancellation and
+replay-safety guarantee, not an exactly-once claim about a remote provider.
+
+Each daemon generation also owns one suspend-aware `MonotonicWallClock`. It
+samples the host's IANA-local wall time once, then supplies capture timestamps,
+session elapsed decisions, and timeline `now` from one monotonic domain. Sleep
+therefore counts toward idle cuts, while later host wall-clock changes cannot
+make persisted captures fall outside their session or producer windows. The
+capture timestamp is fixed inside the store lock and reused exactly by the
+post-write session hook. Before recording a wake frame, the session manager
+cuts any stale pre-sleep session at its prior last event.
+
+The session cutter itself does not have a dedicated task — it runs inline on every persisted, non-duplicate watcher or heartbeat capture via `on_persisted_capture` wired in `daemon.py`. Ordinary session-end callbacks spawn the reducer on a daemon thread; graceful shutdown persists the same `ended` row but deliberately leaves dispatch to the next lease holder. If the final timeline bucket is still pending, the durable row stays queued for `pending-reducer`. A successful terminal write persists its exact entry identity and an owed-classification bit before any callback. The callback accelerates outbox recovery but is not required for correctness. `flush_end` proves reducer materialization; `classified_end` records only finalized, contiguous classifier coverage.
+
+The timeline watermark is receipt-scoped. Every inspected capture is bound by
+path and content hash before coverage advances, and automatic buffer cleanup
+requires that exact receipt. An older-timestamped capture that arrives later
+rewinds coverage. An unconsumed block can be replaced from the expanded source
+set; once durable downstream or session progress depends on the old block, the
+raw late capture is retained and the watermark remains stalled. An invalid
+block projection is handled the same way as a durable gap, never as proof of an
+empty window. There is currently no automatic downstream cascade replay, so
+these fail-closed states require future scoped repair before they converge.
 
 The daemon also holds a private singleton file lease for its entire lifetime.
-CLI `status`/`stop` trust `.pid` only while that lease is held, so a PID reused
-after `SIGKILL` cannot cause an unrelated process to be reported or signalled.
-Before optional workers start, every normal daemon launch resumes any authorized
-memory purge tombstones. This recovery is independent of Daily Wrap enablement.
+`.pid` is observational status only: `openchronicle stop` never sends a signal
+to a PID. Each lease generation publishes a high-entropy nonce and exact socket
+inode in an atomic 0600 metadata file, then accepts one closed-schema stop
+request on a generation-specific AF_UNIX socket inside a short, user-owned 0700
+runtime directory. Both peers verify the local uid; the daemon echoes a fresh
+request nonce before entering its existing graceful-shutdown path. Old
+metadata, recycled PIDs, stale requests, and a request racing a replacement
+daemon therefore fail closed. Normal cleanup and the next lease holder's
+SIGKILL recovery remove an endpoint only when its generation and socket inode
+still match; service-manager SIGTERM/SIGINT handlers remain available.
+Before optional workers start, every normal daemon launch removes owned crash
+temps, resumes authorized memory-purge tombstones, reconciles canonical capture
+JSON into its disposable search projection, rebuilds the Markdown/file/entry/
+provenance projection, and only then recovers orphan sessions. Invalid Markdown
+provenance fails readiness. This recovery is independent of Daily Wrap
+enablement and runs before MCP is exposed.
 
 `--capture-only` is a strict no-model ingestion/debug mode: it disables the
 timeline, reducer/flush, classifier, and MCP paths. Capture, session bookkeeping,
@@ -292,6 +332,11 @@ Three rules (ported verbatim from Einsia-Partner), all enforced in `session/mana
 2. **Soft cut.** A single unrelated app is focused for `session.soft_cut_minutes` (default 3) unless ≥2 distinct apps were focused in the preceding 2 minutes (frequent-switching defuses the rule).
 3. **Timeout.** A session older than `session.max_session_hours` (default 2) is force-cut regardless.
 
+All three use the daemon generation's suspend-aware elapsed clock. Incoming
+persisted captures are checked against hard-cut/timeout conditions before they
+can refresh session state, so the first frame after wake ends the stale session
+and opens a new one at its exact durable timestamp.
+
 Force-end is also called on graceful daemon shutdown and on the 23:55 safety net.
 Shutdown synchronously persists the row as `ended`, suppresses new reducer
 thread dispatch after worker teardown, and joins reducers dispatched by prior
@@ -307,7 +352,9 @@ restart, the next session, or the configured maximum duration.
 ```
 ~/.openchronicle/
 ├── config.toml               # single source of truth for runtime config
-├── .pid                      # daemon PID; absence ⇒ stopped
+├── .daemon.lock              # lifetime singleton flock; PID text is diagnostic only
+├── .daemon-control.json      # atomic 0600 generation + AF_UNIX socket inode binding
+├── .pid                      # observational daemon PID/uptime metadata; never a stop target
 ├── .paused                   # sentinel — capture skips while present
 ├── index.db                  # SQLite WAL; projections, provenance, classifier outbox, candidates, wraps
 ├── capture-buffer/           # S1-enriched {iso8601}.json captures
@@ -325,6 +372,11 @@ restart, the next session, or the configured maximum duration.
     ├── daily-wrap.log        # scheduled wrap attempts and outcomes
     └── daemon.log            # lifecycle + MCP server
 ```
+
+The pathname socket is intentionally outside this potentially deep tree. Its
+private runtime directory is a short `/private/tmp` (macOS) or `/tmp` (Linux)
+path keyed by a digest of the canonical OpenChronicle root and local uid; the
+metadata file above is the only published binding to a live socket inode.
 
 SQLite is opened with WAL mode — the MCP reader and the writer paths coexist without blocking.
 

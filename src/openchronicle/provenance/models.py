@@ -81,7 +81,28 @@ def canonical_digest(value: Any) -> str:
 
 
 def observation_digest(data: dict[str, Any]) -> str:
-    """Hash every capture field consumed by the timeline prompt renderer."""
+    """Hash the v2 semantic observation, excluding only pixel storage.
+
+    Policy decisions can depend on fields outside the rendered text slice, so
+    every persisted field is bound. Screenshot bytes and their storage-only
+    strip marker remain deliberately mutable under tiered retention.
+    """
+    excluded = {
+        "screenshot",
+        "screenshot_stripped",
+        "__openchronicle_dropped_screenshot",
+        "__openchronicle_source_digest",
+    }
+    return canonical_digest(
+        {
+            "version": 2,
+            "observation": {key: value for key, value in data.items() if key not in excluded},
+        }
+    )
+
+
+def legacy_observation_digest(data: dict[str, Any]) -> str:
+    """Pre-v2 digest, used only by the one-time trusted local migration."""
     return canonical_digest(
         {
             key: data.get(key)
@@ -100,6 +121,65 @@ def observation_digest(data: dict[str, Any]) -> str:
 
 def timeline_block_digest(*, start: str, end: str, entries: list[Any], apps: list[Any]) -> str:
     return canonical_digest({"start": start, "end": end, "entries": entries, "apps": apps})
+
+
+def timeline_capture_window_digest(
+    bindings: list[tuple[str, str, str, str]],
+) -> str:
+    """Bind the complete, order-independent semantic capture snapshot."""
+    return canonical_digest(
+        {
+            "version": 1,
+            "captures": sorted(
+                (
+                    {
+                        "path": path,
+                        "observation_id": observation_id,
+                        "source_hash": source_hash,
+                        "capture_time": capture_time,
+                    }
+                    for path, observation_id, source_hash, capture_time in bindings
+                ),
+                key=lambda value: (
+                    value["path"],
+                    value["observation_id"],
+                    value["capture_time"],
+                    value["source_hash"],
+                ),
+            ),
+        }
+    )
+
+
+def timeline_window_receipt_digest(
+    *,
+    window_start: str,
+    window_end: str,
+    capture_count: int,
+    capture_digest: str,
+    policy_digest: str,
+    outcome: str,
+    block_id: str,
+    block_projection_digest: str,
+    block_source_digest: str,
+    raw_state: str,
+) -> str:
+    """Bind one durable window outcome; ``inspected_at`` is intentionally mutable."""
+    return canonical_digest(
+        {
+            "version": 2,
+            "window_start": window_start,
+            "window_end": window_end,
+            "capture_count": capture_count,
+            "capture_digest": capture_digest,
+            "policy_digest": policy_digest,
+            "outcome": outcome,
+            "block_id": block_id,
+            "block_projection_digest": block_projection_digest,
+            "block_source_digest": block_source_digest,
+            "raw_state": raw_state,
+        }
+    )
 
 
 def timeline_block_projection_digest(

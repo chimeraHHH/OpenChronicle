@@ -4,6 +4,7 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -478,6 +479,122 @@ def test_upper_watermark_cannot_prove_target_at_coverage_start(
     with fts.cursor() as conn:
         row = session_store.get_by_id(conn, session_id)
     assert row is not None and row.status == "ended"
+
+
+def test_terminal_reducer_defers_intersecting_invalid_timeline_row(
+    ac_root: Path,
+) -> None:
+    block_start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
+    block_end = block_start + timedelta(minutes=1)
+    session_start = block_start + timedelta(seconds=10)
+    session_end = block_start + timedelta(seconds=50)
+    session_id = "sess_invalid_timeline_gap"
+    with fts.cursor() as conn:
+        block = timeline_store.TimelineBlock(
+            id="tlb-invalid-terminal-gap",
+            start_time=block_start,
+            end_time=block_end,
+            entries=["[Editor] valid before tamper"],
+            apps_used=["Editor"],
+            capture_count=1,
+        )
+        _insert_live_block(conn, block)
+        conn.execute(
+            "UPDATE timeline_blocks SET entries='[\"tampered\"]' WHERE id=?",
+            (block.id,),
+        )
+        timeline_store.initialize_processed_range(conn, block_start)
+        timeline_store.advance_processed_through(
+            conn,
+            block_end,
+            window_start=block_start,
+        )
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=session_start,
+                end_time=session_end,
+                status="ended",
+            ),
+        )
+
+    result = session_reducer.reduce_session(
+        _unrestricted_cfg(ac_root),
+        session_id=session_id,
+        start_time=session_start,
+        end_time=session_end,
+    )
+
+    assert result.succeeded is False and result.written is False
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+    assert row is not None
+    assert row.status == "ended"
+    assert row.classifier_terminal_noop is False
+
+
+@pytest.mark.parametrize(
+    ("stored_end", "grid_anchor", "premature_bound", "correct_bound"),
+    [
+        (
+            "2026-03-08T03:10:00-04:00",
+            "2026-03-08T00:00:00-05:00",
+            "2026-03-08T04:00:00-04:00",
+            "2026-03-08T05:00:00-04:00",
+        ),
+        (
+            "2026-11-01T01:10:00-05:00",
+            "2026-11-01T00:00:00-04:00",
+            "2026-11-01T02:00:00-05:00",
+            "2026-11-01T03:00:00-05:00",
+        ),
+    ],
+)
+def test_terminal_readiness_reuses_durable_grid_after_session_roundtrip(
+    ac_root: Path,
+    stored_end: str,
+    grid_anchor: str,
+    premature_bound: str,
+    correct_bound: str,
+) -> None:
+    end = datetime.fromisoformat(stored_end)
+    start = end - timedelta(minutes=10)
+    session_id = f"sess_dst_ready_{end.month}"
+    with fts.cursor() as conn:
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=start,
+                end_time=end,
+                status="ended",
+            ),
+        )
+        persisted = session_store.get_by_id(conn, session_id)
+    assert persisted is not None and not isinstance(persisted.end_time.tzinfo, ZoneInfo)
+
+    too_early = (
+        datetime.fromisoformat(grid_anchor),
+        datetime.fromisoformat(premature_bound),
+    )
+    ready = (
+        datetime.fromisoformat(grid_anchor),
+        datetime.fromisoformat(correct_bound),
+    )
+
+    assert not session_reducer._terminal_timeline_ready(
+        blocks=[],
+        session_end=persisted.end_time,
+        window_minutes=120,
+        processed_range=too_early,
+    )
+    assert session_reducer._terminal_timeline_ready(
+        blocks=[],
+        session_end=persisted.end_time,
+        window_minutes=120,
+        processed_range=ready,
+    )
 
 
 def test_active_flush_waits_for_block_that_extends_past_now(

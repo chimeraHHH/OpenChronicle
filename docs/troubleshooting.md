@@ -2,18 +2,35 @@
 
 Work from symptoms to cause. Each section links to the relevant log file under `~/.openchronicle/logs/`.
 
-## Daemon won't start
+## Daemon won't start or stop
 
-Symptom: `openchronicle start` returns `Already running (pid N)` but the process is dead.
+`~/.openchronicle/.pid` is status metadata, never a safe signal target. A stale
+PID is ignored unless the daemon's lifetime flock is actually held; do not
+manually `kill $(cat ~/.openchronicle/.pid)`.
 
-Check:
+Start with the authenticated path:
 
 ```bash
-ps -p $(cat ~/.openchronicle/.pid) || rm ~/.openchronicle/.pid
-openchronicle start
+openchronicle stop
+openchronicle start --foreground
 ```
 
-A stale PID file is the typical cause; `stop` removes it cleanly, crashes don't.
+`stop` uses a same-uid, generation-bound local control socket and deliberately
+has no PID-signal fallback. If it reports that authenticated control metadata
+or the socket is unavailable, either no daemon is running, a legacy daemon is
+still active, or its control state was manually damaged. Check the singleton
+lease without signaling the recorded PID:
+
+```bash
+lsof ~/.openchronicle/.daemon.lock
+```
+
+With no lease holder, a new foreground start safely recovers a valid endpoint
+left by SIGKILL. With a lease holder but no valid control endpoint, use the
+service manager that launched the daemon (its SIGTERM/SIGINT path is retained)
+or stop that foreground terminal. Wrong owner/mode, symlinks, malformed
+metadata, and socket-inode mismatches all fail closed rather than being
+auto-repaired.
 
 Symptom: foreground start immediately exits without error.
 

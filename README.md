@@ -35,7 +35,7 @@
 
 > **Status:** v0.1.0 · macOS only · early alpha
 
-> **This fork:** see the clean-room [Vida-like proactive assistant roadmap](docs/vida-like-roadmap.md), the [Stage 1 memory/Daily Wrap contract](docs/stage1-memory-daily-wrap.md), and the [trusted desktop-shell boundary](docs/desktop-shell.md).
+> **This fork:** see the [official-source Vida product research](docs/vida-public-product-research.md), the clean-room [Vida-like proactive assistant roadmap](docs/vida-like-roadmap.md), the [Stage 1 memory/Daily Wrap contract](docs/stage1-memory-daily-wrap.md), and the [trusted desktop-shell boundary](docs/desktop-shell.md).
 
 OpenChronicle gives AI agents a local, inspectable memory built from real screen and app context.
 
@@ -146,7 +146,7 @@ flowchart LR
     ED --> STORE
     ED --> WRAP
     TB --> WRAP
-    BUF -. pre_capture_hook<br/>(post-write · skipped on content-dedup) .-> SM
+    BUF -. exact persisted timestamp<br/>(post-write · skipped on content-dedup) .-> SM
     SM -. flush 5m / on_end .-> S2
     TB -. grounding .-> CLF
 ```
@@ -287,6 +287,9 @@ Documentation
 * [docs/memory-format.md](docs/memory-format.md) - file layout and supersede semantics
 * [docs/stage1-memory-daily-wrap.md](docs/stage1-memory-daily-wrap.md) - provenance, review inbox, Daily Wrap, privacy, and failure semantics
 * [docs/desktop-shell.md](docs/desktop-shell.md) - Tauri trust boundary, fixed bridge protocol, dangerous-action semantics, and release gates
+* [docs/vida-public-product-research.md](docs/vida-public-product-research.md) - dated official-source Vida capability and privacy research
+* [docs/vida-like-roadmap.md](docs/vida-like-roadmap.md) - clean-room parity plan and staged safety gates
+* [docs/runtime-reliability.md](docs/runtime-reliability.md) - process fault matrix, 10k replay, and the still-open 24-hour/daemon-queue/cascade-replay gates
 * [docs/troubleshooting.md](docs/troubleshooting.md) - common issues
 
 ---

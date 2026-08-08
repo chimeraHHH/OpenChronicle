@@ -14,6 +14,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+from ..testing import failpoints
+
 SessionStatus = Literal["active", "ended", "reduced", "failed"]
 
 # Process-instance identity complements owner_pid: after a hard restart the OS
@@ -194,6 +196,7 @@ def mark_ended(conn: sqlite3.Connection, session_id: str, end_time: datetime) ->
     if start_time is not None and _instant(end_time) < _instant(start_time):
         end_time = start_time
 
+    failpoints.hit("session.status.before_ended")
     result = conn.execute(
         """
         UPDATE sessions
@@ -202,6 +205,7 @@ def mark_ended(conn: sqlite3.Connection, session_id: str, end_time: datetime) ->
         """,
         (end_time.isoformat(), datetime.now().astimezone().isoformat(), session_id),
     )
+    failpoints.hit("session.status.after_ended")
     return result.rowcount == 1
 
 
@@ -213,6 +217,7 @@ def mark_reduced(
     terminal_path: str = "",
     terminal_noop: bool = False,
 ) -> None:
+    failpoints.hit("session.status.before_reduced")
     conn.execute(
         """
         UPDATE sessions
@@ -239,6 +244,7 @@ def mark_reduced(
             session_id,
         ),
     )
+    failpoints.hit("session.status.after_reduced")
 
 
 def clear_classifier_terminal_pending(
@@ -301,6 +307,7 @@ def mark_failed(
     error: str,
     next_retry_at: datetime | None,
 ) -> None:
+    failpoints.hit("session.status.before_failed")
     conn.execute(
         """
         UPDATE sessions
@@ -318,6 +325,7 @@ def mark_failed(
             session_id,
         ),
     )
+    failpoints.hit("session.status.after_failed")
 
 
 def get_by_id(conn: sqlite3.Connection, session_id: str) -> SessionRow | None:
@@ -337,6 +345,7 @@ def set_flush_end(
     session_id: str,
     flush_end: datetime,
 ) -> None:
+    failpoints.hit("session.status.before_flush")
     conn.execute(
         "UPDATE sessions SET flush_end=?, updated_at=? WHERE id=?",
         (
@@ -345,6 +354,7 @@ def set_flush_end(
             session_id,
         ),
     )
+    failpoints.hit("session.status.after_flush")
 
 
 def set_classified_end(
@@ -540,7 +550,7 @@ def earliest_pending_reduction_start(
             and _instant(start) < _instant(flush_end) < _instant(end)
         ):
             candidate = flush_end
-        lower_bound = end - timedelta(hours=bounded_hours)
+        lower_bound = _add_elapsed(end, -timedelta(hours=bounded_hours))
         if _instant(candidate) < _instant(lower_bound):
             candidate = lower_bound
         candidates.append(candidate)
@@ -612,9 +622,15 @@ def _to_row(r: sqlite3.Row) -> SessionRow:
 
 def _instant(value: datetime) -> datetime:
     """Normalize a datetime for safe comparisons across UTC offsets."""
-    if value.tzinfo is None:
+    if value.tzinfo is None or value.utcoffset() is None:
         value = value.astimezone()
     return value.astimezone(UTC)
+
+
+def _add_elapsed(value: datetime, delta: timedelta) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value + delta
+    return (_instant(value) + delta).astimezone(value.tzinfo)
 
 
 def _parse_datetime(value: object) -> datetime | None:

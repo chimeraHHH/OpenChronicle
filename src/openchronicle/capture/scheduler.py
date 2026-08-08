@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import math
 import os
 import queue
 import tempfile
@@ -13,21 +14,44 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from .. import paths
 from ..config import CaptureConfig
+from ..local_time import ClockSample
 from ..logger import get
 from ..memory_candidates import store as candidate_store
 from ..privacy import policy as privacy_policy
+from ..provenance import store as provenance_store
+from ..provenance.models import EvidenceRef, observation_digest
+from ..store import files as store_files
 from ..store import fts as fts_store
+from ..testing import failpoints
+from ..timeline import store as timeline_store
 from . import ax_capture, filenames, s1_parser, screenshot, store_lock, window_meta
 from .event_dispatcher import EventDispatcher
 from .watcher import AXWatcherProcess
 
 logger = get("openchronicle.capture")
+
+
+@dataclass(frozen=True, slots=True)
+class _BufferRecord:
+    mtime: float
+    path: Path
+    size: int
+    capture_time: datetime | None
+    binding: tuple[str, str, str, str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _WindowCleanupGroup:
+    receipt: timeline_store.WindowReceipt
+    records: tuple[_BufferRecord, ...]
+
 
 _PERSISTED_TRIGGER_TYPES = {
     "heartbeat",
@@ -100,6 +124,22 @@ class _AXSchemaBudget:
 
 def _now_iso() -> str:
     return datetime.now(UTC).astimezone().isoformat(timespec="milliseconds")
+
+
+def _timestamp_sample_from_provider(
+    provider: Callable[[], datetime],
+) -> tuple[str, float | None]:
+    sample_provider = getattr(provider, "sample", None)
+    sample = sample_provider() if callable(sample_provider) else None
+    value = sample.wall_time if isinstance(sample, ClockSample) else provider()
+    if not isinstance(value, datetime):
+        raise TypeError("capture timestamp provider must return datetime")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("capture timestamp provider must return an offset-aware datetime")
+    tick = sample.monotonic_tick if isinstance(sample, ClockSample) else None
+    if tick is not None and (not math.isfinite(tick) or tick < 0):
+        raise ValueError("capture timestamp provider returned an invalid monotonic tick")
+    return value.isoformat(timespec="milliseconds"), tick
 
 
 def _safe_filename(ts: str) -> str:
@@ -577,6 +617,14 @@ def _session_hook_event(out: dict[str, Any]) -> dict[str, Any]:
         value = meta.get(field)
         if isinstance(value, int) and not isinstance(value, bool) and value > 0:
             event[field] = value
+    persisted_tick = out.get("_persisted_monotonic_tick")
+    if (
+        isinstance(persisted_tick, (int, float))
+        and not isinstance(persisted_tick, bool)
+        and math.isfinite(float(persisted_tick))
+        and persisted_tick >= 0
+    ):
+        event["_persisted_monotonic_tick"] = float(persisted_tick)
     return event
 
 
@@ -809,6 +857,9 @@ def _write_capture(out: dict[str, Any]) -> Path:
         observation_id = f"obs_{uuid.uuid4().hex}"
     out["observation_id"] = observation_id
     timestamp_at_persist = out.pop("_timestamp_at_persist", False) is True
+    timestamp_provider = out.pop("_timestamp_provider", None)
+    out.pop("_persisted_monotonic_tick", None)
+    persisted_monotonic_tick: float | None = None
     # JSON and its searchable projection are one logical capture-store write.
     # Serialize it with collection-wide cleanup/rebuild commands so a rebuild
     # cannot snapshot the directory between these two operations.  A timeline
@@ -816,11 +867,24 @@ def _write_capture(out: dict[str, Any]) -> Path:
     # capture is either visible in its closed bucket or belongs to a later one.
     with store_lock.capture_store_lock():
         if timestamp_at_persist:
-            out["timestamp"] = _now_iso()
+            if timestamp_provider is None:
+                out["timestamp"] = _now_iso()
+            elif callable(timestamp_provider):
+                out["timestamp"], persisted_monotonic_tick = _timestamp_sample_from_provider(
+                    timestamp_provider
+                )
+            else:
+                raise TypeError("capture timestamp provider is not callable")
         ts = str(out["timestamp"])
         path = paths.capture_buffer_dir() / (f"{filenames.capture_stem(ts, observation_id)}.json")
         _atomic_write_json(path, out)
-        _index_capture(path.stem, out)
+        failpoints.hit("capture.fts.before_write")
+        if _index_capture(path.stem, out):
+            failpoints.hit("capture.fts.after_write")
+        if persisted_monotonic_tick is not None:
+            # Private post-write envelope only. It is assigned after JSON/FTS
+            # publication and consumed synchronously by the session hook.
+            out["_persisted_monotonic_tick"] = persisted_monotonic_tick
     meta = out.get("window_meta") or {}
     logger.info(
         "capture ok: %s trigger=%s app=%r title=%r ax=%s screenshot=%s",
@@ -861,7 +925,9 @@ def _atomic_write_json(
                 tmp_path,
                 ns=(previous_stat.st_atime_ns, previous_stat.st_mtime_ns),
             )
+        failpoints.hit("capture.json.before_rename")
         os.replace(tmp_path, path)
+        failpoints.hit("capture.json.after_rename")
         with contextlib.suppress(OSError):
             dir_fd = os.open(path.parent, os.O_RDONLY)
             try:
@@ -877,7 +943,7 @@ def _atomic_write_json(
         raise
 
 
-def _index_capture(file_stem: str, out: dict[str, Any]) -> None:
+def _index_capture(file_stem: str, out: dict[str, Any]) -> bool:
     """Insert/upsert the capture's S1 fields into the FTS5 index.
 
     Failures here are non-fatal — a missed FTS row is recoverable via
@@ -901,8 +967,10 @@ def _index_capture(file_stem: str, out: dict[str, Any]) -> None:
                 visible_text=out.get("visible_text") or "",
                 url=out.get("url") or "",
             )
+        return True
     except Exception as exc:  # noqa: BLE001
         logger.warning("captures FTS insert failed for %s: %s", file_stem, exc)
+        return False
 
 
 def _content_fingerprint(out: dict[str, Any]) -> str:
@@ -977,10 +1045,12 @@ class _CaptureRunner:
         provider: ax_capture.AXProvider,
         *,
         pre_capture_hook: Callable[[dict[str, Any]], None] | None = None,
+        timestamp_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self._cfg = cfg
         self._provider = provider
         self._pre_capture_hook = pre_capture_hook
+        self._timestamp_provider = timestamp_provider
         self._lock = threading.Lock()
         self._lifecycle_lock = threading.RLock()
         self._last_fingerprint: str | None = None
@@ -1084,6 +1154,10 @@ class _CaptureRunner:
                             (meta.get("title") or "")[:60],
                         )
                         return
+                    if self._timestamp_provider is not None:
+                        # Private callable consumed under the capture-store
+                        # lock; it can never cross the JSON/FTS boundary.
+                        out["_timestamp_provider"] = self._timestamp_provider
                     _write_capture(out)
                     # A failed atomic write must remain retryable. Advancing the
                     # dedup bookmark before persistence would make the next
@@ -1118,6 +1192,7 @@ async def run_forever(
     cfg: CaptureConfig,
     *,
     pre_capture_hook: Callable[[dict[str, Any]], None] | None = None,
+    timestamp_provider: Callable[[], datetime] | None = None,
 ) -> None:
     """Run the capture pipeline until cancelled.
 
@@ -1135,7 +1210,12 @@ async def run_forever(
     if not provider.available:
         logger.warning("AX capture unavailable: %s", getattr(provider, "reason", "unknown reason"))
 
-    runner = _CaptureRunner(cfg, provider, pre_capture_hook=pre_capture_hook)
+    runner = _CaptureRunner(
+        cfg,
+        provider,
+        pre_capture_hook=pre_capture_hook,
+        timestamp_provider=timestamp_provider,
+    )
     runner.start_worker()
     watcher: AXWatcherProcess | None = None
     dispatcher: EventDispatcher | None = None
@@ -1204,6 +1284,7 @@ def cleanup_buffer(
     *,
     screenshot_retention_hours: int | None = None,
     max_mb: int = 0,
+    capture_config: CaptureConfig | None = None,
 ) -> dict[str, int]:
     """Tiered buffer hygiene. Returns {deleted, stripped, evicted}.
 
@@ -1227,12 +1308,13 @@ def cleanup_buffer(
             logger.error("buffer cleanup skipped: invalid processed boundary")
             return {"deleted": 0, "stripped": 0, "evicted": 0}
 
-    with store_lock.capture_store_lock():
+    with store_files.review_operation_lock(), store_lock.capture_store_lock():
         return _cleanup_buffer_locked(
             retention_hours,
             absorbed_before,
             screenshot_retention_hours=screenshot_retention_hours,
             max_mb=max_mb,
+            capture_config=capture_config or CaptureConfig(),
         )
 
 
@@ -1242,8 +1324,9 @@ def _cleanup_buffer_locked(
     *,
     screenshot_retention_hours: int | None,
     max_mb: int,
+    capture_config: CaptureConfig,
 ) -> dict[str, int]:
-    """Implement ``cleanup_buffer`` while the global capture-store lock is held."""
+    """Implement cleanup with durable all-or-none window retirement."""
     buf = paths.capture_buffer_dir()
     if not buf.exists():
         return {"deleted": 0, "stripped": 0, "evicted": 0}
@@ -1257,116 +1340,99 @@ def _cleanup_buffer_locked(
     )
 
     deleted = stripped = evicted = 0
-    records: list[tuple[float, Path, int, bool]] = []
-    delete_candidates: list[Path] = []
-    surviving: list[tuple[float, Path, int]] = []  # (mtime, path, size_after_pass)
-
-    for p in sorted(buf.iterdir()):
-        if p.is_file() and filenames.is_capture_temp_name(p.name):
+    for path in sorted(buf.iterdir()):
+        if path.is_file() and filenames.is_capture_temp_name(path.name):
             # Every live capture writer holds capture_store_lock across its
             # temp lifetime. Seeing one while we own that lock proves its
             # writer died before rename, so it is safe to purge immediately.
             try:
-                p.unlink()
+                path.unlink()
                 deleted += 1
             except OSError:
                 pass
-            continue
-        if not p.is_file() or p.suffix != ".json":
-            continue
-        capture_time = filenames.parse_capture_stem(p.stem)
-        is_absorbed = (
-            absorbed_before is not None
-            and capture_time is not None
-            and capture_time < absorbed_before
+    records = _buffer_records(buf)
+    live_groups, retiring_groups = _eligible_window_cleanup_groups(
+        records,
+        absorbed_before=absorbed_before,
+        capture_config=capture_config,
+    )
+
+    # A crash/partial unlink leaves a durable retiring root plus the original
+    # per-path manifest. Retry only exact residual members, independent of the
+    # current retention clock, then finalize once the entire manifest is absent.
+    retry_records = [record for group in retiring_groups for record in group.records]
+    if retry_records:
+        removed, failures = _unlink_authorized_capture_paths(retry_records)
+        deleted += len(removed)
+        _finish_capture_unlinks(
+            removed=removed,
+            failures=failures,
+            operation="automatic retirement retry",
         )
-        try:
-            st = p.stat()
-        except OSError:
-            continue
+    else:
+        _finish_capture_unlinks(
+            removed=[],
+            failures=[],
+            operation="automatic retirement recovery",
+        )
 
-        records.append((st.st_mtime, p, st.st_size, is_absorbed))
-        if is_absorbed and st.st_mtime <= delete_cutoff:
-            delete_candidates.append(p)
+    # Retention is a whole-window decision: every manifest member must be old.
+    retention_groups = [
+        group
+        for group in live_groups
+        if group.records and all(record.mtime <= delete_cutoff for record in group.records)
+    ]
+    retention_records = [record for group in retention_groups for record in group.records]
+    retention_paths = [record.path for record in retention_records]
+    if retention_paths and _delete_captures_from_fts([path.stem for path in retention_paths]):
+        removed, failures = _unlink_authorized_capture_paths(retention_records)
+        deleted += len(removed)
+        _finish_capture_unlinks(
+            removed=removed,
+            failures=failures,
+            operation="automatic retention",
+        )
 
-    # Deny direct reads and remove the complete batch from FTS before unlinking
-    # any authoritative JSON. A database failure therefore leaves every source
-    # file intact and searchable, while an unlink failure leaves a durable
-    # tombstone that keeps the residual plaintext hidden.
-    delete_indexed = not delete_candidates or _delete_captures_from_fts(
-        [path.stem for path in delete_candidates]
-    )
-    delete_candidate_set = set(delete_candidates) if delete_indexed else set()
-
-    deleted_paths: list[Path] = []
-    delete_failures: list[tuple[Path, OSError]] = []
-    for mtime, p, size, is_absorbed in records:
-        if p in delete_candidate_set:
-            try:
-                p.unlink()
-                deleted += 1
-                deleted_paths.append(p)
-                continue
-            except OSError as exc:
-                delete_failures.append((p, exc))
-                surviving.append((mtime, p, size))
-                continue
-
-        if (
-            is_absorbed
-            and strip_cutoff is not None
-            and mtime <= strip_cutoff
-            and _strip_screenshot_inplace(p)
-        ):
-            stripped += 1
-            try:
-                stat_after_strip = p.stat()
-                mtime = stat_after_strip.st_mtime
-                size = stat_after_strip.st_size
-            except OSError:
-                continue
-
-        surviving.append((mtime, p, size))
-
-    _finish_capture_unlinks(
-        removed=deleted_paths,
-        failures=delete_failures,
-        operation="automatic retention",
-    )
+    # Pixel stripping is projection-neutral under observation digest v2. It is
+    # intentionally per-file and may run even before the whole window is
+    # absorbed, while malformed/symlinked files remain untouched.
+    if strip_cutoff is not None:
+        for record in _buffer_records(buf):
+            if (
+                record.binding is not None
+                and record.mtime <= strip_cutoff
+                and _strip_screenshot_inplace(record.path)
+            ):
+                stripped += 1
 
     if max_mb > 0:
         limit = max_mb * 1024 * 1024
-        total = sum(sz for _, _, sz in surviving)
+        records = _buffer_records(buf)
+        total = sum(record.size for record in records)
         if total > limit:
-            surviving.sort()  # oldest first by mtime
-            eviction_candidates: list[tuple[Path, int]] = []
+            live_groups, _retiring_groups = _eligible_window_cleanup_groups(
+                records,
+                absorbed_before=absorbed_before,
+                capture_config=capture_config,
+            )
+            live_groups.sort(
+                key=lambda group: timeline_store.as_instant(group.receipt.window_start)
+            )
+            eviction_groups: list[_WindowCleanupGroup] = []
             projected_total = total
-            for _mtime, path, size in surviving:
+            for group in live_groups:
                 if projected_total <= limit:
                     break
-                capture_time = filenames.parse_capture_stem(path.stem)
-                if (
-                    absorbed_before is None
-                    or capture_time is None
-                    or capture_time >= absorbed_before
-                ):
-                    continue  # don't evict un-absorbed captures
-                eviction_candidates.append((path, size))
-                projected_total -= size
+                eviction_groups.append(group)
+                projected_total -= sum(record.size for record in group.records)
 
-            if eviction_candidates and _delete_captures_from_fts(
-                [path.stem for path, _size in eviction_candidates]
-            ):
-                evicted_paths: list[Path] = []
-                eviction_failures: list[tuple[Path, OSError]] = []
-                for path, size in eviction_candidates:
-                    try:
-                        path.unlink()
-                        total -= size
-                        evicted += 1
-                        evicted_paths.append(path)
-                    except OSError as exc:
-                        eviction_failures.append((path, exc))
+            eviction_records = [record for group in eviction_groups for record in group.records]
+            eviction_paths = [record.path for record in eviction_records]
+            if eviction_paths and _delete_captures_from_fts([path.stem for path in eviction_paths]):
+                evicted_paths, eviction_failures = _unlink_authorized_capture_paths(
+                    eviction_records
+                )
+                evicted += len(evicted_paths)
                 _finish_capture_unlinks(
                     removed=evicted_paths,
                     failures=eviction_failures,
@@ -1376,24 +1442,292 @@ def _cleanup_buffer_locked(
     return {"deleted": deleted, "stripped": stripped, "evicted": evicted}
 
 
+def _buffer_records(buf: Path) -> list[_BufferRecord]:
+    records: list[_BufferRecord] = []
+    for path in sorted(buf.iterdir(), key=lambda candidate: candidate.name):
+        if path.suffix != ".json":
+            continue
+        try:
+            stat = path.lstat()
+        except OSError:
+            continue
+        records.append(
+            _BufferRecord(
+                mtime=stat.st_mtime,
+                path=path,
+                size=stat.st_size,
+                capture_time=filenames.parse_capture_stem(path.stem),
+                binding=_capture_semantic_binding(path),
+            )
+        )
+    return records
+
+
+def _capture_semantic_binding(path: Path) -> tuple[str, str, str, str] | None:
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_bytes())
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or any(
+        marker in data
+        for marker in (
+            "__openchronicle_dropped_screenshot",
+            "__openchronicle_source_digest",
+        )
+    ):
+        return None
+    timestamp_raw = data.get("timestamp")
+    observation_id = data.get("observation_id")
+    timestamp = filenames.parse_timestamp(timestamp_raw) if isinstance(timestamp_raw, str) else None
+    stem_timestamp = filenames.parse_capture_stem(path.stem)
+    if (
+        timestamp is None
+        or stem_timestamp is None
+        or timeline_store.as_instant(timestamp) != timeline_store.as_instant(stem_timestamp)
+        or not isinstance(observation_id, str)
+        or not observation_id.startswith("obs_")
+    ):
+        return None
+    try:
+        canonical_stem = filenames.capture_stem(timestamp_raw, observation_id)
+        legacy_stem = filenames.safe_timestamp(timestamp_raw)
+    except ValueError:
+        return None
+    if path.stem not in {canonical_stem, legacy_stem}:
+        return None
+    return (path.name, observation_id, observation_digest(data), timestamp_raw)
+
+
+def _eligible_window_cleanup_groups(
+    records: list[_BufferRecord],
+    *,
+    absorbed_before: datetime | None,
+    capture_config: CaptureConfig,
+) -> tuple[list[_WindowCleanupGroup], list[_WindowCleanupGroup]]:
+    try:
+        with fts_store.cursor() as conn:
+            if not timeline_store.capture_receipts_enabled(conn):
+                return [], []
+            policy_digest = privacy_policy.stored_observation_policy_digest(capture_config)
+            receipts = timeline_store.window_receipts_in_raw_states(
+                conn,
+                "live",
+                "retiring",
+            )
+            live: list[_WindowCleanupGroup] = []
+            retiring: list[_WindowCleanupGroup] = []
+            for receipt in receipts:
+                if not timeline_store.window_receipt_is_current(conn, receipt):
+                    continue
+                manifest = timeline_store.capture_bindings_for_window(conn, receipt)
+                expected = {binding[0]: binding for binding in manifest}
+                window_records = tuple(
+                    record
+                    for record in records
+                    if record.capture_time is not None
+                    and timeline_store.as_instant(receipt.window_start)
+                    <= timeline_store.as_instant(record.capture_time)
+                    < timeline_store.as_instant(receipt.window_end)
+                )
+                if receipt.raw_state == "retiring":
+                    if any(record.path.name not in expected for record in window_records):
+                        continue
+                    # An expected pathname that still exists but cannot be
+                    # classified is neither proof that the old bytes remain
+                    # nor proof that a valid new observation replaced them.
+                    # Keep the frozen manifest and its deny marker intact for
+                    # malformed files, symlinks, and filename/payload identity
+                    # mismatches. Only a different *valid* binding may be
+                    # released as new late evidence.
+                    if any(record.binding is None for record in window_records):
+                        continue
+                    residual_list: list[_BufferRecord] = []
+                    for record in window_records:
+                        if record.binding == expected.get(record.path.name):
+                            residual_list.append(record)
+                        else:
+                            # This filename now holds new evidence, not the old
+                            # authorized bytes. Release its obsolete deny marker
+                            # and exclude it from the frozen retry manifest.
+                            candidate_store.delete_tombstone(
+                                conn,
+                                kind="capture_file",
+                                artifact_id=record.path.name,
+                            )
+                    residual = tuple(residual_list)
+                    retiring.append(_WindowCleanupGroup(receipt, residual))
+                    continue
+                if receipt.policy_digest != policy_digest:
+                    continue
+                if absorbed_before is None:
+                    continue
+                bindings = [record.binding for record in window_records]
+                if (
+                    any(binding is None for binding in bindings)
+                    or sorted(binding for binding in bindings if binding is not None)
+                    != sorted(manifest)
+                    or any(
+                        record.capture_time is None
+                        or timeline_store.as_instant(record.capture_time)
+                        >= timeline_store.as_instant(absorbed_before)
+                        for record in window_records
+                    )
+                ):
+                    continue
+                allowed = [
+                    record.binding
+                    for record in window_records
+                    if record.binding is not None
+                    and _capture_allowed_by_policy(record.path, capture_config)
+                ]
+                if not _receipt_matches_allowed_bindings(conn, receipt, allowed):
+                    continue
+                live.append(_WindowCleanupGroup(receipt, window_records))
+            return live, retiring
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("capture cleanup could not verify window receipts: %s", exc)
+        return [], []
+
+
+def _capture_allowed_by_policy(path: Path, cfg: CaptureConfig) -> bool:
+    try:
+        data = json.loads(path.read_bytes())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return privacy_policy.evaluate_stored_observation(cfg, observation=data).allowed
+
+
+def _receipt_matches_allowed_bindings(
+    conn,
+    receipt: timeline_store.WindowReceipt,
+    allowed_bindings: list[tuple[str, str, str, str]],
+) -> bool:
+    if receipt.outcome == "policy_excluded":
+        return (
+            not allowed_bindings
+            and timeline_store.window_state(
+                conn,
+                receipt.window_start,
+                receipt.window_end,
+            )
+            == "missing"
+        )
+    if receipt.outcome != "block":
+        return False
+    block = timeline_store.get_window(conn, receipt.window_start, receipt.window_end)
+    if block is None:
+        return False
+    expected_sources = [
+        EvidenceRef(
+            kind="observation",
+            id=observation_id,
+            path=capture_path,
+            timestamp=capture_time,
+            content_hash=source_hash,
+        )
+        for capture_path, observation_id, source_hash, capture_time in allowed_bindings
+    ]
+    return (
+        provenance_store.direct_sources_checked(
+            conn,
+            EvidenceRef(kind="timeline_block", id=block.id),
+        )
+        == expected_sources
+    )
+
+
+def _unlink_authorized_capture_paths(
+    records_to_unlink: list[_BufferRecord],
+) -> tuple[list[Path], list[tuple[Path, OSError]]]:
+    """Unlink only bytes still equal to the frozen receipt binding.
+
+    The database transition happens before filesystem mutation so readers are
+    denied first. An external sync tool does not honor our advisory capture
+    lock, however, and can replace a pathname after that transition. Recheck
+    the semantic identity immediately before unlink; a changed valid file is
+    released later as new evidence, while an unclassifiable residual remains
+    tombstoned and retiring.
+    """
+    removed: list[Path] = []
+    failures: list[tuple[Path, OSError]] = []
+    for record in records_to_unlink:
+        path = record.path
+        if record.binding is None or _capture_semantic_binding(path) != record.binding:
+            continue
+        try:
+            path.unlink()
+            removed.append(path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures.append((path, exc))
+    return removed, failures
+
+
 def _delete_captures_from_fts(stems: list[str]) -> bool:
-    """Atomically deny direct reads and drop matching index rows."""
+    """Atomically deny reads, drop FTS rows, and start window retirement."""
     if not stems:
         return True
+    selected_names = {f"{stem}.json" for stem in stems}
     try:
         with fts_store.cursor() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                for stem in stems:
+                window_keys = conn.execute(
+                    """
+                    SELECT DISTINCT window_start, window_end
+                      FROM timeline_capture_receipts
+                     WHERE capture_path IN ({})
+                    """.format(",".join("?" for _ in selected_names)),
+                    tuple(sorted(selected_names)),
+                ).fetchall()
+                receipts: list[timeline_store.WindowReceipt] = []
+                authorized_names: set[str] = set()
+                for start_raw, end_raw in window_keys:
+                    receipt = timeline_store.window_receipt_for(
+                        conn,
+                        datetime.fromisoformat(start_raw),
+                        datetime.fromisoformat(end_raw),
+                    )
+                    if (
+                        receipt is None
+                        or receipt.raw_state not in {"live", "retiring"}
+                        or not timeline_store.window_receipt_is_current(conn, receipt)
+                    ):
+                        raise RuntimeError("capture window retirement proof changed")
+                    manifest_names = {
+                        binding[0]
+                        for binding in timeline_store.capture_bindings_for_window(conn, receipt)
+                    }
+                    if receipt.raw_state == "live" and not manifest_names.issubset(selected_names):
+                        raise RuntimeError("partial live window retirement denied")
+                    selected_manifest_names = manifest_names & selected_names
+                    if not selected_manifest_names:
+                        raise RuntimeError("retirement selection has no manifest member")
+                    authorized_names.update(selected_manifest_names)
+                    receipts.append(receipt)
+                if authorized_names != selected_names:
+                    raise RuntimeError("capture retirement selection is not fully receipted")
+
+                for name in sorted(selected_names):
                     candidate_store.put_tombstone(
                         conn,
                         kind="capture_file",
-                        artifact_id=f"{stem}.json",
+                        artifact_id=name,
                     )
                 conn.executemany(
                     "DELETE FROM captures WHERE id=?",
                     ((stem,) for stem in stems),
                 )
+                for receipt in receipts:
+                    if receipt.raw_state == "live":
+                        timeline_store.transition_window_receipt_raw_state(
+                            conn,
+                            receipt,
+                            "retiring",
+                        )
                 conn.execute("COMMIT")
             except Exception:  # noqa: BLE001
                 if conn.in_transaction:
@@ -1411,19 +1745,12 @@ def _finish_capture_unlinks(
     failures: list[tuple[Path, OSError]],
     operation: str,
 ) -> None:
-    """Clear successful deny markers and retain failed-unlink markers."""
-    if not removed and not failures:
-        return
+    """Finalize complete retiring manifests; retain partial failures safely."""
+    current_records = _buffer_records(paths.capture_buffer_dir())
     try:
         with fts_store.cursor() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                for path in removed:
-                    candidate_store.delete_tombstone(
-                        conn,
-                        kind="capture_file",
-                        artifact_id=path.name,
-                    )
                 for path, exc in failures:
                     candidate_store.set_tombstone_error(
                         conn,
@@ -1432,6 +1759,60 @@ def _finish_capture_unlinks(
                         path="",
                         error=f"{type(exc).__name__}: {operation} unlink failed",
                     )
+                for receipt in timeline_store.window_receipts_in_raw_states(
+                    conn,
+                    "retiring",
+                ):
+                    manifest = timeline_store.capture_bindings_for_window(conn, receipt)
+                    if len(
+                        manifest
+                    ) != receipt.capture_count or not timeline_store.window_receipt_is_current(
+                        conn, receipt
+                    ):
+                        continue
+                    manifest_names = {binding[0] for binding in manifest}
+                    window_records = [
+                        record
+                        for record in current_records
+                        if record.capture_time is not None
+                        and timeline_store.as_instant(receipt.window_start)
+                        <= timeline_store.as_instant(record.capture_time)
+                        < timeline_store.as_instant(receipt.window_end)
+                    ]
+                    if any(record.path.name not in manifest_names for record in window_records):
+                        continue
+                    complete = True
+                    for binding in manifest:
+                        name = binding[0]
+                        if Path(name).name != name:
+                            complete = False
+                            break
+                        residual = paths.capture_buffer_dir() / name
+                        if residual.exists() or residual.is_symlink():
+                            current_binding = _capture_semantic_binding(residual)
+                            if current_binding is None or current_binding == binding:
+                                complete = False
+                    if not complete:
+                        continue
+                    timeline_store.transition_window_receipt_raw_state(
+                        conn,
+                        receipt,
+                        "retired",
+                    )
+                    conn.execute(
+                        "DELETE FROM timeline_capture_receipts "
+                        "WHERE window_start=? AND window_end=?",
+                        (
+                            receipt.window_start.isoformat(timespec="microseconds"),
+                            receipt.window_end.isoformat(timespec="microseconds"),
+                        ),
+                    )
+                    for capture_path, _obs, _digest, _timestamp in manifest:
+                        candidate_store.delete_tombstone(
+                            conn,
+                            kind="capture_file",
+                            artifact_id=capture_path,
+                        )
                 conn.execute("COMMIT")
             except BaseException:
                 if conn.in_transaction:

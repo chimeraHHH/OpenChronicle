@@ -17,6 +17,7 @@ from ..logger import get
 from ..memory_candidates import store as candidate_store
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, content_digest
+from ..testing import failpoints
 from . import files as files_mod
 from . import fts
 
@@ -323,6 +324,7 @@ def _append_entry(
         # observes the file post-write must also observe the matching
         # FTS row, otherwise rebuild_index sees a row pointing at an
         # entry that "doesn't exist" until the second writer commits.
+        failpoints.hit("memory.fts.before_write")
         fts.insert_entry(
             conn,
             id=entry_id,
@@ -333,6 +335,7 @@ def _append_entry(
             content=entry_index_content(indexed_entry),
             superseded=entry_index_superseded(indexed_entry),
         )
+        failpoints.hit("memory.fts.after_write")
         if evidence_refs is not None:
             provenance_store.replace_sources(
                 conn,

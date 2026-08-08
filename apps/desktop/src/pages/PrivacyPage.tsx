@@ -114,8 +114,8 @@ export function PrivacyPage({ snapshot }: PrivacyPageProps) {
         </dl>
         {privacy.include_screenshot ? (
           <p className="danger-panel" role="alert">
-            Screenshots are enabled. The current capture implementation may include the primary
-            display, not only the verified foreground window.
+            Screenshots are enabled. Capture is limited to the exact verified foreground window;
+            an identity change or verification failure is rejected.
           </p>
         ) : (
           <p className="success-panel">Screenshots are off; Screen Recording permission is not needed.</p>

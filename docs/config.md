@@ -41,12 +41,22 @@ api_key_env = "OPENAI_API_KEY"
 
 Each stage section **inherits every field** from `[models.default]` and overrides only what it sets. If you want a single model everywhere, set `[models.default]` and leave the rest empty.
 
-`timeout_seconds` is passed to LiteLLM as the provider transport timeout; it
-bounds stalled connect/read/write operations, not an adversarial server that
-keeps a response alive forever. OpenChronicle owns the outer retry loop and
-clears request-level and process-global LiteLLM retries, so attempt count is
-deterministic. Retryable
-conditions are 408/409/429, connection/timeout failures, and HTTP 5xx.
+`timeout_seconds` is passed to LiteLLM as the provider transport timeout and is
+also enforced by a parent-owned outer deadline. Every non-mock attempt runs in
+a fresh process group; its byte-bounded JSON request travels over stdin (never
+argv), and its response must be one complete byte-bounded JSON envelope. If the
+SDK hangs past the configured timeout plus a one-second scheduling grace, the
+parent sends `TERM`, escalates to `KILL`, and reaps the worker before returning.
+At most eight provider workers may be in flight.
+
+OpenChronicle owns the retry loop and clears request-level and process-global
+LiteLLM retries, so attempt count is deterministic. Provider failures that
+arrive before the outer deadline are retried only for 408/409/429,
+connection/timeout failures, and HTTP 5xx. A hard outer timeout, worker-protocol
+failure, or local capacity rejection is not retried. Killing the local worker
+cannot prove that a remote service stopped processing an already-sent request,
+so provider calls and billing are not exactly-once; local publication remains
+replay-safe and separately fenced.
 
 Stage → purpose:
 
@@ -192,12 +202,22 @@ Tuning notes:
 - **`debounce_seconds`.** Lower = more captures during typing; higher = fewer near-duplicates.
 - **`same_window_dedup_seconds`.** When the user types for a long time in the same document, this is the knob that decides how frequently you re-capture the same (bundle, window) pair. Focus changes always bypass this.
 - **`heartbeat_minutes`.** Periodic capture as a safety net. `0` disables it completely (watcher-only). Values `>0` are clamped to a 60s floor.
-- **`buffer_retention_hours`.** Whole-JSON deletion cutoff. Default 7 days lets `read_recent_capture` reach back that far — shrink to a few hours if you only care about the current work session, bump if you want longer recall.
-- **`screenshot_retention_hours`.** After this many hours the screenshot field is stripped (rest of the JSON stays). Screenshots aren't used by timeline / reducer / classifier today — setting this ≪ `buffer_retention_hours` is what makes long retention cheap. `0` or very large values keep screenshots for the full window.
+- **`buffer_retention_hours`.** Whole-JSON deletion cutoff. Default 7 days lets
+  `read_recent_capture` reach back that far. Deletion is receipt-gated and
+  all-or-none per timeline window: all members must be behind the producer
+  boundary, old enough, and exactly match a current complete manifest. Missing,
+  changed, late, or unreceipted files retain the whole window.
+- **`screenshot_retention_hours`.** After this many hours the screenshot field
+  is stripped (rest of the JSON stays). This is intentionally per-file rather
+  than whole-window: screenshots are not used by timeline/reducer/classifier and
+  are excluded from the semantic receipt digest. Setting this much lower than
+  `buffer_retention_hours` makes long retention cheap. `0` or very large values
+  keep screenshots for the full window.
 - **`buffer_max_mb`.** Best-effort size target in MB. When exceeded, cleanup
-  evicts the oldest already-absorbed files toward the target, but never removes
-  unprocessed captures. Capture-only mode or a stalled timeline can therefore
-  exceed it. Set to `0` to disable size-based cleanup.
+  evicts the oldest eligible complete windows toward the target, but never
+  splits a window or removes unprocessed/unverifiable captures. Capture-only
+  mode or a stalled timeline can therefore exceed it. Set to `0` to disable
+  size-based cleanup.
 
 ## `[timeline]`
 
@@ -210,7 +230,15 @@ recent_context_blocks = 720       # ~12h of 1-min blocks; consulted by tooling
 
 Timeline is always-on and acts as a **verbatim-preserving normalizer** — it de-duplicates snapshots and strips UI chrome but preserves the user's typed text, URLs, titles, and proper nouns unchanged. Real compression happens in the reducer.
 
-`window_minutes` is effectively locked in once blocks exist — changing it later produces new-sized blocks going forward, but old blocks keep their original boundaries (they're keyed by `(start_time, end_time)`). The effective value is clamped to `1..1440`; longer rows are quarantined. The default 1-min size pairs with the reducer's flush tick (default 5-min) so each flush consumes ~5 blocks. A larger timeline window cuts LLM calls per hour but risks the model sliding from normalization into summarization.
+`window_minutes` is bound to a durable epoch on the first producer tick, even
+when that tick finds no capture. Changing it afterward does **not** create
+mixed-size future blocks: production fails closed until you run
+`openchronicle clean timeline`, which removes timeline blocks, coverage,
+receipts, and the old epoch. The effective value is clamped to `1..1440`;
+longer rows are quarantined. The default 1-min size pairs with the reducer's
+flush tick (default 5-min) so each flush consumes ~5 blocks. A larger timeline
+window cuts LLM calls per hour but risks the model sliding from normalization
+into summarization.
 
 `cold_lookback_minutes` is not a data-loss cutoff. On a fresh/legacy state the
 producer seeds from the earliest of this default horizon, any valid retained

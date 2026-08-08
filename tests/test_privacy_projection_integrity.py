@@ -446,15 +446,13 @@ def test_timeline_source_edge_swap_cannot_rebind_private_output(
 
         assert timeline_store.get_by_id(conn, block.id) is None
         assert not ContextService(conn, cfg).evidence_allowed(ref)
-        assert (
+        with pytest.raises(session_reducer.TimelineProjectionInvalid):
             session_reducer._blocks_for_session(
                 conn,
                 start,
                 start + timedelta(minutes=1),
                 complete_only=False,
             )
-            == []
-        )
         day_context = ContextService(conn, cfg).for_day(date(2026, 8, 8), "UTC")
         resolved = EvidenceResolver(conn, cfg).resolve(ref)
         current = mcp_captures.current_context(cfg=cfg, timeline_limit=10)

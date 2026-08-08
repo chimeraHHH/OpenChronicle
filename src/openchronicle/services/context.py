@@ -676,6 +676,14 @@ class ContextService:
                 return False
             if subject.content_hash and subject.content_hash != current_hash:
                 return False
+            # Normal retention deliberately removes raw observations after a
+            # whole timeline window has been certified.  A retired receipt is
+            # the durable policy/root attestation for that exact block; it is
+            # usable only while both the block binding and capture policy are
+            # unchanged.  ``retiring`` remains fail-closed because cleanup may
+            # still be incomplete.
+            if self._retired_timeline_receipt_allowed(block):
+                return True
         if subject.kind == "memory_candidate":
             candidate = candidate_store.get(self.conn, subject.id)
             candidate_sources = provenance_store.direct_sources(self.conn, subject)
@@ -853,13 +861,19 @@ class ContextService:
             if provenance_store.availability(self.conn, source) != "available":
                 memo[cache_key] = (False, False)
                 return False, False
-            if source.kind == "timeline_block" and not (
-                source.content_hash
-                and timeline_store.get_by_id(self.conn, source.id) is not None
-                and provenance_store.is_current(self.conn, source)
-            ):
-                memo[cache_key] = (False, False)
-                return False, False
+            if source.kind == "timeline_block":
+                block = timeline_store.get_by_id(self.conn, source.id)
+                if not (
+                    source.content_hash
+                    and block is not None
+                    and provenance_store.is_current(self.conn, source)
+                ):
+                    memo[cache_key] = (False, False)
+                    return False, False
+                if self._retired_timeline_receipt_allowed(block):
+                    result = (True, True)
+                    memo[cache_key] = result
+                    return result
 
             child_sources = provenance_store.direct_sources(self.conn, source)
             if not child_sources:
@@ -880,6 +894,33 @@ class ContextService:
         results = [visit(source) for source in sources]
         return all(valid for valid, _has_observation in results) and any(
             has_observation for _valid, has_observation in results
+        )
+
+    def _retired_timeline_receipt_allowed(
+        self,
+        block: timeline_store.TimelineBlock,
+    ) -> bool:
+        """Authorize one retained block from its exact historical receipt."""
+        try:
+            current_policy_digest = privacy_policy.stored_observation_policy_digest(
+                self.cfg.capture
+            )
+        except (TypeError, ValueError):
+            return False
+        receipt = timeline_store.window_receipt_for(
+            self.conn,
+            block.start_time,
+            block.end_time,
+        )
+        return bool(
+            receipt is not None
+            and receipt.outcome == "block"
+            and receipt.raw_state == "retired"
+            and receipt.block_id == block.id
+            and receipt.block_projection_digest == block.projection_digest
+            and receipt.block_source_digest == block.source_digest
+            and receipt.policy_digest == current_policy_digest
+            and timeline_store.window_receipt_is_current(self.conn, receipt)
         )
 
     def _manual_memory_ref_allowed(self, source: EvidenceRef) -> bool:

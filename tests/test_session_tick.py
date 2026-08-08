@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from openchronicle import config as config_mod
 from openchronicle.provenance import store as provenance_store
@@ -61,6 +62,38 @@ def test_seconds_until_next_local_rolls_past_midnight() -> None:
     # assert properties: result must be in [0, 86400).
     s = session_tick._seconds_until_next_local(23, 55)
     assert 0 < s <= 86400
+
+
+def test_seconds_until_next_local_uses_absolute_time_across_dst_gap() -> None:
+    zone = ZoneInfo("America/New_York")
+    now = datetime(2026, 3, 8, 1, 30, tzinfo=zone)
+
+    assert session_tick._seconds_until_next_local(2, 30, now=now) == 3600
+
+
+def test_seconds_until_next_local_does_not_repeat_fallback_day() -> None:
+    zone = ZoneInfo("America/New_York")
+    now = datetime(2026, 11, 1, 1, 45, tzinfo=zone, fold=0)
+
+    # Today's first 01:30 has passed. The second folded 01:30 is not treated
+    # as another daily occurrence; schedule tomorrow's local 01:30 instead.
+    assert session_tick._seconds_until_next_local(1, 30, now=now) == 24.75 * 3600
+
+
+def test_recovery_elapsed_addition_preserves_dst_instants() -> None:
+    zone = ZoneInfo("America/New_York")
+    fallback = datetime(2026, 11, 1, 1, 30, tzinfo=zone, fold=0)
+    spring = datetime(2026, 3, 8, 1, 30, tzinfo=zone)
+
+    fallback_plus_hour = session_tick._add_elapsed(fallback, timedelta(hours=1))
+    spring_plus_hour = session_tick._add_elapsed(spring, timedelta(hours=1))
+
+    assert (fallback_plus_hour.hour, fallback_plus_hour.minute, fallback_plus_hour.fold) == (
+        1,
+        30,
+        1,
+    )
+    assert (spring_plus_hour.hour, spring_plus_hour.minute) == (3, 30)
 
 
 def test_reduce_all_pending_catches_ended_row(ac_root: Path, monkeypatch) -> None:
