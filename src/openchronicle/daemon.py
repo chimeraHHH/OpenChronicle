@@ -106,6 +106,7 @@ async def _run(
     *,
     capture_only: bool = False,
     stop_event: asyncio.Event | None = None,
+    daemon_lock_fd: int | None = None,
 ) -> None:
     paths.ensure_dirs()
 
@@ -128,7 +129,9 @@ async def _run(
         stop.set()
 
     loop = asyncio.get_running_loop()
-    daemon_lock_fd = _acquire_daemon_lock()
+    owns_daemon_lock = daemon_lock_fd is None
+    if daemon_lock_fd is None:
+        daemon_lock_fd = _acquire_daemon_lock()
     try:
         _write_pid_file()
         # A live writer holds the corresponding global lock across every temp
@@ -271,22 +274,46 @@ async def _run(
             with suppress(asyncio.CancelledError):
                 await asyncio.gather(*cleanup_tasks, return_exceptions=True)
 
-        # Flush the currently open session so its S2 reducer has a chance
-        # to run. The daemon-thread reducer spawned by the callback will be
-        # killed when the process exits, but a row with status='ended'
-        # survives and the next boot's safety-net picks it up.
+        # Persist the currently open session without spawning an untracked
+        # daemon reducer after all workers have been joined.  The ended row is
+        # durable and the next boot's safety-net performs its reduction while
+        # holding the replacement daemon's singleton lease.
         if session_manager is not None:
             with suppress(Exception):
-                session_manager.force_end(reason="daemon-shutdown")
+                session_manager.force_end(
+                    reason="daemon-shutdown",
+                    run_end_callback=False,
+                )
+            # Natural idle/timeout/safety-net cuts may already have dispatched
+            # terminal reducers before shutdown began.  Join their concrete
+            # thread handles before returning from ``_run`` so both the local
+            # and outer ``run`` singleton-lease paths cover every old write.
+            session_manager.drain_end_callbacks()
 
         for sig in installed_signals:
             with suppress(NotImplementedError):
                 loop.remove_signal_handler(sig)
 
         _remove_owned_pid_file()
-        _release_daemon_lock(daemon_lock_fd)
+        if owns_daemon_lock:
+            _release_daemon_lock(daemon_lock_fd)
         logger.info("daemon stopped")
 
 
 def run(cfg: Config, *, capture_only: bool = False) -> None:
-    asyncio.run(_run(cfg, capture_only=capture_only))
+    # Keep the singleton lease outside ``asyncio.run``. Cancelling a
+    # ``to_thread`` awaitable does not stop its executor function; asyncio.run
+    # waits for the default executor during loop shutdown. Releasing the lease
+    # inside ``_run`` would let a replacement daemon overlap those old writes.
+    daemon_lock_fd = _acquire_daemon_lock()
+    try:
+        asyncio.run(
+            _run(
+                cfg,
+                capture_only=capture_only,
+                daemon_lock_fd=daemon_lock_fd,
+            )
+        )
+    finally:
+        _remove_owned_pid_file()
+        _release_daemon_lock(daemon_lock_fd)

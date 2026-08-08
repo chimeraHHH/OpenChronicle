@@ -23,6 +23,7 @@ from . import logger as logger_mod
 from .capture import filenames as capture_filenames
 from .capture import store_lock as capture_store
 from .memory_candidates import store as candidate_store
+from .privacy.egress import privacy_egress_fenced, privacy_egress_lock
 from .store import entries as entries_mod
 from .store import files as files_mod
 from .store import fts, index_md
@@ -123,7 +124,9 @@ def _daemon_uptime() -> str:
         return "unknown"
 
 
-def _last_capture_info() -> tuple[str | None, str | None]:
+def _last_capture_info(
+    cfg: config_mod.Config | None = None,
+) -> tuple[str | None, str | None]:
     """Return ``(timestamp, app_name)`` of the most recent capture buffer file.
 
     Returns ``(None, None)`` when the buffer directory is empty or missing.
@@ -134,15 +137,33 @@ def _last_capture_info() -> tuple[str | None, str | None]:
     json_files = [p for p in buf.iterdir() if p.suffix == ".json"]
     if not json_files:
         return None, None
-    latest = _latest_capture_path(json_files)
-    try:
-        data = json.loads(latest.read_bytes())
+    from .privacy import policy as privacy_policy
+
+    cfg = cfg or config_mod.Config()
+    remaining = list(json_files)
+    while remaining:
+        latest = _latest_capture_path(remaining)
+        remaining.remove(latest)
+        if latest.is_symlink() or not latest.is_file():
+            continue
+        try:
+            data = json.loads(latest.read_bytes())
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict) or not privacy_policy.evaluate_stored_observation(
+            cfg.capture, observation=data
+        ).allowed:
+            continue
+        meta = data.get("window_meta")
+        if not isinstance(meta, dict):
+            continue
         ts = data.get("timestamp")
-        meta = data.get("window_meta") or {}
         app = meta.get("app_name")
-        return ts, app
-    except (OSError, ValueError):
-        return latest.stem, None
+        return (
+            ts if isinstance(ts, str) else None,
+            app if isinstance(app, str) else None,
+        )
+    return None, None
 
 
 def _latest_capture_path(files: list[Path]) -> Path:
@@ -254,137 +275,111 @@ def resume() -> None:
 def status() -> None:
     """Show daemon status + memory stats."""
     cfg = _init()
-    pid = _read_pid()
-    paused = paths.paused_flag().exists()
+    stages = ("timeline", "reducer", "classifier", "daily_wrap", "compact")
+    # Provider probes are diagnostic network I/O.  They must finish before the
+    # short capture-store fence below so a slow or hung provider cannot pause
+    # ordinary capture persistence.
+    ping_results = _ping_stages(cfg, stages)
+    from .services.snapshot import build_snapshot
 
-    uptime = _daemon_uptime()
-    last_ts, last_app = _last_capture_info()
-    health_label, health_style = _health_status(pid, last_ts)
+    # Rebuild, authorize, and serialize one final canonical status response
+    # under the cleanup fence.  This section is local-only and intentionally
+    # contains no provider calls.
+    with privacy_egress_lock():
+        pid = _read_pid()
+        paused = paths.paused_flag().exists()
+        uptime = _daemon_uptime()
+        with fts.cursor() as conn:
+            visible = build_snapshot(
+                conn,
+                cfg,
+                timeline_limit=0,
+                candidate_limit=0,
+                wrap_limit=1,
+            )
+        capture_snapshot = visible["capture"]
+        last_capture = capture_snapshot.get("last")
+        last_ts = str(last_capture.get("timestamp") or "") if last_capture else None
+        last_app = str(last_capture.get("app_name") or "") if last_capture else None
+        health_label, health_style = _health_status(pid, last_ts)
 
-    table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_row("Version", __version__)
-    table.add_row("Root", str(paths.root()))
-    table.add_row("Daemon", f"[green]running pid {pid}[/green]" if pid else "[red]stopped[/red]")
-    table.add_row("Uptime", uptime)
-    table.add_row("Health", f"[{health_style}]{health_label}[/{health_style}]")
-    table.add_row("Capture", "[yellow]paused[/yellow]" if paused else "active")
+        table = Table(show_header=False, box=None, padding=(0, 2))
+        table.add_row("Version", __version__)
+        table.add_row("Root", str(paths.root()))
+        table.add_row(
+            "Daemon",
+            f"[green]running pid {pid}[/green]" if pid else "[red]stopped[/red]",
+        )
+        table.add_row("Uptime", uptime)
+        table.add_row("Health", f"[{health_style}]{health_label}[/{health_style}]")
+        table.add_row("Capture", "[yellow]paused[/yellow]" if paused else "active")
 
-    if last_ts:
-        try:
-            last_dt = datetime.fromisoformat(last_ts)
-            age = (datetime.now(last_dt.tzinfo) - last_dt).total_seconds()
-            if age < 60:
-                ago = "just now"
-            elif age < 3600:
-                ago = f"{int(age // 60)}m ago"
-            else:
-                ago = f"{int(age // 3600)}h ago"
-            table.add_row("Last Capture", f"{ago} ({last_app})" if last_app else ago)
-        except (ValueError, TypeError):
-            table.add_row("Last Capture", last_ts)
-    else:
-        table.add_row("Last Capture", "(none)")
+        if last_ts:
+            try:
+                last_dt = datetime.fromisoformat(last_ts)
+                age = (datetime.now(last_dt.tzinfo) - last_dt).total_seconds()
+                if age < 60:
+                    ago = "just now"
+                elif age < 3600:
+                    ago = f"{int(age // 60)}m ago"
+                else:
+                    ago = f"{int(age // 3600)}h ago"
+                table.add_row(
+                    "Last Capture", f"{ago} ({last_app})" if last_app else ago
+                )
+            except (ValueError, TypeError):
+                table.add_row("Last Capture", last_ts)
+        else:
+            table.add_row("Last Capture", "(none)")
 
-    buf = paths.capture_buffer_dir()
-    if buf.exists():
-        bufs = [p for p in buf.iterdir() if p.suffix == ".json"]
-        last = _latest_capture_path(bufs).name if bufs else "(none)"
-        table.add_row("Buffer", f"{len(bufs)} files, last: {last}")
-
-    with fts.cursor() as conn:
-        sess_row = conn.execute(
-            "SELECT COUNT(*), SUM(status='reduced'), SUM(status='ended'), SUM(status='failed')"
-            " FROM sessions"
-        ).fetchone()
-        if sess_row and sess_row[0]:
-            total, reduced, ended, failed = sess_row
+        table.add_row(
+            "Buffer",
+            f"{int(capture_snapshot.get('indexed_count') or 0)} policy-visible capture(s)",
+        )
+        counts = visible["counts"]
+        sessions = counts["sessions"]
+        if sessions["total"]:
             table.add_row(
                 "Sessions",
-                f"{total} total ({reduced or 0} reduced, {ended or 0} ended, "
-                f"{failed or 0} failed)",
+                f"{sessions['total']} policy-visible "
+                f"({sessions['reduced']} reduced, {sessions['ended']} ended, "
+                f"{sessions['failed']} failed)",
             )
         else:
-            table.add_row("Sessions", "(none)")
-        classifier_rows = conn.execute(
-            """
-            SELECT status, COUNT(*) AS n
-              FROM classifier_jobs
-             GROUP BY status
-            """
-        ).fetchall()
-        classifier_counts = {str(row["status"]): int(row["n"]) for row in classifier_rows}
-        terminal_owed = int(
-            conn.execute(
-                """
-                SELECT COUNT(*) FROM sessions
-                 WHERE classifier_terminal_pending=1
-                """
-            ).fetchone()[0]
-        )
-        if classifier_counts or terminal_owed:
-            parts = [
-                f"{name}={classifier_counts[name]}"
-                for name in ("pending", "running", "failed", "committed")
-                if classifier_counts.get(name)
-            ]
-            if terminal_owed:
-                parts.append(f"terminal-owed={terminal_owed}")
-            table.add_row("Classifier Delivery", ", ".join(parts) or "idle")
-        else:
-            table.add_row("Classifier Delivery", "idle")
-        active = fts.list_files(conn, include_dormant=False)
-        dormant = [
-            f for f in fts.list_files(conn, include_dormant=True) if f.status == "dormant"
-        ]
-        total_entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+            table.add_row("Sessions", "(none policy-visible)")
+        table.add_row("Classifier Delivery", "policy-filtered; use memory candidates")
+        memory = counts["memory"]
         table.add_row(
             "Memory",
-            f"{len(active)} active files, {len(dormant)} dormant, {total_entries} entries",
+            f"{memory['active_files']} active files, {memory['dormant_files']} dormant, "
+            f"{memory['entries']} policy-visible entries",
         )
-        tlb_row = conn.execute(
-            "SELECT COUNT(*), MAX(end_time) FROM timeline_blocks"
-        ).fetchone()
-        tlb_count = tlb_row[0] if tlb_row else 0
-        tlb_last = tlb_row[1] if tlb_row and tlb_row[1] else "(none)"
-        table.add_row("Timeline", f"{tlb_count} blocks, last end: {tlb_last}")
-        candidate_row = conn.execute(
-            """
-            SELECT COUNT(*),
-                   SUM(status='pending'),
-                   SUM(status='conflict')
-              FROM memory_candidates
-            """
-        ).fetchone()
+        table.add_row("Timeline", f"{counts['timeline_blocks']} policy-visible blocks")
+        review = counts["candidates"]
+        review_total = sum(int(value) for value in review.values())
         table.add_row(
             "Review Inbox",
-            f"{candidate_row[0] or 0} total "
-            f"({candidate_row[1] or 0} pending, {candidate_row[2] or 0} conflict)",
+            f"{review_total} policy-visible "
+            f"({review.get('pending', 0)} pending, "
+            f"{review.get('conflict', 0)} conflict)",
         )
-        wrap_row = conn.execute(
-            """
-            SELECT local_date, timezone, status, coverage_status, revision
-              FROM daily_wrap_jobs
-             ORDER BY local_date DESC, updated_at DESC LIMIT 1
-            """
-        ).fetchone()
-        if wrap_row:
+        wraps = visible["daily_wrap"]["wraps"]
+        if wraps:
+            wrap = wraps[0]
             table.add_row(
                 "Daily Wrap",
-                f"{wrap_row['local_date']} {wrap_row['timezone']} — "
-                f"{wrap_row['status']}/{wrap_row['coverage_status']} "
-                f"r{wrap_row['revision']}",
+                f"{wrap['local_date']} {wrap['timezone']} — "
+                f"{wrap['status']}/{wrap['coverage_status']} r{wrap['revision']}",
             )
         else:
-            table.add_row("Daily Wrap", "(none)")
+            table.add_row("Daily Wrap", "(none policy-visible)")
 
-    stages = ("timeline", "reducer", "classifier", "daily_wrap", "compact")
-    ping_results = _ping_stages(cfg, stages)
-    for stage in stages:
-        m = cfg.model_for(stage)
-        ping = _format_ping(ping_results.get(stage))
-        table.add_row(f"Model ({stage})", f"{m.model}   {ping}")
+        for stage in stages:
+            m = cfg.model_for(stage)
+            ping = _format_ping(ping_results.get(stage))
+            table.add_row(f"Model ({stage})", f"{m.model}   {ping}")
 
-    console.print(table)
+        console.print(table)
 
 
 def _ping_stages(cfg: config_mod.Config, stages: tuple[str, ...]) -> dict:
@@ -947,15 +942,30 @@ def timeline_tick_cmd() -> None:
 
 
 @timeline_app.command("list")
+@privacy_egress_fenced
 def timeline_list(
     limit: int = typer.Option(12, "--limit", "-n", help="How many recent blocks to show."),
 ) -> None:
     """Show the most recent timeline blocks (oldest → newest)."""
-    _init()
+    cfg = _init()
+    from .provenance.models import EvidenceRef
+    from .services.context import ContextService
     from .timeline import store as tls
 
+    requested = max(limit, 0)
     with fts.cursor() as conn:
-        blocks = tls.query_recent(conn, limit=limit)
+        context = ContextService(conn, cfg)
+        blocks = (
+            [
+                block
+                for block in tls.query_recent(conn, limit=1_000)
+                if context.evidence_allowed(
+                    EvidenceRef(kind="timeline_block", id=block.id)
+                )
+            ][-requested:]
+            if requested
+            else []
+        )
     if not blocks:
         console.print("[yellow]No timeline blocks yet.[/yellow]")
         return
@@ -980,15 +990,12 @@ def writer_run() -> None:
     cfg = _init()
     from .writer import agent
 
-    result = agent.run(cfg)
-    console.print(
-        f"[bold]reduced={result.reduced} "
-        f"classified={result.classified} "
-        f"candidates={len(result.candidate_ids)} "
-        f"written={len(result.written_ids)}[/bold]"
-    )
-    for s in result.summaries:
-        console.print(f"  - {s}")
+    agent.run(cfg)
+    # Crash-recovered classifier receipts can predate the current privacy
+    # policy.  Do not echo model-controlled summaries, artifact IDs, or raw
+    # counts here; the policy-aware review/list commands expose what remains
+    # visible after catch-up.
+    console.print("[green]Writer catch-up completed.[/green]")
 
 
 memory_app = typer.Typer(help="Review and manage proposed durable memories.")
@@ -996,6 +1003,7 @@ app.add_typer(memory_app, name="memory")
 
 
 @memory_app.command("candidates")
+@privacy_egress_fenced
 def memory_candidates(
     status: str = typer.Option(
         "pending,conflict", "--status", help="Comma-separated candidate statuses."
@@ -1004,13 +1012,27 @@ def memory_candidates(
 ) -> None:
     """List the local review inbox without exposing it over MCP."""
     cfg = _init()
+    from .provenance.models import EvidenceRef
+    from .services.evidence import EvidenceResolver
     from .services.memory import MemoryService
 
     statuses = [value.strip() for value in status.split(",") if value.strip()]
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
-        candidates = service.list_candidates(statuses=statuses or None, limit=limit)
+        resolver = EvidenceResolver(conn, cfg)
+        candidates = [
+            candidate
+            for candidate in service.list_candidates(
+                statuses=statuses or None, limit=1000
+            )
+            if resolver.resolve(
+                EvidenceRef(kind="memory_candidate", id=candidate.id)
+            )["status"]
+            == "current"
+        ][: max(limit, 0)]
     table = Table("ID", "Status", "Kind", "Target", "Version", "Content")
     for candidate in candidates:
         table.add_row(
@@ -1025,18 +1047,27 @@ def memory_candidates(
 
 
 @memory_app.command("show")
+@privacy_egress_fenced
 def memory_candidate_show(candidate_id: str) -> None:
     """Show one proposal and its direct evidence."""
     cfg = _init()
     from .provenance import store as provenance_store
     from .provenance.models import EvidenceRef
+    from .services.evidence import EvidenceResolver
     from .services.memory import MemoryService
 
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
         candidate = service.get_candidate(candidate_id)
         if candidate is None:
+            console.print(f"[red]Candidate not found: {candidate_id}[/red]")
+            raise typer.Exit(1)
+        if EvidenceResolver(conn, cfg).resolve(
+            EvidenceRef(kind="memory_candidate", id=candidate_id)
+        )["status"] != "current":
             console.print(f"[red]Candidate not found: {candidate_id}[/red]")
             raise typer.Exit(1)
         payload = candidate.to_dict()
@@ -1050,6 +1081,7 @@ def memory_candidate_show(candidate_id: str) -> None:
 
 
 @memory_app.command("edit")
+@privacy_egress_fenced
 def memory_candidate_edit(
     candidate_id: str,
     content: str = typer.Option(..., "--content"),
@@ -1059,13 +1091,19 @@ def memory_candidate_edit(
 ) -> None:
     """Edit a pending proposal with optimistic version checking."""
     cfg = _init()
+    from .provenance.models import EvidenceRef
+    from .services.evidence import EvidenceResolver
     from .services.memory import MemoryService
 
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
         current = service.get_candidate(candidate_id)
-        if current is None:
+        if current is None or EvidenceResolver(conn, cfg).resolve(
+            EvidenceRef(kind="memory_candidate", id=candidate_id)
+        )["status"] != "current":
             raise typer.BadParameter(f"candidate not found: {candidate_id}")
         updated = service.edit_candidate(
             candidate_id,
@@ -1087,7 +1125,9 @@ def memory_candidate_approve(
     from .services.memory import MemoryService
 
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
         current = service.get_candidate(candidate_id)
         if current is None:
@@ -1103,6 +1143,7 @@ def memory_candidate_approve(
 
 
 @memory_app.command("reject")
+@privacy_egress_fenced
 def memory_candidate_reject(
     candidate_id: str,
     reason: str = typer.Option("", "--reason"),
@@ -1110,13 +1151,19 @@ def memory_candidate_reject(
 ) -> None:
     """Reject a proposal while retaining its review history."""
     cfg = _init()
+    from .provenance.models import EvidenceRef
+    from .services.evidence import EvidenceResolver
     from .services.memory import MemoryService
 
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
         current = service.get_candidate(candidate_id)
-        if current is None:
+        if current is None or EvidenceResolver(conn, cfg).resolve(
+            EvidenceRef(kind="memory_candidate", id=candidate_id)
+        )["status"] != "current":
             raise typer.BadParameter(f"candidate not found: {candidate_id}")
         rejected = service.reject_candidate(
             candidate_id,
@@ -1143,7 +1190,7 @@ def memory_candidate_forget(
 
     with fts.cursor() as conn:
         result = MemoryService(
-            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
         ).purge_candidate(candidate_id)
     console.print(
         f"[green]Purged {candidate_id}; entry_removed={result.removed_entry}; "
@@ -1157,6 +1204,7 @@ app.add_typer(provenance_app, name="provenance")
 
 
 @provenance_app.command("trace")
+@privacy_egress_fenced
 def provenance_trace(
     kind: str,
     artifact_id: str,
@@ -1164,16 +1212,47 @@ def provenance_trace(
     depth: int = typer.Option(4, "--depth"),
 ) -> None:
     """Trace direct and transitive sources for a local artifact."""
-    _init()
+    cfg = _init()
+    from .daily_wrap import store as daily_wrap_store
+    from .memory_candidates import store as candidate_store
     from .provenance import store as provenance_store
     from .provenance.models import EvidenceRef
+    from .services.context import ContextService
+    from .services.evidence import EvidenceResolver
 
     with fts.cursor() as conn:
-        trace = provenance_store.trace_sources(
-            conn,
-            EvidenceRef(kind=kind, id=artifact_id, path=path),
-            max_depth=depth,
-        )
+        ref = EvidenceRef(kind=kind, id=artifact_id, path=path)
+        allowed = False
+        if kind == "daily_wrap_revision":
+            allowed = bool(
+                path
+                and not candidate_store.is_tombstoned(
+                    conn, kind="daily_wrap", artifact_id=path
+                )
+                and daily_wrap_store.get_by_id(conn, path) is not None
+                and provenance_store.availability(conn, ref) == "available"
+                and ContextService(conn, cfg).daily_wrap_allowed(
+                    path,
+                    expected_row=daily_wrap_store.get_by_id(conn, path),
+                )
+                and ContextService(conn, cfg).evidence_allowed(ref)
+            )
+        else:
+            canonical = ref
+            if kind in {"observation", "timeline_block", "memory_entry"}:
+                current_hash = provenance_store.current_content_hash(conn, ref)
+                if current_hash:
+                    canonical = EvidenceRef(
+                        kind=ref.kind,
+                        id=ref.id,
+                        path=ref.path,
+                        content_hash=current_hash,
+                    )
+            allowed = EvidenceResolver(conn, cfg).resolve(canonical)["status"] == "current"
+        if not allowed:
+            console.print("[yellow]Provenance subject not found.[/yellow]")
+            raise typer.Exit(1)
+        trace = provenance_store.trace_sources(conn, ref, max_depth=depth)
     console.print_json(data={"count": len(trace), "sources": trace})
 
 
@@ -1190,6 +1269,7 @@ def daily_wrap_run(
     cfg = _init()
     from .daily_wrap import worker as daily_wrap_worker
     from .daily_wrap.service import DailyWrapService
+    from .services.context import ContextService
 
     try:
         zone_name = timezone or daily_wrap_worker.local_timezone_name(cfg)
@@ -1197,11 +1277,29 @@ def daily_wrap_run(
         raise typer.BadParameter(str(exc)) from exc
     target_day = _daily_wrap_day(day, zone_name)
     with fts.cursor() as conn:
-        row = DailyWrapService(conn, cfg).run(target_day, zone_name)
-    console.print_json(data=row.to_dict())
+        service = DailyWrapService(conn, cfg)
+        generated = service.run(target_day, zone_name)
+        # Provider latency must not hold the capture-store fence.  Reacquire
+        # both cleanup locks only for the final canonical read, authorization,
+        # and detached response copy.
+        with privacy_egress_lock():
+            row = service.get(target_day, zone_name)
+            if (
+                row is None
+                or row.id != generated.id
+                or not ContextService(conn, cfg).daily_wrap_allowed(
+                    row.id,
+                    expected_row=row,
+                )
+            ):
+                console.print("[yellow]Daily Wrap failed publication validation.[/yellow]")
+                raise typer.Exit(1)
+            payload = row.to_dict()
+    console.print_json(data=payload)
 
 
 @daily_wrap_app.command("show")
+@privacy_egress_fenced
 def daily_wrap_show(
     day: str | None = typer.Option(None, "--date", help="Local date (YYYY-MM-DD)."),
     timezone: str | None = typer.Option(None, "--timezone", help="IANA timezone."),
@@ -1210,6 +1308,7 @@ def daily_wrap_show(
     cfg = _init()
     from .daily_wrap import worker as daily_wrap_worker
     from .daily_wrap.service import DailyWrapService
+    from .services.context import ContextService
 
     try:
         zone_name = timezone or daily_wrap_worker.local_timezone_name(cfg)
@@ -1218,6 +1317,10 @@ def daily_wrap_show(
     target_day = _daily_wrap_day(day, zone_name)
     with fts.cursor() as conn:
         row = DailyWrapService(conn, cfg).get(target_day, zone_name)
+        if row is not None and not ContextService(conn, cfg).daily_wrap_allowed(
+            row.id, expected_row=row
+        ):
+            row = None
     if row is None:
         console.print(f"[yellow]No Daily Wrap for {target_day} ({zone_name}).[/yellow]")
         raise typer.Exit(1)
@@ -1225,15 +1328,22 @@ def daily_wrap_show(
 
 
 @daily_wrap_app.command("list")
+@privacy_egress_fenced
 def daily_wrap_list(
     limit: int = typer.Option(30, "--limit", "-n"),
 ) -> None:
     """List recent canonical wraps across timezones."""
     cfg = _init()
     from .daily_wrap.service import DailyWrapService
+    from .services.context import ContextService
 
     with fts.cursor() as conn:
-        rows = DailyWrapService(conn, cfg).list(limit=limit)
+        context = ContextService(conn, cfg)
+        rows = [
+            row
+            for row in DailyWrapService(conn, cfg).list(limit=365)
+            if context.daily_wrap_allowed(row.id, expected_row=row)
+        ][: max(limit, 0)]
     console.print_json(data={"count": len(rows), "wraps": [row.to_dict() for row in rows]})
 
 
@@ -1511,7 +1621,11 @@ def _memory_clean_targets() -> list[Path]:
 
 
 def _clean_captures() -> int:
-    with capture_store.capture_store_lock():
+    # Provider calls hold the review fence but release the collection lock
+    # during network I/O so ordinary capture writes continue. Explicit deletion
+    # takes both in canonical order and therefore waits for any in-flight
+    # provider before committing deny markers.
+    with files_mod.review_operation_lock(), capture_store.capture_store_lock():
         captures = _capture_clean_targets()
         canonical = [path for path in captures if path.suffix == ".json"]
         # Commit deny-read markers and clear every searchable projection before
@@ -1605,6 +1719,7 @@ def _clean_timeline() -> int:
         conn.execute("BEGIN IMMEDIATE")
         try:
             fts.bump_content_generation(conn, "reducer")
+            fts.bump_content_generation(conn, "timeline")
             affected_candidates = conn.execute(
                 _TIMELINE_AFFECTED_CANDIDATES_SQL
             ).fetchall()

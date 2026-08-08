@@ -9,6 +9,8 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 from openchronicle import config as config_mod
+from openchronicle.provenance import store as provenance_store
+from openchronicle.provenance.models import EvidenceRef
 from openchronicle.session import store as session_store
 from openchronicle.session import tick as session_tick
 from openchronicle.store import fts
@@ -45,15 +47,25 @@ def _insert_active(
 
 def _insert_block(start: datetime, end: datetime) -> None:
     with fts.cursor() as conn:
-        timeline_store.insert(
+        block = timeline_store.TimelineBlock(
+            start_time=start,
+            end_time=end,
+            entries=["[Cursor] persisted before the crash"],
+            apps_used=["Cursor"],
+            capture_count=1,
+        )
+        timeline_store.insert(conn, block)
+        provenance_store.replace_sources(
             conn,
-            timeline_store.TimelineBlock(
-                start_time=start,
-                end_time=end,
-                entries=["[Cursor] persisted before the crash"],
-                apps_used=["Cursor"],
-                capture_count=1,
-            ),
+            subject=EvidenceRef(kind="timeline_block", id=block.id),
+            sources=[
+                EvidenceRef(
+                    kind="observation",
+                    id=f"fixture-{block.id}",
+                    path=f"fixture-{block.id}.json",
+                    content_hash=f"fixture-digest-{block.id}",
+                )
+            ],
         )
 
 

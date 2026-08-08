@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import signal
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -87,6 +88,62 @@ def test_status_renders_probe_failure(ac_root: Path, monkeypatch: pytest.MonkeyP
     assert result.exit_code == 0, result.output
     assert "AuthenticationError" in result.output
     assert "✗" in result.output
+
+
+def test_status_probes_outside_lock_then_fences_snapshot_and_serialization(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openchronicle.services import snapshot as snapshot_mod
+
+    cfg = config_mod.Config()
+    state = {"locked": False}
+    events: list[str] = []
+
+    @contextmanager
+    def tracked_privacy_fence():
+        assert state["locked"] is False
+        state["locked"] = True
+        events.append("lock.enter")
+        try:
+            yield
+        finally:
+            events.append("lock.exit")
+            state["locked"] = False
+
+    def probe(_cfg, _stages):
+        assert state["locked"] is False
+        events.append("probe")
+        return {}
+
+    def snapshot(_conn, _cfg, **_limits):
+        assert state["locked"] is True
+        events.append("snapshot")
+        return {
+            "capture": {"indexed_count": 0, "last": None},
+            "counts": {
+                "sessions": {"total": 0, "reduced": 0, "ended": 0, "failed": 0},
+                "memory": {"active_files": 0, "dormant_files": 0, "entries": 0},
+                "timeline_blocks": 0,
+                "candidates": {},
+            },
+            "daily_wrap": {"wraps": []},
+        }
+
+    def serialize(_table) -> None:
+        assert state["locked"] is True
+        events.append("serialize")
+
+    monkeypatch.setattr(cli, "_init", lambda: cfg)
+    monkeypatch.setattr(cli, "_ping_stages", probe)
+    monkeypatch.setattr(cli, "privacy_egress_lock", tracked_privacy_fence)
+    monkeypatch.setattr(snapshot_mod, "build_snapshot", snapshot)
+    monkeypatch.setattr(cli.console, "print", serialize)
+
+    result = CliRunner().invoke(cli.app, ["status"])
+
+    assert result.exit_code == 0, result.output
+    assert events == ["probe", "lock.enter", "snapshot", "serialize", "lock.exit"]
 
 # ═══════════════════════════════════════════════════════════════════
 #  Status helper unit tests
@@ -232,11 +289,19 @@ def test_last_capture_finds_newest(ac_root: Path) -> None:
     buf.mkdir(parents=True, exist_ok=True)
     (buf / "c1.json").write_text(json.dumps({
         "timestamp": "2026-04-22T14:00:00+08:00",
-        "window_meta": {"app_name": "Cursor"},
+        "window_meta": {
+            "app_name": "Cursor",
+            "bundle_id": "com.todesktop.230313mzl4w4u92",
+            "title": "Project",
+        },
     }))
     (buf / "c2.json").write_text(json.dumps({
         "timestamp": "2026-04-22T14:05:00+08:00",
-        "window_meta": {"app_name": "Safari"},
+        "window_meta": {
+            "app_name": "Safari",
+            "bundle_id": "com.apple.Safari",
+            "title": "Documentation",
+        },
     }))
 
     ts, app = cli._last_capture_info()
@@ -250,11 +315,19 @@ def test_last_capture_uses_absolute_time_across_dst_fallback(ac_root: Path) -> N
     newer = buf / "2026-11-01T01-00-00m05-00.json"
     older.write_text(json.dumps({
         "timestamp": "2026-11-01T01:59:59-04:00",
-        "window_meta": {"app_name": "Older"},
+        "window_meta": {
+            "app_name": "Older",
+            "bundle_id": "com.example.older",
+            "title": "Older window",
+        },
     }))
     newer.write_text(json.dumps({
         "timestamp": "2026-11-01T01:00:00-05:00",
-        "window_meta": {"app_name": "Newer"},
+        "window_meta": {
+            "app_name": "Newer",
+            "bundle_id": "com.example.newer",
+            "title": "Newer window",
+        },
     }))
 
     ts, app = cli._last_capture_info()
@@ -264,13 +337,13 @@ def test_last_capture_uses_absolute_time_across_dst_fallback(ac_root: Path) -> N
 
 
 def test_last_capture_handles_corrupted_json(ac_root: Path) -> None:
-    """Corrupted JSON returns the filename stem as timestamp, None for app."""
+    """Corrupted JSON is never surfaced as capture metadata."""
     buf = paths.capture_buffer_dir()
     buf.mkdir(parents=True, exist_ok=True)
     (buf / "bad.json").write_text("{not valid json")
 
     ts, app = cli._last_capture_info()
-    assert ts == "bad"
+    assert ts is None
     assert app is None
 
 

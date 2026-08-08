@@ -10,6 +10,8 @@ def test_defaults_when_no_file(tmp_path: Path) -> None:
     assert cfg.capture.deny_unknown_windows is True
     assert cfg.capture.allowed_bundle_ids == []
     assert cfg.capture.excluded_bundle_ids == []
+    assert cfg.capture.allowed_url_patterns == []
+    assert cfg.capture.excluded_url_patterns == []
     assert cfg.session.gap_minutes == 5
     assert cfg.reducer.enabled is True
     default = cfg.model_for("reducer")
@@ -38,6 +40,22 @@ api_key_env = "ANTHROPIC_API_KEY"
     assert default.api_key_env == "OPENAI_API_KEY"
     assert classifier.model == "claude-haiku-4-5"
     assert classifier.api_key_env == "ANTHROPIC_API_KEY"
+
+
+def test_url_privacy_literals_load_from_capture_config(tmp_path: Path) -> None:
+    path = tmp_path / "config.toml"
+    path.write_text(
+        """
+[capture]
+allowed_url_patterns = ["example.com"]
+excluded_url_patterns = ["/private/"]
+"""
+    )
+
+    cfg = config.load(path)
+
+    assert cfg.capture.allowed_url_patterns == ["example.com"]
+    assert cfg.capture.excluded_url_patterns == ["/private/"]
 
 
 def test_llm_reliability_settings_inherit_and_override(tmp_path: Path) -> None:
@@ -74,6 +92,8 @@ def test_write_default_creates_file(tmp_path: Path) -> None:
     assert "# timeout_seconds = 120" in p.read_text()
     assert "# num_retries = 2" in p.read_text()
     assert "include_screenshot = false" in p.read_text()
+    assert "allowed_url_patterns = []" in p.read_text()
+    assert "excluded_url_patterns = []" in p.read_text()
     # idempotent
     assert not config.write_default_if_missing(p)
 

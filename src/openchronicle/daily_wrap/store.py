@@ -5,12 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from ..privacy.egress import privacy_egress_fenced
 from ..provenance import store as provenance_store
-from ..provenance.models import EvidenceRef
+from ..provenance.models import EvidenceRef, daily_wrap_sources_digest
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_wrap_jobs (
@@ -44,13 +46,26 @@ CREATE INDEX IF NOT EXISTS idx_daily_wrap_jobs_status
 CREATE TABLE IF NOT EXISTS daily_wrap_revisions (
     wrap_id TEXT NOT NULL,
     revision INTEGER NOT NULL,
+    local_date TEXT NOT NULL DEFAULT '',
+    timezone TEXT NOT NULL DEFAULT '',
+    scope TEXT NOT NULL DEFAULT '',
+    window_start_utc TEXT NOT NULL DEFAULT '',
+    window_end_utc TEXT NOT NULL DEFAULT '',
+    workflow_version INTEGER NOT NULL DEFAULT 0,
     input_digest TEXT NOT NULL,
     coverage_status TEXT NOT NULL,
+    source_digest TEXT NOT NULL DEFAULT '',
     output_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     PRIMARY KEY(wrap_id, revision)
 );
+
+CREATE TABLE IF NOT EXISTS daily_wrap_schema_migrations (
+    name TEXT PRIMARY KEY
+);
 """
+
+_REVISION_BINDING_MIGRATION = "revision-binding-v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,8 +91,18 @@ class DailyWrapRow:
     completed_at: str | None
     last_error: str
 
-    def to_dict(self, *, include_lease: bool = False) -> dict[str, Any]:
-        result: dict[str, Any] = {
+    def to_dict(self) -> dict[str, Any]:
+        """Return only the immutable, published-revision projection.
+
+        The canonical job row also carries mutable scheduler state (the active
+        input digest, attempts, errors, leases, and timestamps).  Public
+        readers must not confuse that state with the revision they have just
+        authorized, especially while a refresh is running or after it fails.
+        A policy-visible row necessarily has a validated published revision,
+        so ``status`` below is a derived publication state rather than the
+        mutable job status.
+        """
+        return {
             "id": self.id,
             "local_date": self.local_date,
             "timezone": self.timezone,
@@ -85,22 +110,12 @@ class DailyWrapRow:
             "window_start_utc": self.window_start_utc,
             "window_end_utc": self.window_end_utc,
             "workflow_version": self.workflow_version,
-            "status": self.status,
+            "status": "succeeded",
             "coverage_status": self.coverage_status,
-            "attempt_count": self.attempt_count,
-            "input_digest": self.input_digest,
             "published_input_digest": self.published_input_digest,
             "output": self.output,
             "revision": self.revision,
-            "created_at": self.created_at,
-            "updated_at": self.updated_at,
-            "completed_at": self.completed_at,
-            "last_error": self.last_error,
         }
-        if include_lease:
-            result["lease_token"] = self.lease_token
-            result["lease_expires_at"] = self.lease_expires_at
-        return result
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,13 +134,114 @@ class DailyWrapLostLease(RuntimeError):
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(daily_wrap_jobs)")}
-    if "published_input_digest" not in columns:
+    job_columns = {row[1] for row in conn.execute("PRAGMA table_info(daily_wrap_jobs)")}
+    revision_columns = {row[1] for row in conn.execute("PRAGMA table_info(daily_wrap_revisions)")}
+    migration_missing = (
+        conn.execute(
+            "SELECT 1 FROM daily_wrap_schema_migrations WHERE name=?",
+            (_REVISION_BINDING_MIGRATION,),
+        ).fetchone()
+        is None
+    )
+    required_revision_columns = {
+        "local_date",
+        "timezone",
+        "scope",
+        "window_start_utc",
+        "window_end_utc",
+        "workflow_version",
+        "source_digest",
+    }
+    if (
+        "published_input_digest" in job_columns
+        and not required_revision_columns - revision_columns
+        and not migration_missing
+    ):
+        return
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Repeat every schema decision after taking the writer lock. A killed
+        # migration may have columns without a completed trust backfill, and
+        # two upgrading processes may both have observed the legacy schema.
+        job_columns = {row[1] for row in conn.execute("PRAGMA table_info(daily_wrap_jobs)")}
+        if "published_input_digest" not in job_columns:
+            conn.execute(
+                """
+                ALTER TABLE daily_wrap_jobs
+                ADD COLUMN published_input_digest TEXT NOT NULL DEFAULT ''
+                """
+            )
+
+        revision_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(daily_wrap_revisions)")
+        }
+        for name, declaration in (
+            ("local_date", "TEXT NOT NULL DEFAULT ''"),
+            ("timezone", "TEXT NOT NULL DEFAULT ''"),
+            ("scope", "TEXT NOT NULL DEFAULT ''"),
+            ("window_start_utc", "TEXT NOT NULL DEFAULT ''"),
+            ("window_end_utc", "TEXT NOT NULL DEFAULT ''"),
+            ("workflow_version", "INTEGER NOT NULL DEFAULT 0"),
+            ("source_digest", "TEXT NOT NULL DEFAULT ''"),
+        ):
+            if name not in revision_columns:
+                conn.execute(f"ALTER TABLE daily_wrap_revisions ADD COLUMN {name} {declaration}")
+
+        migration_done = conn.execute(
+            "SELECT 1 FROM daily_wrap_schema_migrations WHERE name=?",
+            (_REVISION_BINDING_MIGRATION,),
+        ).fetchone()
+        if migration_done is None:
+            _backfill_revision_binding_migration(conn)
+            conn.execute(
+                "INSERT INTO daily_wrap_schema_migrations(name) VALUES (?)",
+                (_REVISION_BINDING_MIGRATION,),
+            )
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def _backfill_revision_binding_migration(conn: sqlite3.Connection) -> None:
+    """Bind well-formed legacy revision edge sets exactly once."""
+    provenance_exists = conn.execute(
+        """
+        SELECT 1 FROM sqlite_master
+         WHERE type='table' AND name='provenance_edges'
+        """
+    ).fetchone()
+    if provenance_exists is None:
+        # Without the edge table there is no authoritative way to distinguish
+        # a genuinely empty Wrap from missing legacy provenance.
+        return
+    rows = conn.execute(
+        "SELECT wrap_id, revision FROM daily_wrap_revisions ORDER BY wrap_id, revision"
+    ).fetchall()
+    for row in rows:
+        wrap_id = row["wrap_id"]
+        revision = row["revision"]
+        if not isinstance(wrap_id, str) or not wrap_id or type(revision) is not int or revision < 1:
+            continue
+        revision_ref = EvidenceRef(
+            kind="daily_wrap_revision",
+            id=f"{wrap_id}:r{revision}",
+            path=wrap_id,
+        )
+        sources = provenance_store.direct_sources_checked(conn, revision_ref)
+        if sources is None:
+            # One malformed edge invalidates the complete source projection.
+            # Leave the digest blank so public readers quarantine the row.
+            continue
         conn.execute(
             """
-            ALTER TABLE daily_wrap_jobs
-            ADD COLUMN published_input_digest TEXT NOT NULL DEFAULT ''
-            """
+            UPDATE daily_wrap_revisions
+               SET source_digest=?
+             WHERE wrap_id=? AND revision=?
+            """,
+            (daily_wrap_sources_digest(sources), wrap_id, revision),
         )
 
 
@@ -156,20 +272,28 @@ def get_by_id(conn: sqlite3.Connection, wrap_id: str) -> DailyWrapRow | None:
     return _to_row(row) if row else None
 
 
-def list_wraps(conn: sqlite3.Connection, *, limit: int = 30) -> list[DailyWrapRow]:
+def list_wraps(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 30,
+    offset: int = 0,
+) -> list[DailyWrapRow]:
     if limit < 1 or limit > 365:
         raise ValueError("limit must be in [1, 365]")
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise ValueError("offset must be a non-negative integer")
     rows = conn.execute(
         """
         SELECT * FROM daily_wrap_jobs
-         ORDER BY local_date DESC, timezone, scope
-         LIMIT ?
+         ORDER BY local_date DESC, timezone, scope, id
+         LIMIT ? OFFSET ?
         """,
-        (limit,),
+        (limit, offset),
     ).fetchall()
     return [_to_row(row) for row in rows]
 
 
+@privacy_egress_fenced
 def claim(
     conn: sqlite3.Connection,
     *,
@@ -184,29 +308,51 @@ def claim(
     lease_token: str,
     lease_seconds: int = 300,
     now: datetime | None = None,
+    force_refresh: bool = False,
+    expected_revision: int | None = None,
+    expected_updated_at: str | None = None,
+    expected_published_input_digest: str | None = None,
 ) -> ClaimResult:
     if lease_seconds < 30 or lease_seconds > 21_600:
         raise ValueError("lease_seconds must be in [30, 21600]")
+    if force_refresh and (
+        expected_revision is None
+        or expected_updated_at is None
+        or expected_published_input_digest is None
+    ):
+        raise ValueError("force_refresh requires the expected published job version")
     now = now or datetime.now().astimezone()
     now_iso = now.isoformat()
     expires = (now + timedelta(seconds=lease_seconds)).isoformat()
     conn.execute("BEGIN IMMEDIATE")
     try:
-        existing = get(
-            conn, local_date=local_date, timezone=timezone, scope=scope
-        )
+        existing = get(conn, local_date=local_date, timezone=timezone, scope=scope)
+        if force_refresh:
+            if existing is None:
+                conn.execute("ROLLBACK")
+                raise DailyWrapLostLease("daily wrap disappeared before forced refresh")
+            if (
+                existing.revision != expected_revision
+                or existing.updated_at != expected_updated_at
+                or existing.published_input_digest != expected_published_input_digest
+            ):
+                # Another caller already changed, repaired, or reclaimed the
+                # stale projection.  Return its canonical row without
+                # overwriting it; the service will authorize that newer row
+                # and only retry if it remains invalid.
+                conn.execute("COMMIT")
+                return ClaimResult(row=existing, claimed=False)
         if (
             existing
             and existing.status == "succeeded"
             and (existing.published_input_digest or existing.input_digest) == input_digest
+            and not force_refresh
         ):
             conn.execute("COMMIT")
             return ClaimResult(row=existing, claimed=False)
         if existing and existing.status == "running" and _lease_is_live(existing, now):
             conn.execute("ROLLBACK")
-            raise DailyWrapBusy(
-                f"daily wrap {local_date} ({timezone}) is already running"
-            )
+            raise DailyWrapBusy(f"daily wrap {local_date} ({timezone}) is already running")
         wrap_id = existing.id if existing else make_id(local_date, timezone, scope)
         if existing is None:
             conn.execute(
@@ -239,18 +385,13 @@ def claim(
             conn.execute(
                 """
                 UPDATE daily_wrap_jobs
-                   SET window_start_utc=?, window_end_utc=?, workflow_version=?,
-                       status='running', coverage_status=?,
+                   SET status='running',
                        attempt_count=attempt_count+1, lease_token=?,
                        lease_expires_at=?, input_digest=?,
                        updated_at=?, last_error=''
                  WHERE id=?
                 """,
                 (
-                    window_start_utc,
-                    window_end_utc,
-                    workflow_version,
-                    coverage_status,
                     lease_token,
                     expires,
                     input_digest,
@@ -268,16 +409,28 @@ def claim(
     return ClaimResult(row=row, claimed=True)
 
 
+@privacy_egress_fenced
 def complete(
     conn: sqlite3.Connection,
     *,
     wrap_id: str,
     lease_token: str,
     input_digest: str,
+    window_start_utc: str,
+    window_end_utc: str,
+    workflow_version: int,
     coverage_status: str,
     output: dict[str, Any],
     sources: list[EvidenceRef],
+    validate_input_current: Callable[[], None],
 ) -> DailyWrapRow:
+    """Publish a revision from one authoritative SQLite snapshot.
+
+    ``validate_input_current`` runs after ``BEGIN IMMEDIATE`` and before any
+    revision write. It must rebuild the caller's full semantic input and raise
+    when its digest changed. Rechecking immediately before this function would
+    leave a TOCTOU window in which a new timeline/event source could arrive.
+    """
     now = datetime.now().astimezone().isoformat()
     output_json = json.dumps(output, ensure_ascii=False, sort_keys=True)
     conn.execute("BEGIN IMMEDIATE")
@@ -291,34 +444,51 @@ def complete(
         ):
             conn.execute("ROLLBACK")
             raise DailyWrapLostLease("daily wrap lease or input changed before publish")
+        validate_input_current()
         item_sources = _output_item_sources(output)
         if any(
-            not provenance_store.is_current(conn, source)
-            for source in [*sources, *item_sources]
+            not provenance_store.is_current(conn, source) for source in [*sources, *item_sources]
         ):
             conn.execute("ROLLBACK")
-            raise DailyWrapLostLease(
-                "daily wrap source was deleted or changed before publish"
-            )
+            raise DailyWrapLostLease("daily wrap source was deleted or changed before publish")
         revision = current.revision + 1
         conn.execute(
             """
             INSERT INTO daily_wrap_revisions(
-                wrap_id, revision, input_digest, coverage_status, output_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)
+                wrap_id, revision, local_date, timezone, scope,
+                window_start_utc, window_end_utc, workflow_version,
+                input_digest, coverage_status, source_digest, output_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
             """,
-            (wrap_id, revision, input_digest, coverage_status, output_json, now),
+            (
+                wrap_id,
+                revision,
+                current.local_date,
+                current.timezone,
+                current.scope,
+                window_start_utc,
+                window_end_utc,
+                workflow_version,
+                input_digest,
+                coverage_status,
+                output_json,
+                now,
+            ),
         )
         result = conn.execute(
             """
             UPDATE daily_wrap_jobs
-               SET status='succeeded', coverage_status=?, output_json=?,
+               SET window_start_utc=?, window_end_utc=?, workflow_version=?,
+                   status='succeeded', coverage_status=?, output_json=?,
                    revision=?, published_input_digest=?,
                    lease_token=NULL, lease_expires_at=NULL,
                    updated_at=?, completed_at=?, last_error=''
              WHERE id=? AND status='running' AND lease_token=? AND input_digest=?
             """,
             (
+                window_start_utc,
+                window_end_utc,
+                workflow_version,
                 coverage_status,
                 output_json,
                 revision,
@@ -346,6 +516,29 @@ def complete(
             ),
             sources=sources,
         )
+        revision_ref = EvidenceRef(
+            kind="daily_wrap_revision",
+            id=f"{wrap_id}:r{revision}",
+            path=wrap_id,
+        )
+        persisted_revision_sources = provenance_store.direct_sources(
+            conn,
+            revision_ref,
+        )
+        digest_update = conn.execute(
+            """
+            UPDATE daily_wrap_revisions
+               SET source_digest=?
+             WHERE wrap_id=? AND revision=? AND source_digest=''
+            """,
+            (
+                daily_wrap_sources_digest(persisted_revision_sources),
+                wrap_id,
+                revision,
+            ),
+        )
+        if digest_update.rowcount != 1:
+            raise DailyWrapLostLease("daily wrap revision source binding changed")
         conn.execute(
             """
             DELETE FROM provenance_edges
@@ -374,7 +567,10 @@ def complete(
                         id=str(item["id"]),
                         path=wrap_id,
                     ),
-                    sources=item_sources,
+                    # The provider saw the wrap's complete context, not only
+                    # the citations it chose for this item. Conservatively
+                    # inherit the same authorization closure as the wrap.
+                    sources=sources,
                 )
         conn.execute("COMMIT")
     except BaseException:
@@ -386,6 +582,43 @@ def complete(
     return row
 
 
+def revision_sources_are_current(
+    conn: sqlite3.Connection,
+    revision_ref: EvidenceRef,
+) -> bool:
+    """Verify one immutable revision against its exact projected edge set."""
+    if (
+        revision_ref.kind != "daily_wrap_revision"
+        or not revision_ref.path
+        or not revision_ref.id.startswith(f"{revision_ref.path}:r")
+    ):
+        return False
+    try:
+        revision = int(revision_ref.id.rsplit(":r", 1)[1])
+    except (IndexError, ValueError):
+        return False
+    if revision_ref.id != f"{revision_ref.path}:r{revision}" or revision < 1:
+        return False
+    row = conn.execute(
+        """
+        SELECT source_digest FROM daily_wrap_revisions
+         WHERE wrap_id=? AND revision=?
+        """,
+        (revision_ref.path, revision),
+    ).fetchone()
+    if row is None or not isinstance(row["source_digest"], str) or not row["source_digest"]:
+        return False
+    try:
+        sources = provenance_store.direct_sources_checked(conn, revision_ref)
+        if sources is None:
+            return False
+        expected = daily_wrap_sources_digest(sources)
+    except (TypeError, ValueError):
+        return False
+    return row["source_digest"] == expected
+
+
+@privacy_egress_fenced
 def fail(
     conn: sqlite3.Connection,
     *,
@@ -427,6 +660,7 @@ def cancel_claim(
     return get_by_id(conn, wrap_id)
 
 
+@privacy_egress_fenced
 def purge(conn: sqlite3.Connection, wrap_id: str) -> None:
     conn.execute(
         """

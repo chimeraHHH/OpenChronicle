@@ -72,6 +72,42 @@ We think this is the right tradeoff for an early memory system:
 
 > **AX-first for accurate, compact, low-cost memory; screenshot-assisted for richer multimodal context.**
 
+### Capture privacy boundary
+
+The Stage 0 implementation is designed to fail closed unless Accessibility and
+CoreGraphics can agree on one exact focused window. Schema versions 4 and 5
+bind the app, bundle ID, title, PID, `CGWindowID`, and bounds before AX content
+can be persisted. Secure text-field values are replaced with `[REDACTED]`
+inside the native helper, before Python sees them.
+
+Browser URL allow/exclude rules are bounded literals, not regular expressions.
+They run after in-memory AX extraction but before screenshots, JSON, FTS, or
+model use. Active URL policy supports only known browser bundles with a
+family-specific address-control adapter; other apps are denied before AX
+collection. The privacy gate requires exactly one address value from an exact
+stable AX identifier. A bounded scan of the rest of the tree is an additional
+deny surface, never substitute address evidence. The native helper must provide
+a receipt proving an unpruned tree, and two snapshots must retain the same
+window and URL evidence. This reduces navigation races but is not an atomic
+browser transaction.
+
+A successful URL-policy observation uses the `url_metadata_only` profile: it
+retains only app/bundle/PID/`CGWindowID`/bounds metadata and an explicitly
+observed, approved HTTP(S) URL. Raw AX, focused content, and screenshots are
+omitted; visible text and titles are cleared. A scheme-less address is checked
+under both HTTP and HTTPS interpretations, remains `null` in S1, and is rejected
+as durable URL-policy evidence. The retained value is address-control evidence,
+not proof that the browser loaded that document. Outside URL policy, screenshots
+remain opt-in and target one exact CoreGraphics window, with no display-capture
+or `mss` fallback. Watcher content
+details never enter persistence or session hooks. See [Capture](docs/capture.md)
+and [Configuration](docs/config.md) for the complete contract.
+
+This describes implementation status, not completed live acceptance. The
+unlocked, real-application Accessibility and Screen Recording audit remains
+open in [#3](https://github.com/chimeraHHH/OpenChronicle/issues/3); exact-window
+privacy is not release-validated until that audit is recorded and reviewed.
+
 ---
 
 ## OpenChronicle vs OpenAI Chronicle
@@ -129,6 +165,9 @@ The core idea is simple:
 ## What you get
 
 * **Event-driven capture** from macOS AX events
+* **Fail-closed exact-window privacy implementation** with literal browser URL
+  rules and secure-field redaction; live real-application acceptance remains
+  open in [#3](https://github.com/chimeraHHH/OpenChronicle/issues/3)
 * **Session-aware memory writing** instead of noisy per-snapshot logs
 * **Human-readable Markdown memory**
 * **Local SQLite indexing**

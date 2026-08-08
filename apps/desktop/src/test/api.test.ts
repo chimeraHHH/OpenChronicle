@@ -12,6 +12,7 @@ import {
   normalizeProvenance,
   normalizeSnapshot,
 } from "../api";
+import { DESKTOP_BRIDGE_PROTOCOL_VERSION } from "../contracts";
 import {
   bridgeCandidateGet,
   bridgeCandidateMutation,
@@ -30,6 +31,10 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
+  it("tracks the immutable Daily Wrap projection as bridge protocol v2", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(2);
+  });
+
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
     tauri.invoke.mockResolvedValue(bridgeSnapshot());
 
@@ -93,7 +98,16 @@ describe("desktop bridge adapters", () => {
   });
 
   it("maps a read-only Daily Wrap while preserving the untrusted quote marker", async () => {
-    tauri.invoke.mockResolvedValue(bridgeWrapGet(wrapDetail()));
+    tauri.invoke.mockResolvedValue({
+      wrap: {
+        ...wrapDetail(),
+        attempt_count: 17,
+        input_digest: "active-private-digest",
+        lease_token: "private-lease",
+        updated_at: "2026-08-08T12:00:00Z",
+        last_error: "private provider failure",
+      },
+    });
 
     const result = await desktopApi.getDailyWrap("2026-08-07", "Asia/Shanghai");
 
@@ -104,6 +118,11 @@ describe("desktop bridge adapters", () => {
       kind: "completed",
       untrusted_activity_quote: true,
     });
+    expect(result).not.toHaveProperty("attempt_count");
+    expect(result).not.toHaveProperty("input_digest");
+    expect(result).not.toHaveProperty("lease_token");
+    expect(result).not.toHaveProperty("updated_at");
+    expect(result).not.toHaveProperty("last_error");
   });
 
   it("passes provenance references explicitly and maps evidence into inert text", async () => {

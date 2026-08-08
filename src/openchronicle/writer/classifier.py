@@ -25,9 +25,11 @@ from ..capture import filenames as capture_filenames
 from ..config import Config
 from ..logger import get
 from ..memory_candidates import store as candidate_store
+from ..privacy.egress import model_egress_lock
 from ..prompts import load as load_prompt
-from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, content_digest, timeline_block_digest
+from ..services.context import ContextService
+from ..services.evidence import EvidenceResolver
 from ..store import entries as entries_mod
 from ..store import files as files_mod
 from ..store import fts
@@ -97,9 +99,7 @@ def classify_window(
             )
         else:
             entries_mod.write_preset_files(conn)
-        if candidate_store.is_tombstoned(
-            conn, kind="memory_file", artifact_id=event_daily_path
-        ):
+        if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=event_daily_path):
             if delivery_job_id:
                 raise classifier_jobs.ClassifierJobInputChanged(
                     "classifier source is pending permanent purge"
@@ -117,15 +117,15 @@ def classify_window(
                 evidence=[],
             )
             if delivery_job_id:
-                run_key = classifier_jobs.make_producer_run_key(delivery_job_id)
-            if delivery_job_id:
-                classifier_jobs.bind_input(
+                run_key = classifier_jobs.make_producer_run_key(delivery_job_id, input_digest)
+                bound = classifier_jobs.bind_input(
                     conn,
                     job_id=delivery_job_id,
                     lease_token=delivery_lease_token,
                     input_digest=input_digest,
                     producer_run_key=run_key,
                 )
+                run_key = bound.producer_run_key
             return ClassifyResult(
                 session_id=session_id,
                 skipped_reason="event memory file is pending permanent purge",
@@ -135,6 +135,7 @@ def classify_window(
 
         focus_entries = _focus_entries_in_range(
             conn=conn,
+            cfg=cfg,
             event_daily_path=event_daily_path,
             session_id=session_id,
             start=start,
@@ -147,8 +148,6 @@ def classify_window(
             event_daily_path=event_daily_path,
             evidence=[],
         )
-        if delivery_job_id:
-            delivery_run_key = classifier_jobs.make_producer_run_key(delivery_job_id)
         if not focus_entries:
             if delivery_job_id and not allow_empty_delivery:
                 raise classifier_jobs.ClassifierJobInputChanged(
@@ -162,13 +161,17 @@ def classify_window(
                 evidence=[],
             )
             if delivery_job_id:
-                classifier_jobs.bind_input(
+                delivery_run_key = classifier_jobs.make_producer_run_key(
+                    delivery_job_id, input_digest
+                )
+                bound = classifier_jobs.bind_input(
                     conn,
                     job_id=delivery_job_id,
                     lease_token=delivery_lease_token,
                     input_digest=input_digest,
                     producer_run_key=delivery_run_key,
                 )
+                delivery_run_key = bound.producer_run_key
             return ClassifyResult(
                 session_id=session_id,
                 skipped_reason=(
@@ -180,8 +183,10 @@ def classify_window(
                 input_digest=input_digest,
             )
 
-        timeline_text, timeline_evidence = _render_timeline_blocks(conn, start, end)
-        prior_day_text = _render_prior_day(conn, start) if include_prior_day else ""
+        timeline_text, timeline_evidence = _render_timeline_blocks(conn, cfg, start, end)
+        prior_day_text, prior_day_evidence = (
+            _render_prior_day(conn, cfg, start) if include_prior_day else ("", [])
+        )
 
         context = _assemble_context(
             event_daily_path=event_daily_path,
@@ -193,14 +198,13 @@ def classify_window(
         initial_evidence = [
             *_entry_evidence(event_daily_path, focus_entries),
             *timeline_evidence,
+            *prior_day_evidence,
         ]
         delivery_run_key = _classifier_run_key(
             session_id=session_id,
             event_daily_path=event_daily_path,
             evidence=initial_evidence,
         )
-        if delivery_job_id:
-            delivery_run_key = classifier_jobs.make_producer_run_key(delivery_job_id)
         input_digest = _delivery_input_digest(
             event_daily_path=event_daily_path,
             session_id=session_id,
@@ -209,13 +213,15 @@ def classify_window(
             evidence=initial_evidence,
         )
         if delivery_job_id:
-            classifier_jobs.bind_input(
+            delivery_run_key = classifier_jobs.make_producer_run_key(delivery_job_id, input_digest)
+            bound = classifier_jobs.bind_input(
                 conn,
                 job_id=delivery_job_id,
                 lease_token=delivery_lease_token,
                 input_digest=input_digest,
                 producer_run_key=delivery_run_key,
             )
+            delivery_run_key = bound.producer_run_key
 
         def validate_delivery_input() -> None:
             if not delivery_job_id:
@@ -228,6 +234,7 @@ def classify_window(
                 )
             current_focus = _focus_entries_in_range(
                 conn=conn,
+                cfg=cfg,
                 event_daily_path=event_daily_path,
                 session_id=session_id,
                 start=start,
@@ -235,7 +242,10 @@ def classify_window(
                 focus_entry_ids=focus_entry_ids,
                 strict_coverage=True,
             )
-            _, current_timeline = _render_timeline_blocks(conn, start, end)
+            _, current_timeline = _render_timeline_blocks(conn, cfg, start, end)
+            _, current_prior_day = (
+                _render_prior_day(conn, cfg, start) if include_prior_day else ("", [])
+            )
             current_digest = _delivery_input_digest(
                 event_daily_path=event_daily_path,
                 session_id=session_id,
@@ -244,6 +254,7 @@ def classify_window(
                 evidence=[
                     *_entry_evidence(event_daily_path, current_focus),
                     *current_timeline,
+                    *current_prior_day,
                 ],
             )
             if current_digest != input_digest:
@@ -252,7 +263,8 @@ def classify_window(
                 )
 
         return _run_tool_loop(
-            cfg, conn,
+            cfg,
+            conn,
             session_id=session_id,
             event_daily_path=event_daily_path,
             context=context,
@@ -327,14 +339,14 @@ def _classify_untimed(
 ) -> ClassifyResult:
     with fts.cursor() as conn:
         entries_mod.write_preset_files(conn)
-        if candidate_store.is_tombstoned(
-            conn, kind="memory_file", artifact_id=event_daily_path
-        ):
+        if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=event_daily_path):
             return ClassifyResult(
                 session_id=session_id,
                 skipped_reason="event memory file is pending permanent purge",
             )
         focus_entries = _focus_entries(
+            conn=conn,
+            cfg=cfg,
             event_daily_path=event_daily_path,
             session_id=session_id,
             fallback_entry_id=just_written_entry_id,
@@ -351,7 +363,8 @@ def _classify_untimed(
             prior_day_text="",
         )
         return _run_tool_loop(
-            cfg, conn,
+            cfg,
+            conn,
             session_id=session_id,
             event_daily_path=event_daily_path,
             context=context,
@@ -362,6 +375,7 @@ def _classify_untimed(
 def _focus_entries_in_range(
     *,
     conn: sqlite3.Connection,
+    cfg: Config,
     event_daily_path: str,
     session_id: str,
     start: datetime,
@@ -418,27 +432,27 @@ def _focus_entries_in_range(
         end_cmp = end
         if start_cmp <= ts_cmp < end_cmp:
             matches.append(e)
+    matches = [
+        entry
+        for entry in matches
+        if not candidate_store.is_tombstoned(
+            conn,
+            kind="memory_entry",
+            artifact_id=entry.id,
+            path=event_daily_path,
+        )
+        and tools_mod.memory_entry_allowed(
+            conn,
+            cfg,
+            path=event_daily_path,
+            entry=entry,
+        )
+    ]
     missing_required = required_ids - {entry.id for entry in matches}
     if missing_required:
         raise classifier_jobs.ClassifierJobInputChanged(
             "required terminal classifier entry is missing or changed: "
             + ", ".join(sorted(missing_required))
-        )
-    invalid = [
-        entry.id
-        for entry in matches
-        if not entry.provenance_valid
-        or not entries_mod.dependency_sources_are_live(conn, entry.evidence_refs)
-        or any(
-            source.kind in ("observation", "timeline_block")
-            and not provenance_store.is_current(conn, source)
-            for source in entry.evidence_refs
-        )
-    ]
-    if invalid:
-        raise classifier_jobs.ClassifierJobInputChanged(
-            "classifier focus evidence is missing, changed, or malformed: "
-            + ", ".join(sorted(invalid))
         )
     return matches
 
@@ -466,7 +480,12 @@ def _parse_entry_ts(text: str) -> datetime | None:
 
 
 def _focus_entries(
-    *, event_daily_path: str, session_id: str, fallback_entry_id: str,
+    *,
+    conn: sqlite3.Connection,
+    cfg: Config,
+    event_daily_path: str,
+    session_id: str,
+    fallback_entry_id: str,
 ) -> list[files_mod.ParsedEntry]:
     """Return every entry in today's event-daily tagged with this session.
 
@@ -483,16 +502,33 @@ def _focus_entries(
         return []
     sid_tag = f"sid:{session_id}"
     matches = [e for e in parsed.entries if sid_tag in e.tags]
-    if matches:
-        return matches
-    for e in parsed.entries:
-        if e.id == fallback_entry_id:
-            return [e]
-    return [parsed.entries[-1]] if parsed.entries else []
+    if not matches:
+        matches = [e for e in parsed.entries if e.id == fallback_entry_id]
+    if not matches and parsed.entries:
+        matches = [parsed.entries[-1]]
+    return [
+        entry
+        for entry in matches
+        if not candidate_store.is_tombstoned(
+            conn,
+            kind="memory_entry",
+            artifact_id=entry.id,
+            path=event_daily_path,
+        )
+        and tools_mod.memory_entry_allowed(
+            conn,
+            cfg,
+            path=event_daily_path,
+            entry=entry,
+        )
+    ]
 
 
 def _render_timeline_blocks(
-    conn: sqlite3.Connection, start: datetime, end: datetime,
+    conn: sqlite3.Connection,
+    cfg: Config,
+    start: datetime,
+    end: datetime,
 ) -> tuple[str, list[EvidenceRef]]:
     rows = conn.execute(
         """
@@ -519,13 +555,20 @@ def _render_timeline_blocks(
         return "(no timeline blocks recorded for this session)", []
     out: list[str] = []
     evidence: list[EvidenceRef] = []
+    authorizer = ContextService(conn, cfg)
     for r in rows:
         try:
             s = datetime.fromisoformat(r["start_time"]).strftime("%H:%M")
             e = datetime.fromisoformat(r["end_time"]).strftime("%H:%M")
         except (TypeError, ValueError):
             s, e = r["start_time"], r["end_time"]
-        entries = json.loads(r["entries"] or "[]")
+        try:
+            entries = json.loads(r["entries"] or "[]")
+            apps = json.loads(r["apps_used"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(entries, list) or not isinstance(apps, list):
+            continue
         ref = EvidenceRef(
             kind="timeline_block",
             id=r["id"],
@@ -534,9 +577,11 @@ def _render_timeline_blocks(
                 start=r["start_time"],
                 end=r["end_time"],
                 entries=entries,
-                apps=json.loads(r["apps_used"] or "[]"),
+                apps=apps,
             ),
         )
+        if not authorizer.evidence_allowed(ref):
+            continue
         evidence.append(ref)
         header = f"[{s}-{e}] [evidence:{ref.key}]"
         if not entries:
@@ -544,34 +589,63 @@ def _render_timeline_blocks(
             continue
         out.append(header)
         out.extend(f"  - {entry}" for entry in entries)
+    if not out:
+        return "(no policy-allowed timeline blocks recorded for this session)", []
     return "\n".join(out), evidence
 
 
-def _render_prior_day(conn: sqlite3.Connection, session_start: datetime) -> str:
+def _render_prior_day(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    session_start: datetime,
+) -> tuple[str, list[EvidenceRef]]:
     prior_date = (session_start - timedelta(days=1)).strftime("%Y-%m-%d")
     name = f"event-{prior_date}.md"
-    if candidate_store.is_tombstoned(
-        conn, kind="memory_file", artifact_id=name
-    ):
-        return ""
+    if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=name):
+        return "", []
     path = files_mod.memory_path(name)
     if not path.exists():
-        return ""
+        return "", []
     try:
         parsed = files_mod.read_file(path)
     except Exception:  # noqa: BLE001
-        return ""
-    tail = parsed.entries[-_PRIOR_DAY_ENTRIES:]
+        return "", []
+    visible = [
+        entry
+        for entry in parsed.entries
+        if not candidate_store.is_tombstoned(
+            conn,
+            kind="memory_entry",
+            artifact_id=entry.id,
+            path=name,
+        )
+        and tools_mod.memory_entry_allowed(
+            conn,
+            cfg,
+            path=name,
+            entry=entry,
+        )
+    ]
+    tail = visible[-_PRIOR_DAY_ENTRIES:]
     if not tail:
-        return ""
+        return "", []
     out: list[str] = [f"From {name} (last {len(tail)} entries):", ""]
+    evidence: list[EvidenceRef] = []
     for e in tail:
-        out.append(f"### [{e.timestamp}] {{id: {e.id}}}")
+        ref = EvidenceRef(
+            kind="memory_entry",
+            id=e.id,
+            path=name,
+            timestamp=e.timestamp,
+            content_hash=content_digest(e.body),
+        )
+        evidence.append(ref)
+        out.append(f"### [{e.timestamp}] {{id: {e.id}}} [evidence:{ref.key}]")
         body = e.body.strip()
         if body:
             out.append(body)
         out.append("")
-    return "\n".join(out).strip()
+    return "\n".join(out).strip(), evidence
 
 
 def _assemble_context(
@@ -591,9 +665,7 @@ def _assemble_context(
             timestamp=e.timestamp,
             content_hash=content_digest(e.body),
         )
-        parts.append(
-            f"### [{e.timestamp}] {{id: {e.id}}} [evidence:{ref.key}]"
-        )
+        parts.append(f"### [{e.timestamp}] {{id: {e.id}}} [evidence:{ref.key}]")
         body = e.body.strip()
         if body:
             parts.append(body)
@@ -620,21 +692,12 @@ def _assemble_context(
 
 
 def _render_index(conn: sqlite3.Connection) -> str:
-    active = fts.list_files(conn, include_dormant=False, include_archived=False)
-    if not active:
-        return "(no non-event memory files yet — create them as needed)"
-    # Classifier never touches event-*; show only the files it can
-    # actually write to so it doesn't get tempted.
-    filtered = [f for f in active if not f.path.startswith("event-")]
-    if not filtered:
-        return "(no non-event memory files yet — create them as needed)"
-    lines = ["Active non-event memory files:"]
-    for f in filtered[:30]:
-        lines.append(
-            f"- {f.path}  # {f.description}  "
-            f"(tags: {f.tags}; entries: {f.entry_count}; updated: {f.updated})"
-        )
-    return "\n".join(lines)
+    del conn
+    # File-level index metadata has no entry-level provenance binding and can
+    # itself contain model-derived private text.  Retrieval tools expose only
+    # policy-authorized, hash-bound entries, so the classifier discovers
+    # adjacent memory through those tools instead of receiving a raw index.
+    return "(index metadata withheld; use search_memory or read_memory)"
 
 
 def _run_tool_loop(
@@ -669,7 +732,6 @@ def _run_tool_loop(
     ]
 
     state = tools_mod.CommitState(
-        allowed_evidence={ref.key: ref for ref in initial_evidence},
         producer_run_key=producer_run_key
         or _classifier_run_key(
             session_id=session_id,
@@ -677,6 +739,14 @@ def _run_tool_loop(
             evidence=initial_evidence,
         ),
     )
+    for ref in initial_evidence:
+        if not state.expose_evidence(ref):
+            return ClassifyResult(
+                session_id=session_id,
+                error="classifier input contained conflicting evidence revisions",
+                producer_run_key=state.producer_run_key,
+                input_digest=input_digest,
+            )
     if bool(delivery_job_id) != bool(delivery_lease_token):
         raise ValueError("classifier delivery job and lease token must be provided together")
     lease_seconds = max(
@@ -736,11 +806,22 @@ def _run_tool_loop(
                     lease_token=delivery_lease_token,
                     lease_seconds=lease_seconds,
                 )
-            resp = llm_mod.call_llm(
-                cfg, "classifier",
-                messages=messages,
-                tools=tools_mod.CLASSIFIER_TOOL_SCHEMAS,
-            )
+            with model_egress_lock():
+                if validate_delivery_input is not None:
+                    validate_delivery_input()
+                if state.evidence_conflicts or any(
+                    EvidenceResolver(conn, cfg).resolve(ref)["status"] != "current"
+                    for ref in state.allowed_evidence.values()
+                ):
+                    raise classifier_jobs.ClassifierJobInputChanged(
+                        "classifier evidence changed before provider egress"
+                    )
+                resp = llm_mod.call_llm(
+                    cfg,
+                    "classifier",
+                    messages=messages,
+                    tools=tools_mod.CLASSIFIER_TOOL_SCHEMAS,
+                )
             if delivery_job_id:
                 # Renew after provider I/O as well so tool-side mutations have
                 # a full fenced interval even when the call used most of its
@@ -760,7 +841,9 @@ def _run_tool_loop(
             last_error = f"{type(exc).__name__}: {exc}"
             logger.warning(
                 "classifier %s: LLM call failed at iter %d: %s",
-                session_id, iteration, exc,
+                session_id,
+                iteration,
+                exc,
             )
             break
 
@@ -795,7 +878,10 @@ def _run_tool_loop(
             else:
                 try:
                     result = tools_mod.dispatch_classifier(
-                        name, args, conn=conn,
+                        name,
+                        args,
+                        conn=conn,
+                        cfg=cfg,
                         soft_limit_tokens=cfg.writer.soft_limit_tokens,
                         state=state,
                     )
@@ -841,9 +927,7 @@ def _run_tool_loop(
     )
 
 
-def _entry_evidence(
-    path: str, entries: list[files_mod.ParsedEntry]
-) -> list[EvidenceRef]:
+def _entry_evidence(path: str, entries: list[files_mod.ParsedEntry]) -> list[EvidenceRef]:
     return [
         EvidenceRef(
             kind="memory_entry",
@@ -864,10 +948,7 @@ def _classifier_run_key(
 ) -> str:
     material = ["classifier-run-v1", session_id, event_daily_path]
     material.extend(
-        sorted(
-            f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}"
-            for ref in evidence
-        )
+        sorted(f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}" for ref in evidence)
     )
     return hashlib.sha256("\0".join(material).encode()).hexdigest()
 
@@ -888,10 +969,7 @@ def _delivery_input_digest(
         end.isoformat(),
     ]
     material.extend(
-        sorted(
-            f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}"
-            for ref in evidence
-        )
+        sorted(f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}" for ref in evidence)
     )
     return hashlib.sha256("\0".join(material).encode()).hexdigest()
 

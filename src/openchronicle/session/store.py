@@ -427,9 +427,11 @@ def latest_timeline_end_in_window(
     """
     if _instant(end) <= _instant(start):
         return None
+    from ..timeline import store as timeline_store
+
     rows = conn.execute(
         """
-        SELECT start_time, end_time FROM timeline_blocks
+        SELECT id FROM timeline_blocks
          WHERE julianday(end_time) > julianday(?) - 2
            AND julianday(start_time) < julianday(?) + 2
         """,
@@ -439,12 +441,14 @@ def latest_timeline_end_in_window(
     end_instant = _instant(end)
     candidates: list[datetime] = []
     for row in rows:
-        block_start = _parse_datetime(row[0])
-        block_end = _parse_datetime(row[1])
-        if block_start is None or block_end is None:
+        block = timeline_store.get_by_id(conn, str(row[0] or ""))
+        if block is None:
             continue
-        if _instant(block_end) > start_instant and _instant(block_start) < end_instant:
-            candidates.append(block_end)
+        if (
+            _instant(block.end_time) > start_instant
+            and _instant(block.start_time) < end_instant
+        ):
+            candidates.append(block.end_time)
     return max(candidates, key=_instant, default=None)
 
 

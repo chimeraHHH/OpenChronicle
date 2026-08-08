@@ -4,6 +4,7 @@ import json
 from datetime import timedelta
 
 from openchronicle.capture import filenames
+from openchronicle.config import Config
 from openchronicle.mcp import captures as mcp_captures
 
 
@@ -59,7 +60,7 @@ def test_mcp_reader_returns_v3_capture(ac_root) -> None:
     }
     (capture_dir / f"{stem}.json").write_text(json.dumps(payload))
 
-    result = mcp_captures.read_recent_capture()
+    result = mcp_captures.read_recent_capture(cfg=Config())
 
     assert result is not None
     assert result["file"] == f"{stem}.json"
@@ -76,11 +77,15 @@ def test_mcp_reader_uses_absolute_time_across_dst_fallback(ac_root) -> None:
     ):
         payload = {
             "timestamp": timestamp,
-            "window_meta": {"app_name": stem, "bundle_id": "example.editor"},
+            "window_meta": {
+                "app_name": stem,
+                "bundle_id": "example.editor",
+                "title": "",
+            },
         }
         (capture_dir / f"{stem}.json").write_text(json.dumps(payload))
 
-    result = mcp_captures.read_recent_capture()
+    result = mcp_captures.read_recent_capture(cfg=Config())
 
     assert result is not None
     assert result["file"] == f"{newer}.json"

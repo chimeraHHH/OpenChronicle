@@ -52,6 +52,9 @@ def _seed_event_daily(day: str) -> tuple[str, str]:
                 "- [10:00-10:45, Cursor] edited project-root files, involving —\n"
             ),
             tags=["session", "sid:sess_abc"],
+            # This fixture is intentionally authored directly rather than by
+            # the reducer, so mark it as an explicit trusted manual root.
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
         )
     return name, entry_id
 
@@ -200,30 +203,32 @@ def test_classifier_tools_bound_retrieval_and_hide_event_entries(
     ac_root: Path,
 ) -> None:
     event_name, _ = _seed_event_daily("2026-04-24")
+    cfg = config_mod.Config()
     with fts.cursor() as conn:
         state = writer_tools.CommitState()
         assert "error" in writer_tools.tool_read_memory(
-            conn, path=event_name, state=state
+            conn, cfg, path=event_name, state=state
         )
         assert "error" in writer_tools.tool_read_memory(
-            conn, path="user-profile.md", tail_n=0, state=state
+            conn, cfg, path="user-profile.md", tail_n=0, state=state
         )
         assert "error" in writer_tools.tool_read_memory(
-            conn, path="user-profile.md", tail_n=21, state=state
+            conn, cfg, path="user-profile.md", tail_n=21, state=state
         )
         assert "error" in writer_tools.tool_search_memory(
-            conn, query="Cursor", top_k=0, state=state
+            conn, cfg, query="Cursor", top_k=0, state=state
         )
         assert "error" in writer_tools.tool_search_memory(
-            conn, query="Cursor", top_k=21, state=state
+            conn, cfg, query="Cursor", top_k=21, state=state
         )
         result = writer_tools.tool_search_memory(
-            conn, query="Cursor", top_k=20, state=state
+            conn, cfg, query="Cursor", top_k=20, state=state
         )
     assert result["results"] == []
 
 
 def test_classifier_search_revalidates_index_and_tombstones(ac_root: Path) -> None:
+    cfg = config_mod.Config()
     with fts.cursor() as conn:
         entries_mod.create_file(
             conn, name="project-search.md", description="search", tags=["project"]
@@ -233,10 +238,11 @@ def test_classifier_search_revalidates_index_and_tombstones(ac_root: Path) -> No
             name="project-search.md",
             content="STALE_SEARCH_SECRET",
             tags=["private"],
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
         )
         state = writer_tools.CommitState()
         assert writer_tools.tool_search_memory(
-            conn, query="STALE_SEARCH_SECRET", state=state
+            conn, cfg, query="STALE_SEARCH_SECRET", state=state
         )["results"]
         candidate_store.put_tombstone(
             conn,
@@ -245,13 +251,14 @@ def test_classifier_search_revalidates_index_and_tombstones(ac_root: Path) -> No
             path="project-search.md",
         )
         assert writer_tools.tool_search_memory(
-            conn, query="STALE_SEARCH_SECRET", state=state
+            conn, cfg, query="STALE_SEARCH_SECRET", state=state
         )["results"] == []
 
 
 def test_failed_candidate_proposal_does_not_consume_idempotency_slot(
     ac_root: Path,
 ) -> None:
+    cfg = config_mod.Config()
     with fts.cursor() as conn:
         entries_mod.create_file(
             conn, name="project-source.md", description="source", tags=["project"]
@@ -261,10 +268,11 @@ def test_failed_candidate_proposal_does_not_consume_idempotency_slot(
             name="project-source.md",
             content="The migration is complete.",
             tags=["milestone"],
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
         )
         state = writer_tools.CommitState(producer_run_key="run-slot-test")
         read = writer_tools.tool_read_memory(
-            conn, path="project-source.md", state=state
+            conn, cfg, path="project-source.md", state=state
         )
         token = read["entries"][0]["evidence_token"]
         rejected = writer_tools.tool_propose_memory_candidate(

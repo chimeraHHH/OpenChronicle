@@ -312,14 +312,12 @@ describe("trusted console", () => {
     expect(tauri.invoke.mock.calls.filter(([command]) => command === "get_candidate")).toHaveLength(1);
   });
 
-  it("shows partial coverage and last-known-good without mutation actions", async () => {
+  it("shows partial coverage without mutation actions", async () => {
     const user = userEvent.setup();
-    const summary = wrapSummary({ status: "failed", coverage_status: "partial", revision: 2 });
+    const summary = wrapSummary({ coverage_status: "partial", revision: 2 });
     const detail = wrapDetail({
-      status: "failed",
       coverage_status: "partial",
       revision: 2,
-      last_error: "TimeoutError: generation failed",
       output: {
         ...wrapDetail().output!,
         status: "partial",
@@ -334,18 +332,17 @@ describe("trusted console", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Daily Wrap" }));
-    expect(await screen.findByRole("heading", { name: "Showing the last successful revision" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Partial coverage" })).toBeInTheDocument();
-    expect(screen.getByText(/not up to date/i)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Partial coverage" })).toBeInTheDocument();
+    expect(screen.getByText("Published revision 2")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /accept/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /ignore/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /send/i })).not.toBeInTheDocument();
   });
 
-  it("labels retained output as last-published while a new Daily Wrap is running", async () => {
+  it("does not expose mutable refresh state for a published revision", async () => {
     const user = userEvent.setup();
-    const summary = wrapSummary({ status: "running", revision: 1 });
-    const detail = wrapDetail({ status: "running", revision: 1 });
+    const summary = wrapSummary({ revision: 1 });
+    const detail = wrapDetail({ revision: 1 });
     tauri.invoke.mockImplementation(async (command: string) => {
       if (command === "get_snapshot") return bridgeSnapshot(snapshot({ daily_wraps: [summary] }));
       if (command === "get_daily_wrap") return bridgeWrapGet(detail);
@@ -354,8 +351,9 @@ describe("trusted console", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Daily Wrap" }));
-    expect(await screen.findByRole("heading", { name: "Showing the last published revision" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Generation is in progress" })).toBeInTheDocument();
+    expect(await screen.findByText("Published revision 1")).toBeInTheDocument();
+    expect(screen.queryByText(/generation is in progress/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/refresh failed/i)).not.toBeInTheDocument();
   });
 
   it("binds permanent forget to the reviewed plan digest and delegates final confirmation", async () => {

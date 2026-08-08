@@ -4,6 +4,7 @@ import inspect
 import json
 import sqlite3
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -110,6 +111,9 @@ def _append_event_entry(
             content=body,
             tags=tags,
             entry_id=entry_id,
+            # Delivery tests hand-author the reducer input and exercise only
+            # outbox semantics; make that trust boundary explicit.
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
         )
 
 
@@ -309,6 +313,117 @@ def test_concurrent_claim_has_exactly_one_live_owner(ac_root: Path) -> None:
     assert sorted(status for status, _ in outcomes) == ["busy", "claimed"]
     tokens = [token for status, token in outcomes if status == "claimed"]
     assert len(tokens) == 1 and tokens[0]
+
+
+def test_candidate_proposal_and_commit_use_review_then_capture_before_sqlite(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One operation cannot hold SQLite while waiting on the other's locks."""
+    base = _now()
+    start = base - timedelta(minutes=20)
+    end = base - timedelta(minutes=10)
+    with fts.cursor() as conn:
+        _insert_session(
+            conn,
+            session_id="candidate-commit-lock-order",
+            start=start,
+            flush_end=end,
+        )
+        requested = _request_periodic(
+            conn,
+            session_id="candidate-commit-lock-order",
+            end=end,
+            now=base,
+        )
+        claimed = classifier_jobs.claim(
+            conn,
+            job_id=requested.id,
+            lease_seconds=300,
+            now=base,
+        ).row
+        assert claimed.lease_token is not None
+        run_key = classifier_jobs.make_producer_run_key(claimed.id, "lock-order-input")
+        classifier_jobs.bind_input(
+            conn,
+            job_id=claimed.id,
+            lease_token=claimed.lease_token,
+            input_digest="lock-order-input",
+            producer_run_key=run_key,
+        )
+
+    proposal_holds_locks = threading.Event()
+    release_proposal = threading.Event()
+    commit_started = threading.Event()
+    errors: list[BaseException] = []
+
+    def paused_proposal(_self, **_kwargs):
+        proposal_holds_locks.set()
+        assert release_proposal.wait(timeout=5)
+        return SimpleNamespace(id="paused-proposal")
+
+    monkeypatch.setattr(
+        MemoryService,
+        "_propose_candidate_locked",
+        paused_proposal,
+    )
+
+    def propose() -> None:
+        try:
+            with fts.cursor() as conn:
+                MemoryService(conn).propose_candidate(
+                    kind="fact",
+                    target_path="project-lock-order.md",
+                    content="Lock order fixture.",
+                    tags=["test"],
+                    evidence=[],
+                )
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def commit() -> None:
+        try:
+            with fts.cursor() as conn:
+                commit_started.set()
+                classifier_jobs.record_commit(
+                    conn,
+                    job_id=claimed.id,
+                    lease_token=claimed.lease_token or "",
+                    producer_run_key=run_key,
+                    result=_receipt("lock order committed"),
+                    now=base + timedelta(seconds=1),
+                )
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    proposal_thread = threading.Thread(target=propose)
+    commit_thread = threading.Thread(target=commit)
+    proposal_thread.start()
+    assert proposal_holds_locks.wait(timeout=5)
+    commit_thread.start()
+    assert commit_started.wait(timeout=5)
+    time.sleep(0.05)
+    assert commit_thread.is_alive()
+
+    # The commit is waiting for the canonical review lock, not holding an
+    # SQLite write transaction while it waits for capture. A third writer can
+    # still acquire BEGIN IMMEDIATE until the proposal is released.
+    probe = sqlite3.connect(paths.index_db(), isolation_level=None, timeout=0.1)
+    try:
+        probe.execute("BEGIN IMMEDIATE")
+        probe.execute("ROLLBACK")
+    finally:
+        probe.close()
+
+    release_proposal.set()
+    proposal_thread.join(timeout=5)
+    commit_thread.join(timeout=5)
+    assert not proposal_thread.is_alive()
+    assert not commit_thread.is_alive()
+    assert errors == []
+    with fts.cursor() as conn:
+        committed = classifier_jobs.get(conn, claimed.id)
+    assert committed is not None and committed.status == "committed"
 
 
 def test_claim_freezes_window_and_finalize_creates_contiguous_followup(
@@ -920,12 +1035,9 @@ def test_legacy_reduced_sessions_backfill_terminal_intent() -> None:
 
         # Simulate a crash after ALTER TABLE committed but before the first
         # backfill pass. A later schema open must repair the obligation again.
+        conn.execute("UPDATE sessions SET classifier_terminal_pending=0 WHERE id='legacy-behind'")
         conn.execute(
-            "UPDATE sessions SET classifier_terminal_pending=0 WHERE id='legacy-behind'"
-        )
-        conn.execute(
-            "DELETE FROM session_schema_migrations "
-            "WHERE name='classifier-terminal-obligation-v1'"
+            "DELETE FROM session_schema_migrations WHERE name='classifier-terminal-obligation-v1'"
         )
         session_store.ensure_schema(conn)
         repaired = session_store.get_by_id(conn, "legacy-behind")
@@ -1056,6 +1168,94 @@ def test_retry_rejects_changed_bound_input_without_advancing_bookmark(
     assert durable is not None
     assert durable.input_digest == "snapshot-before-retry"
     assert session is not None and session.classified_end is None
+
+
+def test_failed_delivery_rebases_changed_snapshot_and_eventually_completes(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = _now()
+    start = base - timedelta(minutes=20)
+    end = base - timedelta(minutes=10)
+    session_id = "input-change-recovery"
+    event_name = f"event-{start.strftime('%Y-%m-%d')}.md"
+    _create_event_file(event_name)
+    _append_event_entry(
+        name=event_name,
+        session_id=session_id,
+        entry_id="input-change-first",
+        body="FIRST_RETRY_SNAPSHOT",
+        coverage_end=end,
+    )
+    with fts.cursor() as conn:
+        _insert_session(
+            conn,
+            session_id=session_id,
+            start=start,
+            flush_end=end,
+        )
+        requested = _request_periodic(
+            conn,
+            session_id=session_id,
+            end=end,
+            now=base,
+        )
+
+    prompts: list[str] = []
+
+    def flaky_provider(
+        cfg: Any,
+        stage: str,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        json_mode: bool = False,
+    ) -> Any:
+        assert stage == "classifier"
+        prompts.append(messages[1]["content"])
+        if len(prompts) == 1:
+            raise TimeoutError("first provider attempt failed")
+        return _commit_response("changed snapshot committed")
+
+    monkeypatch.setattr(llm_mod, "call_llm", flaky_provider)
+    cfg = config_mod.load(ac_root / "config.toml")
+    first_outcome = classifier_delivery.process_job(cfg, requested.id)
+    assert first_outcome.status == "failed"
+    with fts.cursor() as conn:
+        first_failed = classifier_jobs.get(conn, requested.id)
+    assert first_failed is not None
+    assert first_failed.input_digest
+    first_run_key = first_failed.producer_run_key
+
+    # A new, valid reducer entry arrives before the retry. The durable window
+    # is unchanged, but the semantic snapshot now has a different digest.
+    _append_event_entry(
+        name=event_name,
+        session_id=session_id,
+        entry_id="input-change-late",
+        body="LATE_RETRY_SNAPSHOT",
+        coverage_end=end,
+    )
+    with fts.cursor() as conn:
+        conn.execute(
+            "UPDATE classifier_jobs SET next_retry_at=? WHERE id=?",
+            ((datetime.now().astimezone() - timedelta(seconds=1)).isoformat(), requested.id),
+        )
+
+    second_outcome = classifier_delivery.process_job(cfg, requested.id)
+
+    assert second_outcome.status == "succeeded"
+    assert len(prompts) == 2
+    assert "FIRST_RETRY_SNAPSHOT" in prompts[0]
+    assert "LATE_RETRY_SNAPSHOT" in prompts[1]
+    with fts.cursor() as conn:
+        completed = classifier_jobs.get(conn, requested.id)
+        session = session_store.get_by_id(conn, session_id)
+    assert completed is not None
+    assert completed.status == "succeeded"
+    assert completed.input_digest != first_failed.input_digest
+    assert completed.producer_run_key != first_run_key
+    assert session is not None and session.classified_end == end
 
 
 def test_midflight_tombstone_blocks_receipt_and_bookmark(
@@ -1256,3 +1456,121 @@ def test_candidate_slot_replay_preserves_first_proposal_and_receipt(
     assert candidate_count == 1
     assert finalized.completed.result is not None
     assert finalized.completed.result["candidate_ids"] == [first.id]
+
+
+def test_changed_retry_quarantines_pending_candidates_from_old_snapshot(
+    ac_root: Path,
+) -> None:
+    base = _now()
+    start = base - timedelta(minutes=20)
+    end = base - timedelta(minutes=10)
+    session_id = "candidate-rebase"
+    event_name = f"event-{start.strftime('%Y-%m-%d')}.md"
+    entry_id = "candidate-rebase-source"
+    source_body = "Grounded evidence for a superseded provider turn."
+    _create_event_file(event_name)
+    _append_event_entry(
+        name=event_name,
+        session_id=session_id,
+        entry_id=entry_id,
+        body=source_body,
+        coverage_end=end,
+    )
+    parsed = files_mod.read_file(paths.memory_dir() / event_name)
+    source = next(entry for entry in parsed.entries if entry.id == entry_id)
+    evidence = EvidenceRef(
+        kind="memory_entry",
+        id=entry_id,
+        path=event_name,
+        timestamp=source.timestamp,
+        content_hash=content_digest(source.body),
+    )
+
+    with fts.cursor() as conn:
+        _insert_session(
+            conn,
+            session_id=session_id,
+            start=start,
+            flush_end=end,
+        )
+        requested = _request_periodic(
+            conn,
+            session_id=session_id,
+            end=end,
+            now=base,
+        )
+        first_claim = classifier_jobs.claim(
+            conn,
+            job_id=requested.id,
+            lease_seconds=300,
+            now=base,
+        ).row
+        assert first_claim.lease_token is not None
+        first_key = classifier_jobs.make_producer_run_key(first_claim.id, "candidate-snapshot-v1")
+        classifier_jobs.bind_input(
+            conn,
+            job_id=first_claim.id,
+            lease_token=first_claim.lease_token,
+            input_digest="candidate-snapshot-v1",
+            producer_run_key=first_key,
+        )
+        first_candidate = MemoryService(conn).propose_candidate(
+            kind="fact",
+            target_path="project-candidate-rebase.md",
+            content="Old uncommitted provider wording.",
+            tags=["project"],
+            evidence=[evidence],
+            producer_run_key=first_key,
+            proposal_slot=0,
+            transaction_guard=lambda guard_conn: classifier_jobs.assert_lease(
+                guard_conn,
+                job_id=first_claim.id,
+                lease_token=first_claim.lease_token or "",
+            ),
+        )
+        classifier_jobs.fail(
+            conn,
+            job_id=first_claim.id,
+            lease_token=first_claim.lease_token,
+            error="provider failed after proposal",
+            retry_seconds=1,
+            now=base,
+        )
+
+        retry = classifier_jobs.claim(
+            conn,
+            job_id=first_claim.id,
+            lease_seconds=300,
+            now=base + timedelta(seconds=2),
+        ).row
+        assert retry.lease_token is not None
+        replacement_key = classifier_jobs.make_producer_run_key(retry.id, "candidate-snapshot-v2")
+        rebound = classifier_jobs.bind_input(
+            conn,
+            job_id=retry.id,
+            lease_token=retry.lease_token,
+            input_digest="candidate-snapshot-v2",
+            producer_run_key=replacement_key,
+        )
+        quarantined = MemoryService(conn).get_candidate(first_candidate.id)
+        committed = classifier_jobs.record_commit(
+            conn,
+            job_id=retry.id,
+            lease_token=retry.lease_token,
+            producer_run_key=replacement_key,
+            result=_receipt("replacement snapshot committed"),
+            now=base + timedelta(seconds=3),
+        )
+        finalized = classifier_jobs.finalize(
+            conn,
+            job_id=committed.id,
+            now=base + timedelta(seconds=4),
+        )
+
+    assert rebound.input_digest == "candidate-snapshot-v2"
+    assert rebound.producer_run_key == replacement_key
+    assert quarantined is not None
+    assert quarantined.status == "conflict"
+    assert "snapshot changed" in quarantined.last_error
+    assert finalized.completed.result is not None
+    assert finalized.completed.result["candidate_ids"] == []

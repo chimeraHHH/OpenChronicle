@@ -195,7 +195,8 @@ def build_manager(
                 ),
             )
 
-    def _on_end(session_id: str, start: datetime, end: datetime) -> None:
+    def _persist_end(session_id: str, start: datetime, end: datetime) -> None:
+        """Durably close the row before any optional reducer dispatch."""
         with fts.cursor() as conn:
             existing = session_store.get_by_id(conn, session_id)
             if existing is None:
@@ -211,11 +212,12 @@ def build_manager(
             else:
                 session_store.mark_ended(conn, session_id, end)
 
+    def _on_end(session_id: str, start: datetime, end: datetime):
         if not cfg.reducer.enabled:
             logger.info("reducer disabled — session %s stored without reduce", session_id)
             return
 
-        session_reducer.reduce_session_async(
+        return session_reducer.reduce_session_async(
             cfg,
             session_id=session_id,
             start_time=start,
@@ -245,6 +247,7 @@ def build_manager(
         soft_cut_minutes=cfg.session.soft_cut_minutes,
         max_session_hours=cfg.session.max_session_hours,
         on_session_start=_on_start,
+        on_session_persist=_persist_end,
         on_session_end=_on_end,
     )
 

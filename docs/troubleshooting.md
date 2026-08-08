@@ -27,18 +27,82 @@ Read the console output. Common culprits:
 - Missing `OPENAI_API_KEY` → set it or put `api_key = "..."` in `[models.default]`.
 - `mac-ax-helper` / `mac-ax-watcher` binary missing → run `bash resources/build-mac-ax-helper.sh && bash resources/build-mac-ax-watcher.sh`.
 
-## Captures are empty / tree has no content
+## `capture-once` writes no observation
 
-Most common cause: **Accessibility permission not granted** to the terminal you launched from.
+Capture now fails closed: no partial or metadata-only JSON is written when the
+exact focused-window, AX, URL-policy, or optional screenshot checks cannot all
+be completed. Start with the privacy-safe reason codes in the capture log:
 
 ```bash
 openchronicle capture-once
-cat ~/.openchronicle/capture-buffer/*.json | jq '.ax_tree | length' | head
+tail -50 ~/.openchronicle/logs/capture.log
 ```
 
-If the tree is `{}` or tiny across the board, open System Settings → Privacy & Security → Accessibility and enable your terminal (Terminal, iTerm2, Warp, VS Code…) plus `openchronicle` itself if it appears. Restart the daemon.
+Common causes:
 
-Second most common cause: **`ax_depth` too shallow for Electron apps.** See [capture.md](capture.md#ax-depth-the-1-footgun).
+- **Accessibility permission is missing.** Open System Settings → Privacy &
+  Security → Accessibility and enable the terminal/app that launches
+  OpenChronicle. Restart it after changing TCC permission.
+- **The focused window cannot be joined unambiguously.** A valid observation
+  requires app, bundle ID, title, PID, `CGWindowID`, and bounded geometry to
+  agree between AX and CoreGraphics. Transient menus, minimized/off-screen
+  windows, a focus change during collection, or two ambiguous sibling windows
+  are deliberately dropped; focus a normal document window and retry.
+- **The AX helper is missing or stale.** Rebuild it with
+  `bash resources/build-mac-ax-helper.sh`, then retry.
+- **A browser URL rule denied the observation.** Inspect the resolved
+  `[capture]` config with `openchronicle config`. If either URL list is active,
+  only a supported browser bundle/family adapter is eligible; unknown browsers
+  and normal apps are denied before AX. Policy requires exactly one explicit
+  HTTP(S) address from an exact stable AX identifier. Missing identifiers,
+  label-only controls, scheme-less addresses, unsupported schemes, and
+  ambiguous controls are denied. The full-tree URL scan is an additional deny
+  surface, so an excluded link or conservative dotted/path-like token anywhere
+  in AX also rejects the capture. Both AX reads need valid complete-tree
+  receipts and identical address/full-scan evidence. Use bundle/title policy
+  without URL rules for non-browser or unsupported-browser capture.
+- **Screenshots and URL rules are both enabled.** macOS cannot atomically bind
+  an AX address value to the pixels of the same `CGWindowID`. OpenChronicle
+  therefore drops every such observation before pixel collection. Disable
+  screenshots or scope the app with bundle/title rules instead.
+- **Screenshots are enabled without Screen Recording access.** When
+  `include_screenshot = true`, grant the invoking app under System Settings →
+  Privacy & Security → Screen Recording. Permission, helper, JPEG, or identity
+  failure drops the whole observation; there is no AX-only, full-screen, or
+  `mss` fallback. Keep screenshots disabled if pixels are not required.
+
+If a successful URL-policy capture looks empty by design, check its
+`privacy.content_mode`. Schema-v5/policy-v3 `url_metadata_only` retains only
+app/bundle/PID/window ID/bounds plus the approved explicit URL. It omits raw AX,
+focused content, AX metadata, and screenshots, and clears title/visible text.
+The two AX reads reduce navigation races but do not make browser capture atomic.
+
+The helper's stderr is intentionally not copied into capture logs because it
+can contain application metadata. Log messages report only stable failure
+classes/statuses.
+
+If captures exist but an Electron tree lacks content, **`ax_depth` may be too
+shallow**. See [capture.md](capture.md#ax-depth-the-1-footgun).
+
+## Run the opt-in live AX/privacy audit
+
+For a real two-window/secure-field/privacy-sink check, pause or stop the
+production daemon and run:
+
+```bash
+uv run python scripts/run_macos_ax_privacy_audit.py \
+  --acknowledge-live-ax \
+  --acknowledge-production-capture-paused \
+  --report tests/live/macos_ax_privacy/reports/audit.json
+
+uv run python scripts/verify_macos_ax_privacy_report.py \
+  tests/live/macos_ax_privacy/reports/audit.json
+```
+
+See [`tests/live/macos_ax_privacy/README.md`](../tests/live/macos_ax_privacy/README.md)
+for TCC prerequisites, redacted artifact guarantees, exact-window pixel probe,
+and limitations. Screenshot bytes are checked only in memory and never enter
+the retained report or downstream sink fixtures.
 
 ## Desktop review shell cannot reach the local bridge
 
@@ -51,12 +115,13 @@ and confirm the fixed entry point exists:
 ```bash
 uv sync --all-extras
 test -x .venv/bin/openchronicle-desktop-bridge
-printf '%s\n' '{"version":1,"operation":"snapshot","params":{"timeline_limit":0,"candidate_limit":0,"wrap_limit":0}}' \
+printf '%s\n' '{"version":2,"operation":"snapshot","params":{"timeline_limit":0,"candidate_limit":0,"wrap_limit":0}}' \
   | .venv/bin/openchronicle-desktop-bridge
 ```
 
-The bridge must emit exactly one JSON response line and no captured content on
-stderr. Release builds do not search shell `PATH` and do not honor the debug
+The v2 bridge must emit exactly one JSON response line and no captured content
+on stderr, including when its privacy fence cannot be acquired or released.
+Release builds do not search shell `PATH` and do not honor the debug
 override; the executable must be shipped beside the app or at a documented
 fixed install path. The current source slice deliberately does not bundle that
 sidecar, so an unsigned source build is not a release artifact.

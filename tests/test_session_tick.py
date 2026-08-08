@@ -5,8 +5,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from openchronicle import config as config_mod
+from openchronicle.provenance import store as provenance_store
+from openchronicle.provenance.models import EvidenceRef, content_digest
 from openchronicle.session import store as session_store
 from openchronicle.session import tick as session_tick
+from openchronicle.store import entries as entries_store
+from openchronicle.store import files as files_store
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
 from openchronicle.writer import session_reducer
@@ -16,15 +20,39 @@ _TZ = timezone(timedelta(hours=8))
 
 def _seed_block(start: datetime) -> None:
     with fts.cursor() as conn:
-        timeline_store.insert(
+        block = timeline_store.TimelineBlock(
+            start_time=start,
+            end_time=start + timedelta(minutes=5),
+            entries=["[Cursor] editing, involving —"],
+            apps_used=["Cursor"],
+            capture_count=1,
+        )
+        timeline_store.insert(conn, block)
+        source_body = "Manual session tick fixture source."
+        entries_store.create_file(
             conn,
-            timeline_store.TimelineBlock(
-                start_time=start,
-                end_time=start + timedelta(minutes=5),
-                entries=["[Cursor] editing, involving —"],
-                apps_used=["Cursor"],
-                capture_count=1,
-            ),
+            name="user-session-tick-source.md",
+            description="test source",
+            tags=["test"],
+        )
+        source_id = entries_store.append_entry(
+            conn,
+            name="user-session-tick-source.md",
+            content=source_body,
+            tags=["manual"],
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+        )
+        provenance_store.replace_sources(
+            conn,
+            subject=EvidenceRef(kind="timeline_block", id=block.id),
+            sources=[
+                EvidenceRef(
+                    kind="memory_entry",
+                    id=source_id,
+                    path="user-session-tick-source.md",
+                    content_hash=content_digest(source_body),
+                )
+            ],
         )
 
 
@@ -98,6 +126,7 @@ def test_build_manager_wires_reducer_end_to_end(ac_root: Path, monkeypatch) -> N
     manager.force_end(reason="test")
     # Give the reducer thread a moment to finish.
     import time
+
     for _ in range(40):
         with fts.cursor() as conn:
             row = session_store.get_by_id(conn, sid)

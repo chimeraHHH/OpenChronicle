@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from openchronicle import config as config_mod
+from openchronicle import paths
+from openchronicle.prompts import load as load_prompt
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef
 from openchronicle.store import entries as entries_store
@@ -14,6 +17,35 @@ from openchronicle.store import files as files_store
 from openchronicle.store import fts
 from openchronicle.timeline import aggregator
 from openchronicle.timeline import store as timeline_store
+
+
+def test_url_metadata_only_event_is_labeled_as_non_authoritative_address_text(
+    tmp_path: Path,
+) -> None:
+    capture = {
+        "timestamp": "2026-04-21T10:00:00+00:00",
+        "window_meta": {
+            "app_name": "Safari",
+            "bundle_id": "com.apple.Safari",
+            "title": "",
+        },
+        "privacy": {
+            "policy_version": 3,
+            "content_mode": "url_metadata_only",
+        },
+        "url": "https://allowed.example/uncommitted",
+        "visible_text": "",
+    }
+
+    rendered, apps = aggregator._format_events([(tmp_path / "capture.json", capture)])
+
+    assert apps == ["Safari"]
+    assert "APPROVED ADDRESS-CONTROL VALUE; MAY BE UNCOMMITTED" in rendered
+    assert "DO NOT INFER VISIT/READ: https://allowed.example/uncommitted" in rendered
+    assert "(URL:" not in rendered
+    prompt = load_prompt("timeline_block.md")
+    assert "not evidence that a document loaded" in prompt
+    assert "Never say the user visited" in prompt
 
 
 def test_markdown_provenance_roundtrip_and_rebuild(ac_root: Path) -> None:
@@ -100,22 +132,19 @@ def test_timeline_block_and_observation_edges_are_atomic(
     cfg = config_mod.Config()
     start = datetime(2026, 4, 21, 10, 0, tzinfo=UTC)
     end = start + timedelta(minutes=1)
-    capture_path = ac_root / "capture.json"
-    parsed = [
-        (
-            capture_path,
-            {
-                "observation_id": "obs_atomic",
-                "timestamp": start.isoformat(),
-                "window_meta": {
-                    "app_name": "Cursor",
-                    "bundle_id": "com.cursor.Cursor",
-                    "title": "project",
-                },
-                "visible_text": "Completed release",
-            },
-        )
-    ]
+    capture_path = paths.capture_buffer_dir() / "capture.json"
+    capture = {
+        "observation_id": "obs_atomic",
+        "timestamp": start.isoformat(),
+        "window_meta": {
+            "app_name": "Cursor",
+            "bundle_id": "com.cursor.Cursor",
+            "title": "project",
+        },
+        "visible_text": "Completed release",
+    }
+    capture_path.write_text(json.dumps(capture), encoding="utf-8")
+    parsed = [(capture_path, capture)]
     with fts.cursor() as conn:
         block = aggregator.produce_block_for_window(
             cfg, conn, start=start, end=end, parsed_captures=parsed

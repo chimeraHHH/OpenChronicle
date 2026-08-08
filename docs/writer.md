@@ -117,14 +117,18 @@ provider call. Proposal mutations and commit publication assert the matching,
 unexpired token inside their SQLite transactions, so an expired worker cannot
 land candidates or a receipt after replacement.
 
-The first attempt binds an `input_digest` over the session, authoritative file,
+Each attempt binds an `input_digest` over the session, authoritative file,
 exact window, and sorted evidence IDs/hashes, plus a producer run key derived
-from the job ID. A retry must reproduce both. Before each proposal mutation and
-again inside the commit transaction, the classifier re-reads the focus entries
-and timeline evidence, checks provenance/source liveness and pending-purge
-state, and recomputes the digest. Missing, edited, superseded, purged, or
-otherwise changed evidence fails closed rather than committing against a stale
-prompt snapshot.
+from the job ID and digest. An unchanged retry reproduces both and replays the
+same candidate slots. If valid evidence changed between an uncommitted failed
+attempt and its retry, the same frozen job/window atomically rebinds to the new
+digest and a new run key; pending candidates from the superseded turn become
+explicit conflicts instead of being reused as current output. Before each
+proposal mutation and again inside the commit transaction, the classifier
+re-reads the focus entries and timeline evidence, checks provenance/source
+liveness and pending-purge state, and recomputes the digest. A change during a
+live attempt, or missing/edited/superseded/purged evidence, still fails closed
+rather than committing against a stale prompt snapshot.
 
 The explicit `commit` tool persists a validated receipt before returning from
 the tool loop. Its JSON shape is:
@@ -163,7 +167,14 @@ Every approved entry embeds exactly one final-line `oc-provenance` JSON comment 
 
 Proposal creation revalidates evidence and atomically commits the candidate, conflict classification, and source edges under an immediate SQLite transaction. Approval uses a deterministic entry ID, revision compare-and-swap, current-evidence hash checks, and exact replay validation. A re-entrant cross-process review-operation lock serializes proposal, edit, approval, rejection, purge, provenance-bearing append/supersede, and full provenance rebuild operations. Every dependent append rechecks its source inside that fence, so it either precedes a purge and enters the captured closure or follows it and fails closed. Supersede replacements cite the post-strike source entry, and rebuild resolves embedded memory dependencies to a fixed point rather than filename order. Purge combines SQLite edges with valid Markdown frames before atomically writing content-free tombstones; normal daemon startup always resumes an interrupted forget operation.
 
-Compaction currently fails closed for files containing provenance-bearing entries. Provenance-preserving compaction and deterministic supersede approval remain later-stage work; see [Stage 1 memory and Daily Wrap](stage1-memory-daily-wrap.md).
+Compaction accepts only non-empty files whose entries are all explicit
+`oc-origin:manual-v1` roots with unique canonical IDs and no provenance.
+Automation-origin, unmarked legacy, invalid-origin, and provenance-bearing files
+fail closed before provider egress. Accepted output must preserve every entry's
+ID, timestamp, order, origin marker, and provenance-free status. Local
+frontmatter remains authoritative, and stale-snapshot writeback is rejected.
+Provenance-preserving compaction and deterministic supersede approval remain
+later-stage work; see [Stage 1 memory and Daily Wrap](stage1-memory-daily-wrap.md).
 
 ## Sessions table
 

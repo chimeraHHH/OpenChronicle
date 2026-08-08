@@ -172,6 +172,24 @@ Raw-capture read/search/current-context operations hold
 the same cross-process collection lock as capture cleanup and rebuild, so a
 cleanup tombstone cannot commit in the middle of a response.
 
+All privacy-sensitive public reads use one canonical review-operation →
+capture-store fence through response serialization. Provider calls retain the
+review-operation fence for their full duration but hold the capture-store lock
+only while taking and revalidating authoritative snapshots. Explicit capture
+cleanup also takes review → capture, so application-managed memory/timeline/
+capture cleanup either commits before model egress or waits for it to finish;
+ordinary capture persistence can continue during slow network I/O. Publication
+then repeats current-source validation under the short capture lock. The locks
+do not freeze arbitrary external filesystem editors, so compaction additionally
+compares its exact pre-call Markdown snapshot before writeback.
+
+Provenance-free memory is a policy root only with an explicit reserved
+`oc-origin:manual-v1` heading marker. Automation-origin and legacy unmarked
+entries are quarantined. Every provider-derived artifact still requires at
+least one live authorized observation or explicit manual root even when capture
+policy currently has no exclusions; an unrestricted policy is not permission
+to infer missing ancestry.
+
 ## Daily Wrap contract
 
 Inputs are selected by an IANA-timezone-aware local day window and include
@@ -181,7 +199,8 @@ input digest binds:
 - local date, timezone, and exact UTC boundaries (including 23/25-hour DST days);
 - source IDs, paths, timestamps, and content hashes;
 - timeline coverage and open/unreduced-session gaps;
-- current capture-policy digest;
+- current capture-policy digest, including bundle/app/title exclusions and both
+  URL allow/exclude lists;
 - workflow version.
 
 The remote payload is capped at 400 evenly sampled records and 2,000 characters
@@ -197,13 +216,25 @@ Canonical identity is `(local_date, timezone, scope)`. The same published input
 digest returns the existing row without another model call. Late sources or
 policy changes update the same row as `revision + 1`; revisions and their own
 provenance edges are retained in a separate table. Refresh failure preserves
-the last successful output while recording the failed attempt. A lease that is
+the last successful output while recording the failed attempt. Claiming an
+existing row changes only scheduler state; its published window, workflow,
+coverage, output, digest, and revision switch together with the new immutable
+revision in the final transaction. A lease that is
 automatically raised to cover the configured timeout/retry budget prevents
 concurrent workers from duplicating provider calls. The final publish checks
 both lease token and input digest. The input is recomputed after the provider
 call, and the publish transaction revalidates the current hash of every
 whole-wrap and item-level source. A stale or concurrently purged result is
 discarded.
+
+Every record visible to the remote Wrap prompt is retained in the whole-wrap
+source closure, and each item inherits that complete closure; model-selected
+citations remain a display subset, not the authorization boundary. The mutable
+canonical job output is exact-bound to one immutable revision row, its input
+digest, output, coverage, and source set. Public reads verify that the parent
+and revision edges still agree and repeat leaf authorization before returning,
+so editing only a job row or laundering parent edges cannot publish a stale
+Wrap. A typed empty Wrap has its own exact schema and binding checks.
 
 Output categories are:
 
@@ -234,6 +265,13 @@ Provider failure or invalid JSON produces a failed attempt with no invented
 natural-language fallback. An empty day produces an idempotent empty wrap
 without calling a model.
 
+Public Daily Wrap reads expose only the authorized immutable revision: its
+canonical day/window identity, workflow and coverage versions, published input
+digest, revision number, and grounded output. The mutable scheduler job state
+(active input digest, running/failed state, attempts, leases, errors, and job
+timestamps) remains internal. Consequently, a failed or in-flight refresh does
+not alter the public last-known-good card or leak unbound operational metadata.
+
 Commands:
 
 ```bash
@@ -255,19 +293,29 @@ Scheduler cancellation revokes only its matching lease and returns promptly,
 so shutdown does not wait for a stuck provider and a late result cannot publish.
 Claim creation and cancellation share a short handshake lock: cancellation
 either prevents a future claim or observes and revokes the committed claim.
+Repairing an invalid cached revision uses a compare-and-swap against the row
+that was actually rejected. If another caller has already repaired it, the
+losing caller re-authorizes the newer revision only when it publishes the same
+input digest; a different digest is retried or reported busy instead of being
+returned as the requested result.
 
 ## Privacy and failure posture
 
 - Capture exclusions are applied before collection and re-evaluated through
-  retained observation provenance before Daily Wrap synthesis when a policy is
-  restrictive. Unverifiable derived records are omitted and create a coverage
-  gap.
+  retained observation provenance before Daily Wrap synthesis under every
+  policy configuration. Unverifiable derived records are omitted and create a
+  coverage gap even when no exclusion is configured. Under active URL policy,
+  retained provenance is valid only for schema-v5,
+  policy-v3 `url_metadata_only` observations with one explicit HTTP(S) URL;
+  `ContextService` re-evaluates that URL against the current lists. Legacy,
+  malformed, content-bearing, scheme-less, or newly denied observations fail
+  closed rather than becoming derived evidence.
 - Coverage that does not span the full day, an open session, an unreduced
   session, excluded evidence, or a rejected model item produces `partial`.
 - Stored job errors contain only an exception class and generic label, not a
   provider message that could repeat sensitive prompt content.
-- Provenance-bearing files are currently refused by the legacy LLM compactor;
-  losing source edges is worse than postponing compaction.
+- The LLM compactor accepts only explicit, provenance-free `manual-v1` files;
+  automation, unmarked legacy, invalid-origin, and derived files are refused.
 - Daily Wrap is Suggest-only. It does not send, schedule, upload, modify files,
   create tasks, or perform any Action Plane operation.
 - Enabling a cloud-backed `[models.daily_wrap]` intentionally sends the bounded
@@ -306,8 +354,8 @@ The Stage 1 suite covers:
   trusted CLI commands are the current mutation UI.
 - Candidate operations currently materialize append/create-append behavior.
   Deterministic reviewed supersede remains pending.
-- The provenance-aware compactor remains pending; it fails closed for entries
-  carrying evidence.
+- The provenance-aware compactor remains pending; the current identity-
+  preserving compactor is limited to explicit `manual-v1` files.
 - There is no notification/outbox card yet, so exactly-once semantics currently
   cover the canonical job and MCP/CLI read surface, not a system notification.
 - Retroactive policy re-evaluation needs retained raw observation metadata. If

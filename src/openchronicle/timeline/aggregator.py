@@ -7,8 +7,8 @@ windows that already have a block.
 
 The prompt reads the structured S1 fields (``focused_element``,
 ``visible_text``, ``url``) written by ``capture/s1_parser.py`` rather
-than re-rendering the raw AX tree. Pre-v2 captures without those
-fields are back-rendered via ``ax_tree_to_markdown`` as a fallback.
+than re-rendering the raw AX tree. Pre-v2 captures without a bounded
+``visible_text`` projection contribute metadata only.
 """
 
 from __future__ import annotations
@@ -19,12 +19,15 @@ from pathlib import Path
 
 from .. import paths
 from ..capture import filenames, store_lock
-from ..capture.ax_models import ax_tree_to_markdown
 from ..config import Config
 from ..logger import get
+from ..memory_candidates import store as candidate_store
+from ..privacy import policy as privacy_policy
+from ..privacy.egress import model_egress_lock
 from ..prompts import load as load_prompt
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, observation_digest
+from ..store import fts
 from ..writer import llm as llm_mod
 from . import store
 
@@ -40,6 +43,16 @@ _PER_CAPTURE_TEXT_LIMIT = 4000
 # 30+ captures, keep the newest ones. Later events are more recent and
 # tend to be more informative.
 _MAX_EVENTS_PER_WINDOW = 30
+# ``load_capture_snapshot`` drops screenshot bytes before handing its bounded
+# snapshot to the producer.  Remember their former presence so an old or
+# malformed screenshot-bearing record cannot masquerade as the exact
+# content-free schema required after URL policy becomes active.
+_DROPPED_SCREENSHOT_MARKER = "__openchronicle_dropped_screenshot"
+_SOURCE_DIGEST_MARKER = "__openchronicle_source_digest"
+
+
+class TimelineInputChanged(RuntimeError):
+    """A cleanup or source change invalidated an in-flight timeline result."""
 
 
 def _capture_stem_in_window(stem: str, start: datetime, end: datetime) -> bool:
@@ -60,7 +73,7 @@ def captures_in_window(start: datetime, end: datetime) -> list[Path]:
         return []
     files: list[Path] = []
     for p in sorted(buf.iterdir()):
-        if p.suffix != ".json" or not p.is_file():
+        if p.suffix != ".json" or p.is_symlink() or not p.is_file():
             continue
         if _capture_stem_in_window(p.stem, start, end):
             files.append(p)
@@ -84,7 +97,7 @@ def capture_paths_by_window(
         if not buf.exists():
             return {}
         for path in buf.iterdir():
-            if path.suffix != ".json" or not path.is_file():
+            if path.suffix != ".json" or path.is_symlink() or not path.is_file():
                 continue
             timestamp = filenames.parse_capture_stem(path.stem)
             if timestamp is None or timestamp >= end:
@@ -159,6 +172,8 @@ def _load_captures(
     """
     parsed: list[tuple[Path, dict]] = []
     for p in capture_files:
+        if p.is_symlink() or not p.is_file():
+            continue
         # read_bytes() + json.loads handles BOM/encoding sniffing; read_text()
         # would raise UnicodeDecodeError (a ValueError, not OSError) on a
         # mis-encoded file and crash the aggregator instead of dropping it.
@@ -170,8 +185,13 @@ def _load_captures(
         if not isinstance(data, dict):
             logger.warning("timeline: capture %s is not a JSON object", p.name)
             continue
-        if drop_screenshot:
+        if _DROPPED_SCREENSHOT_MARKER in data or _SOURCE_DIGEST_MARKER in data:
+            logger.warning("timeline: capture %s contains a reserved field", p.name)
+            continue
+        if drop_screenshot and "screenshot" in data:
+            data[_SOURCE_DIGEST_MARKER] = observation_digest(data)
             data.pop("screenshot", None)
+            data[_DROPPED_SCREENSHOT_MARKER] = True
         parsed.append((p, data))
     return parsed
 
@@ -182,8 +202,8 @@ def _format_events(parsed: list[tuple[Path, dict]]) -> tuple[str, list[str]]:
     Reads the structured S1 fields written by ``capture/s1_parser.py`` —
     ``focused_element``, ``visible_text``, ``url`` — and lays them out in
     the one-line-per-capture format matching Einsia's S1 prompt rendering.
-    Pre-v2 captures without those fields fall back to a bounded
-    ``ax_tree_to_markdown`` render so historical buffer contents still work.
+    Pre-v2 captures without those fields remain metadata-only. Re-rendering a
+    historical app-wide AX tree could reintroduce an excluded sibling window.
     """
     lines: list[str] = []
     apps: set[str] = set()
@@ -211,7 +231,17 @@ def _format_events(parsed: list[tuple[Path, dict]]) -> tuple[str, list[str]]:
 
         url = data.get("url")
         if url:
-            parts.append(f"(URL: {url})")
+            privacy = data.get("privacy")
+            url_metadata_only = (
+                isinstance(privacy, dict) and privacy.get("content_mode") == "url_metadata_only"
+            )
+            if url_metadata_only:
+                parts.append(
+                    "(APPROVED ADDRESS-CONTROL VALUE; MAY BE UNCOMMITTED; "
+                    f"DO NOT INFER VISIT/READ: {url})"
+                )
+            else:
+                parts.append(f"(URL: {url})")
 
         fe = data.get("focused_element") or {}
         role = str(fe.get("role") or "")
@@ -236,11 +266,7 @@ def _format_events(parsed: list[tuple[Path, dict]]) -> tuple[str, list[str]]:
         lines.append(" ".join(parts))
 
         visible_text = data.get("visible_text")
-        if visible_text is None:
-            # Pre-v2 capture — fall back to rendering the raw AX tree.
-            ax = data.get("ax_tree")
-            visible_text = ax_tree_to_markdown(ax) if ax else ""
-        visible_text = str(visible_text).strip()
+        visible_text = visible_text.strip() if isinstance(visible_text, str) else ""
         if visible_text:
             if len(visible_text) > _PER_CAPTURE_TEXT_LIMIT:
                 visible_text = visible_text[:_PER_CAPTURE_TEXT_LIMIT] + "\n…(truncated)"
@@ -273,10 +299,20 @@ def produce_block_for_window(
     parsed_captures: list[tuple[Path, dict]] | None = None,
 ) -> store.TimelineBlock | None:
     """Build one block. Returns ``None`` if the window is empty or already done."""
-    existing = store.get_window(conn, start, end)
-    if existing is not None:
+    initial_state = store.window_state(conn, start, end)
+    if initial_state == "current":
         logger.debug(
             "timeline: window %s → %s already has a block", start.isoformat(), end.isoformat()
+        )
+        return None
+    if initial_state == "invalid":
+        # The unique window is already occupied by a projection whose row or
+        # immutable source binding no longer verifies. Do not repeatedly send
+        # the same captures to the model only to collide at INSERT time.
+        logger.warning(
+            "timeline: quarantined invalid block occupies window %s → %s; skipping",
+            start.isoformat(),
+            end.isoformat(),
         )
         return None
 
@@ -298,40 +334,58 @@ def produce_block_for_window(
         )
         return None
 
-    # Capture JSON is parsed once; reused for prompt rendering AND the
-    # heuristic fallback so an LLM miss doesn't trigger a second read.
-    events_text, apps_used = _format_events(parsed)
-    # Use len(parsed) — capture_count must match what the LLM actually sees
-    # and what _heuristic_entries can group; len(capture_files) overcounts
-    # whenever _load_captures drops a corrupt or non-dict file.
-    capture_count = len(parsed)
-    prompt = load_prompt("timeline_block.md").format(
-        start_time=_format_window(start),
-        end_time=_format_window(end),
-        capture_count=capture_count,
-        events_text=events_text,
-    )
+    # Capture policy is an egress boundary, not only an ingestion rule.  A
+    # retained observation that was allowed when collected may be excluded by
+    # the current config before this delayed model call runs.  Filter the
+    # authoritative parsed records before counting, prompt rendering,
+    # heuristic fallback, or provenance construction.
+    # Explicit cleanup shares the long-lived review fence, so it either wins
+    # before prompt authorization or waits for provider egress to finish.
+    # Ordinary capture writes remain live: capture-store is held only for the
+    # authoritative input snapshot and the final publication recheck below.
+    with model_egress_lock():
+        generation = fts.content_generation(conn, "timeline")
+        with store_lock.capture_store_lock():
+            parsed = _currently_authorized_captures(conn, cfg, parsed)
+        if not parsed:
+            logger.info(
+                "timeline: window %s → %s has 0 policy-allowed captures, skipping",
+                start.isoformat(),
+                end.isoformat(),
+            )
+            return None
 
-    entries: list[str] = []
-    try:
-        resp = llm_mod.call_llm(
-            cfg,
-            "timeline",
-            messages=[{"role": "user", "content": prompt}],
-            json_mode=True,
+        # Capture JSON is parsed once; reused for prompt rendering AND the
+        # heuristic fallback so an LLM miss doesn't trigger a second read.
+        events_text, apps_used = _format_events(parsed)
+        capture_count = len(parsed)
+        prompt = load_prompt("timeline_block.md").format(
+            start_time=_format_window(start),
+            end_time=_format_window(end),
+            capture_count=capture_count,
+            events_text=events_text,
         )
-        text = llm_mod.extract_text(resp).strip()
-        data = json.loads(text) if text else {}
-        raw = data.get("entries") if isinstance(data, dict) else None
-        if isinstance(raw, list):
-            entries = [str(e).strip() for e in raw if str(e).strip()]
-    except json.JSONDecodeError as exc:
-        logger.warning("timeline: malformed JSON from LLM: %s", exc)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("timeline: LLM call failed: %s", exc)
 
-    if not entries:
-        entries = _heuristic_entries(parsed)
+        entries: list[str] = []
+        try:
+            resp = llm_mod.call_llm(
+                cfg,
+                "timeline",
+                messages=[{"role": "user", "content": prompt}],
+                json_mode=True,
+            )
+            text = llm_mod.extract_text(resp).strip()
+            response_data = json.loads(text) if text else {}
+            raw = response_data.get("entries") if isinstance(response_data, dict) else None
+            if isinstance(raw, list):
+                entries = [str(e).strip() for e in raw if str(e).strip()]
+        except json.JSONDecodeError as exc:
+            logger.warning("timeline: malformed JSON from LLM: %s", exc)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("timeline: LLM call failed: %s", exc)
+
+        if not entries:
+            entries = _heuristic_entries(parsed)
 
     block = store.TimelineBlock(
         start_time=start,
@@ -341,16 +395,37 @@ def produce_block_for_window(
         apps_used=apps_used,
         capture_count=capture_count,
     )
-    conn.execute("SAVEPOINT timeline_block_provenance")
-    try:
-        block, created = store.insert_or_get(conn, block)
-        if created:
-            _record_block_sources(conn, block, parsed, inside_savepoint=True)
-        conn.execute("RELEASE SAVEPOINT timeline_block_provenance")
-    except BaseException:
-        conn.execute("ROLLBACK TO SAVEPOINT timeline_block_provenance")
-        conn.execute("RELEASE SAVEPOINT timeline_block_provenance")
-        raise
+    with model_egress_lock(), store_lock.capture_store_lock():
+        # Revalidate immediately before durable publication. A cleanup that
+        # won the lock after provider I/O prevents a derived block from being
+        # materialized from newly tombstoned or changed bytes.
+        if fts.content_generation(conn, "timeline") != generation:
+            raise TimelineInputChanged(
+                "timeline content generation changed before block publication"
+            )
+        publish_parsed = _currently_authorized_captures(conn, cfg, parsed)
+        if _capture_bindings(publish_parsed) != _capture_bindings(parsed):
+            raise TimelineInputChanged("timeline capture inputs changed before block publication")
+        if store.window_state(conn, start, end) == "invalid":
+            raise TimelineInputChanged(
+                "invalid timeline projection occupied the window before publication"
+            )
+        conn.execute("SAVEPOINT timeline_block_provenance")
+        try:
+            block, created = store.insert_or_get(conn, block)
+            if created:
+                _record_block_sources(conn, block, parsed, inside_savepoint=True)
+            published = store.get_by_id(conn, block.id)
+            if published is None:
+                raise TimelineInputChanged(
+                    "timeline block source binding changed before publication"
+                )
+            block = published
+            conn.execute("RELEASE SAVEPOINT timeline_block_provenance")
+        except BaseException:
+            conn.execute("ROLLBACK TO SAVEPOINT timeline_block_provenance")
+            conn.execute("RELEASE SAVEPOINT timeline_block_provenance")
+            raise
     logger.info(
         "timeline: stored block %s — %s → %s (%d entries, %d captures, apps=%s)",
         block.id,
@@ -361,6 +436,53 @@ def produce_block_for_window(
         ", ".join(apps_used),
     )
     return block
+
+
+def _capture_bindings(parsed: list[tuple[Path, dict]]) -> list[tuple[str, str]]:
+    return [
+        (
+            path.name,
+            str(data.get(_SOURCE_DIGEST_MARKER) or observation_digest(data)),
+        )
+        for path, data in parsed
+    ]
+
+
+def _currently_authorized_captures(
+    conn,
+    cfg: Config,
+    parsed: list[tuple[Path, dict]],
+) -> list[tuple[Path, dict]]:
+    authorized: list[tuple[Path, dict]] = []
+    buffer_dir = paths.capture_buffer_dir()
+    for path, snapshot in parsed:
+        if (
+            path.parent != buffer_dir
+            or Path(path.name).name != path.name
+            or path.suffix != ".json"
+            or path.is_symlink()
+            or not path.is_file()
+            or candidate_store.is_tombstoned(conn, kind="capture_file", artifact_id=path.name)
+        ):
+            continue
+        try:
+            current = json.loads(path.read_bytes())
+        except (OSError, json.JSONDecodeError):
+            continue
+        expected_digest = str(snapshot.get(_SOURCE_DIGEST_MARKER) or observation_digest(snapshot))
+        if (
+            not isinstance(current, dict)
+            or observation_digest(current) != expected_digest
+            or str(current.get("observation_id") or f"legacy:{path.stem}")
+            != str(snapshot.get("observation_id") or f"legacy:{path.stem}")
+            or not privacy_policy.evaluate_stored_observation(
+                cfg.capture, observation=current
+            ).allowed
+            or candidate_store.is_tombstoned(conn, kind="capture_file", artifact_id=path.name)
+        ):
+            continue
+        authorized.append((path, snapshot))
+    return authorized
 
 
 def _record_block_sources(
@@ -379,7 +501,7 @@ def _record_block_sources(
                 id=observation_id,
                 path=path.name,
                 timestamp=str(data.get("timestamp") or ""),
-                content_hash=observation_digest(data),
+                content_hash=str(data.get(_SOURCE_DIGEST_MARKER) or observation_digest(data)),
             )
         )
     if inside_savepoint:

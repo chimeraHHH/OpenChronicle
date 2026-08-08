@@ -25,6 +25,8 @@ from .ax_capture import _maybe_compile
 
 logger = get("openchronicle.capture")
 
+_MAX_WATCHER_FRAME_BYTES = 32 * 1024
+
 
 def _resolve_watcher_path() -> Path | None:
     """Find or build the mac-ax-watcher binary.
@@ -143,8 +145,10 @@ class AXWatcherProcess:
                 if self._process is None:
                     break
                 self._read_events()
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("AX watcher error: %s", exc)
+            except Exception:  # noqa: BLE001
+                # The reader may still own an unfiltered watcher frame. Keep
+                # exception text out of this durable secondary sink.
+                logger.warning("AX watcher failed while reading an event")
 
             if self._stop_event.is_set():
                 break
@@ -161,8 +165,15 @@ class AXWatcherProcess:
                 [str(self._watcher_path)],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                text=True,
-                bufsize=1,
+                # Keep stdout binary so a hostile AX title cannot make the
+                # text wrapper allocate an unbounded JSONL line before the
+                # privacy boundary has inspected it.
+                text=False,
+                # Use the default fixed-size binary buffer. Unbuffered
+                # ``FileIO.readline`` performs one syscall per byte, while the
+                # explicit size argument below still bounds each returned
+                # frame.
+                bufsize=-1,
             )
             logger.info("AX watcher subprocess started (pid=%d)", self._process.pid)
         except OSError as exc:
@@ -173,28 +184,60 @@ class AXWatcherProcess:
         if not self._process or not self._process.stdout:
             return
 
-        for line in self._process.stdout:
+        stream = self._process.stdout
+        while not self._stop_event.is_set():
+            # ``readline(size)`` returns without reading beyond the bound. A
+            # frame one byte over the limit is drained without retaining it,
+            # keeping the following JSONL frame aligned.
+            # Leave room for either LF or CRLF in addition to the payload cap.
+            line = stream.readline(_MAX_WATCHER_FRAME_BYTES + 2)
+            if not line:
+                break
+            if not isinstance(line, bytes):
+                # Production uses a binary pipe. Treat an injected/malformed
+                # text stream as an invalid frame rather than widening the
+                # boundary or risking content-bearing conversion errors.
+                logger.debug("Invalid watcher stream type")
+                break
+            if len(line) > _MAX_WATCHER_FRAME_BYTES and not line.endswith(b"\n"):
+                while line and not line.endswith(b"\n"):
+                    line = stream.readline(_MAX_WATCHER_FRAME_BYTES + 2)
+                logger.debug("Oversized watcher frame discarded")
+                continue
             if self._stop_event.is_set():
                 break
-            line = line.strip()
+            if line.endswith(b"\n"):
+                line = line[:-1]
+                if line.endswith(b"\r"):
+                    line = line[:-1]
+            if len(line) > _MAX_WATCHER_FRAME_BYTES:
+                logger.debug("Oversized watcher frame discarded")
+                continue
             if not line:
                 continue
             try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
+                event = json.loads(line.decode("utf-8", errors="strict"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
                 # Watcher output can contain window titles or typed text. A
                 # malformed frame has not passed the privacy policy, so never
                 # echo its payload into a durable log.
-                logger.debug("Invalid JSON frame from watcher (%d chars)", len(line))
+                logger.debug("Invalid JSON frame from watcher (%d bytes)", len(line))
                 continue
-            if event.get("event_type", "").startswith("_"):
-                logger.debug("Watcher internal event: %s", event.get("event_type"))
+            if not isinstance(event, dict):
+                logger.debug("Invalid watcher frame shape")
+                continue
+            event_type = event.get("event_type")
+            if not isinstance(event_type, str):
+                logger.debug("Invalid watcher event type")
+                continue
+            if event_type.startswith("_"):
+                logger.debug("Watcher internal event received")
                 continue
             if self._callback:
                 try:
                     self._callback(event)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("Event callback error: %s", exc)
+                except Exception:  # noqa: BLE001
+                    logger.warning("Event callback failed")
 
         if self._process:
             rc = self._process.wait()

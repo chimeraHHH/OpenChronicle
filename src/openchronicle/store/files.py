@@ -232,6 +232,10 @@ PROVENANCE_COMMENT_RE = re.compile(
     r"(?:^|\n)<!--\s*oc-provenance:\s*(?P<payload>\{[^\r\n]*\})\s*-->\s*\Z",
     re.IGNORECASE,
 )
+ENTRY_ORIGIN_TAG_PREFIX = "oc-origin:"
+MANUAL_ENTRY_ORIGIN = "manual-v1"
+AUTOMATION_ENTRY_ORIGIN = "automation-v1"
+DERIVED_ENTRY_ORIGIN = "derived-v1"
 
 
 @dataclass
@@ -246,6 +250,8 @@ class ParsedEntry:
     provenance_present: bool = False
     provenance_valid: bool = True
     provenance_error: str = ""
+    origin: str = ""
+    origin_valid: bool = True
 
 
 @dataclass
@@ -389,7 +395,7 @@ def write_file(path: Path, fm: dict[str, Any], body: str) -> None:
 
 
 def read_file(path: Path) -> ParsedFile:
-    if not path.exists():
+    if path.is_symlink() or not path.is_file():
         raise FileNotFoundError(path)
     post = frontmatter.load(path)
     fm = dict(post.metadata)
@@ -417,7 +423,20 @@ def _parse_entries(body: str) -> list[ParsedEntry]:
         end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
         tag_str = m.group("tags") or ""
         raw_tags = [t.strip() for t in tag_str.split() if t.strip().startswith("#")]
-        tags = [t[1:] for t in raw_tags]  # strip leading #
+        parsed_tags = [t[1:] for t in raw_tags]  # strip leading #
+        origin_values = [
+            tag.removeprefix(ENTRY_ORIGIN_TAG_PREFIX)
+            for tag in parsed_tags
+            if tag.startswith(ENTRY_ORIGIN_TAG_PREFIX)
+        ]
+        origin_valid = len(origin_values) <= 1 and all(
+            value in {MANUAL_ENTRY_ORIGIN, AUTOMATION_ENTRY_ORIGIN, DERIVED_ENTRY_ORIGIN}
+            for value in origin_values
+        )
+        origin = origin_values[0] if origin_valid and origin_values else ""
+        tags = [
+            tag for tag in parsed_tags if not tag.startswith(ENTRY_ORIGIN_TAG_PREFIX)
+        ]
         superseded_by = None
         for t in tags:
             if t.startswith("superseded-by:"):
@@ -462,6 +481,8 @@ def _parse_entries(body: str) -> list[ParsedEntry]:
                 provenance_present=provenance_present,
                 provenance_valid=provenance_valid,
                 provenance_error=provenance_error,
+                origin=origin,
+                origin_valid=origin_valid,
             )
         )
     return entries
@@ -513,7 +534,7 @@ def _update_frontmatter_unlocked(path: Path, updates: dict[str, Any]) -> None:
 
 
 def update_frontmatter(path: Path, updates: dict[str, Any]) -> None:
-    with store_write_lock(), file_lock(path):
+    with review_operation_lock(), store_write_lock(), file_lock(path):
         _update_frontmatter_unlocked(path, updates)
 
 

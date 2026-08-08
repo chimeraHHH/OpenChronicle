@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from datetime import UTC, datetime, timedelta
 
 from openchronicle.session.manager import SessionManager
@@ -106,6 +107,58 @@ def test_force_end_closes_session() -> None:
     assert m.current_id is None
     assert ended == [sid]
     assert m.force_end() is None
+
+
+def test_force_end_can_persist_without_dispatching_post_close_work() -> None:
+    clock = _FakeClock(_T0)
+    persisted: list[str] = []
+    dispatched: list[str] = []
+    m = SessionManager(
+        clock=clock,
+        on_session_persist=lambda s, _a, _b: persisted.append(s),
+        on_session_end=lambda s, _a, _b: dispatched.append(s),
+    )
+    m.on_event(_event())
+    sid = m.current_id
+
+    assert m.force_end(reason="shutdown", run_end_callback=False) == sid
+    assert persisted == [sid]
+    assert dispatched == []
+
+
+def test_session_manager_drains_tracked_end_callback_thread() -> None:
+    clock = _FakeClock(_T0)
+    worker_started = threading.Event()
+    release_worker = threading.Event()
+    worker_finished = threading.Event()
+
+    def dispatch(_sid: str, _start: datetime, _end: datetime) -> threading.Thread:
+        def work() -> None:
+            worker_started.set()
+            assert release_worker.wait(timeout=5)
+            worker_finished.set()
+
+        thread = threading.Thread(target=work, name="tracked-session-end", daemon=True)
+        thread.start()
+        return thread
+
+    m = SessionManager(clock=clock, on_session_end=dispatch)
+    m.on_event(_event())
+    m.force_end(reason="natural-cut")
+    assert worker_started.wait(timeout=5)
+
+    drain_finished = threading.Event()
+    drain = threading.Thread(
+        target=lambda: (m.drain_end_callbacks(), drain_finished.set()),
+        name="drain-session-end",
+    )
+    drain.start()
+    assert not drain_finished.wait(timeout=0.1)
+    release_worker.set()
+    assert drain_finished.wait(timeout=5)
+    drain.join(timeout=5)
+    assert not drain.is_alive()
+    assert worker_finished.is_set()
 
 
 def test_check_cuts_noop_when_no_session() -> None:

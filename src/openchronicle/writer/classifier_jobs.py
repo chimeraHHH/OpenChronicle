@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
+from ..privacy.egress import privacy_egress_fenced
 from ..session import store as session_store
 
 ClassifierJobStatus = Literal[
@@ -195,8 +196,18 @@ def make_id(
     return f"classifier-job-{digest}"
 
 
-def make_producer_run_key(job_id: str) -> str:
-    return hashlib.sha256(f"classifier-delivery-v1\0{job_id}".encode()).hexdigest()
+def make_producer_run_key(job_id: str, input_digest: str = "") -> str:
+    """Return the idempotency key for one job input snapshot.
+
+    Retries of an unchanged snapshot reuse the same key. If evidence changes
+    after an uncommitted failed attempt, the new digest deliberately produces
+    a distinct key so its candidate slots cannot replay stale wording from the
+    old provider turn. The empty-digest form preserves legacy/test callers;
+    production delivery always supplies the digest.
+    """
+    version = "classifier-delivery-v2" if input_digest else "classifier-delivery-v1"
+    material = f"{version}\0{job_id}\0{input_digest}"
+    return hashlib.sha256(material.encode()).hexdigest()
 
 
 def get(conn: sqlite3.Connection, job_id: str) -> ClassifierJob | None:
@@ -337,8 +348,7 @@ def request_terminal(
         if not entry_id and not session.classifier_terminal_noop:
             raise ClassifierJobGap("terminal reducer intent has no durable entry or empty proof")
         allow_empty = session.classifier_terminal_noop and (
-            session.flush_end is None
-            or _instant(window_start) >= _instant(session.flush_end)
+            session.flush_end is None or _instant(window_start) >= _instant(session.flush_end)
         )
         job_id = make_id(
             session_id,
@@ -604,7 +614,14 @@ def bind_input(
     input_digest: str,
     producer_run_key: str,
 ) -> ClassifierJob:
-    """Bind the first evidence snapshot; retries must reproduce it exactly."""
+    """Bind an evidence snapshot, rebasing an uncommitted failed retry.
+
+    A changed snapshot must use a new producer key. This lets a durable job
+    recover when late-but-valid evidence arrives after provider failure while
+    preserving idempotency for unchanged retries. Pending candidates from the
+    superseded provider turn remain auditable but are moved to ``conflict`` so
+    they cannot masquerade as part of the replacement commit.
+    """
     if not input_digest:
         raise ValueError("classifier input digest is required")
     if not producer_run_key:
@@ -616,10 +633,31 @@ def bind_input(
             job_id=job_id,
             lease_token=lease_token,
         )
-        if current.input_digest and current.input_digest != input_digest:
-            raise ClassifierJobInputChanged(f"classifier input changed for delivery {job_id}")
-        if current.producer_run_key and current.producer_run_key != producer_run_key:
-            raise ClassifierJobInputChanged(f"classifier run key changed for delivery {job_id}")
+        input_changed = bool(current.input_digest and current.input_digest != input_digest)
+        if input_changed:
+            if (
+                current.attempt_count <= 1
+                or not current.producer_run_key
+                or current.producer_run_key == producer_run_key
+            ):
+                raise ClassifierJobInputChanged(
+                    f"classifier input changed without a replacement run for delivery {job_id}"
+                )
+            now_iso = datetime.now().astimezone().isoformat()
+            conn.execute(
+                """
+                UPDATE memory_candidates
+                   SET status='conflict', version=version+1, updated_at=?,
+                       last_error='classifier input snapshot changed before commit'
+                 WHERE producer_run_key=? AND status='pending'
+                """,
+                (now_iso, current.producer_run_key),
+            )
+        elif current.producer_run_key:
+            # A pre-upgrade in-flight job may already carry the v1 key. For an
+            # unchanged digest, its established key is the canonical replay
+            # identity even if the current binary proposed the v2 spelling.
+            producer_run_key = current.producer_run_key
         conn.execute(
             """
             UPDATE classifier_jobs
@@ -644,6 +682,7 @@ def bind_input(
     return row
 
 
+@privacy_egress_fenced
 def record_commit(
     conn: sqlite3.Connection,
     *,

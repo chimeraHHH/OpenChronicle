@@ -14,6 +14,7 @@ from ..config import Config
 from ..daily_wrap import store as daily_wrap_store
 from ..memory_candidates import store as candidate_store
 from ..privacy import policy as privacy_policy
+from ..privacy.egress import privacy_egress_fenced
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, content_digest, observation_digest
 from ..store import entries as entries_store
@@ -21,7 +22,7 @@ from ..store import files as files_store
 from ..timeline import store as timeline_store
 from .context import ContextService
 
-_HASHED_KINDS = {"observation", "timeline_block", "session", "memory_entry"}
+_HASHED_KINDS = {"observation", "timeline_block", "memory_entry"}
 _WRAP_CATEGORIES = ("completed", "progressed", "open", "blocked", "needs_review")
 _PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN [^-\r\n]{0,80}PRIVATE KEY-----.*?"
@@ -48,6 +49,7 @@ class EvidenceResolver:
         self.cfg = cfg
         self.context = ContextService(conn, cfg)
 
+    @privacy_egress_fenced
     def resolve(self, ref: EvidenceRef) -> dict[str, Any]:
         if ref.kind == "observation":
             return self._resolve_observation(ref)
@@ -75,6 +77,10 @@ class EvidenceResolver:
             if candidate_store.is_tombstoned(self.conn, kind="capture_file", artifact_id=ref.path):
                 return _resolution(ref, "purging")
             source_path = paths.capture_buffer_dir() / ref.path
+            if source_path.is_symlink():
+                return _resolution(ref, "unverifiable")
+            if not source_path.is_file():
+                return _resolution(ref, "expired" if not source_path.exists() else "unverifiable")
             try:
                 raw = json.loads(source_path.read_text(encoding="utf-8"))
             except FileNotFoundError:
@@ -86,19 +92,15 @@ class EvidenceResolver:
             observation_id = str(raw.get("observation_id") or f"legacy:{source_path.stem}")
             if observation_id != ref.id or observation_digest(raw) != ref.content_hash:
                 return _resolution(ref, "changed")
-            meta = raw.get("window_meta")
-            if not isinstance(meta, dict):
-                return _resolution(ref, "unverifiable")
-            decision = privacy_policy.evaluate_window(
+            decision = privacy_policy.evaluate_stored_observation(
                 self.cfg.capture,
-                app_name=str(meta.get("app_name") or ""),
-                bundle_id=str(meta.get("bundle_id") or ""),
-                window_title=str(meta.get("title") or ""),
+                observation=raw,
             )
             if not decision.allowed:
                 return _resolution(ref, "excluded")
             if candidate_store.is_tombstoned(self.conn, kind="capture_file", artifact_id=ref.path):
                 return _resolution(ref, "purging")
+            meta = raw["window_meta"]
             focused = raw.get("focused_element")
             if not isinstance(focused, dict):
                 focused = {}
@@ -122,12 +124,16 @@ class EvidenceResolver:
             return _resolution(ref, "current", content)
 
     def _resolve_timeline_block(self, ref: EvidenceRef) -> dict[str, Any]:
+        block = timeline_store.get_by_id(self.conn, ref.id)
+        if block is None:
+            physical = self.conn.execute(
+                "SELECT 1 FROM timeline_blocks WHERE id=? LIMIT 1",
+                (ref.id,),
+            ).fetchone()
+            return _resolution(ref, "excluded" if physical else "missing")
         status = self._hash_status(ref)
         if status != "current":
             return _resolution(ref, status)
-        block = timeline_store.get_by_id(self.conn, ref.id)
-        if block is None:
-            return _resolution(ref, "missing")
         sources = provenance_store.direct_sources(self.conn, ref)
         if sources and not self._sources_current(sources):
             return _resolution(ref, "changed")
@@ -149,9 +155,6 @@ class EvidenceResolver:
         )
 
     def _resolve_session(self, ref: EvidenceRef) -> dict[str, Any]:
-        status = self._hash_status(ref)
-        if status != "current":
-            return _resolution(ref, status)
         row = self.conn.execute("SELECT * FROM sessions WHERE id=?", (ref.id,)).fetchone()
         if row is None:
             return _resolution(ref, "missing")
@@ -204,7 +207,10 @@ class EvidenceResolver:
                 self.conn, entry.evidence_refs
             ) or not self._sources_current(entry.evidence_refs):
                 return _resolution(ref, "changed")
-            if not self.context.evidence_allowed(ref, embedded_sources=entry.evidence_refs):
+            if not self.context.memory_entry_allowed(
+                path=source_path.name,
+                entry=entry,
+            ):
                 return _resolution(ref, "excluded")
             if candidate_store.is_tombstoned(
                 self.conn, kind="memory_file", artifact_id=source_path.name
@@ -236,8 +242,14 @@ class EvidenceResolver:
         candidate = candidate_store.get(self.conn, ref.id)
         if candidate is None:
             return _resolution(ref, "missing")
+        if not candidate_store.projection_is_current(candidate):
+            return _resolution(ref, "changed")
         sources = provenance_store.direct_sources(self.conn, ref)
-        if not sources or not self._sources_current(sources):
+        if (
+            not sources
+            or not candidate_store.proposal_is_current(candidate, sources)
+            or not self._sources_current(sources)
+        ):
             return _resolution(ref, "changed")
         if not self.context.evidence_allowed(ref, embedded_sources=sources):
             return _resolution(ref, "excluded")
@@ -265,7 +277,7 @@ class EvidenceResolver:
         sources = provenance_store.direct_sources(self.conn, ref)
         if sources and not self._sources_current(sources):
             return _resolution(ref, "changed")
-        if sources and not self.context.evidence_allowed(ref, embedded_sources=sources):
+        if not self.context.daily_wrap_allowed(row.id, expected_row=row):
             return _resolution(ref, "excluded")
         return _resolution(
             ref,
@@ -276,7 +288,7 @@ class EvidenceResolver:
                 "local_date": str(row.local_date)[:10],
                 "timezone": str(row.timezone)[:100],
                 "scope": str(row.scope)[:100],
-                "status": str(row.status)[:50],
+                "status": "succeeded",
                 "coverage_status": str(row.coverage_status)[:50],
                 "revision": int(row.revision),
                 "output": _bounded_wrap_output(row.output),
@@ -292,6 +304,8 @@ class EvidenceResolver:
         row = daily_wrap_store.get_by_id(self.conn, wrap_id)
         if row is None or not isinstance(row.output, dict):
             return _resolution(ref, "missing")
+        if not self.context.daily_wrap_allowed(row.id, expected_row=row):
+            return _resolution(ref, "excluded")
         item: dict[str, Any] | None = None
         category = ""
         for candidate_category in _WRAP_CATEGORIES:
@@ -318,9 +332,18 @@ class EvidenceResolver:
             sources = [EvidenceRef.from_dict(value) for value in raw_sources]
         except ValueError:
             return _resolution(ref, "unverifiable")
-        if not self._sources_current(sources):
+        authorization_sources = provenance_store.direct_sources(self.conn, ref)
+        parent_sources = provenance_store.direct_sources(
+            self.conn, EvidenceRef(kind="daily_wrap", id=wrap_id)
+        )
+        if (
+            not authorization_sources
+            or authorization_sources != parent_sources
+            or not self._sources_current(sources)
+            or not self._sources_current(authorization_sources)
+        ):
             return _resolution(ref, "changed")
-        if not self.context.evidence_allowed(ref, embedded_sources=sources):
+        if not self.context.evidence_allowed(ref, embedded_sources=authorization_sources):
             return _resolution(ref, "excluded")
         return _resolution(
             ref,

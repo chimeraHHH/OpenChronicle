@@ -14,6 +14,14 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
+from ..provenance.models import (
+    EvidenceRef,
+    timeline_block_projection_digest,
+    timeline_block_sources_digest,
+)
+
+MAX_BLOCK_DURATION = timedelta(days=1)
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS timeline_blocks (
     id TEXT PRIMARY KEY,
@@ -24,10 +32,16 @@ CREATE TABLE IF NOT EXISTS timeline_blocks (
     apps_used TEXT NOT NULL,
     capture_count INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
+    source_digest TEXT NOT NULL DEFAULT '',
+    projection_digest TEXT NOT NULL DEFAULT '',
     UNIQUE(start_time, end_time)
 );
 CREATE INDEX IF NOT EXISTS idx_tlb_start ON timeline_blocks(start_time);
 CREATE INDEX IF NOT EXISTS idx_tlb_end ON timeline_blocks(end_time);
+CREATE INDEX IF NOT EXISTS idx_tlb_start_jd_id
+    ON timeline_blocks(julianday(start_time), id);
+CREATE INDEX IF NOT EXISTS idx_tlb_end_jd_id
+    ON timeline_blocks(julianday(end_time), id);
 
 -- Durable producer watermark. Unlike MAX(timeline_blocks.end_time), this also
 -- advances across closed windows with zero captures, letting consumers prove
@@ -37,7 +51,13 @@ CREATE TABLE IF NOT EXISTS timeline_state (
     processed_from TEXT,
     processed_through TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS timeline_schema_migrations (
+    name TEXT PRIMARY KEY
+);
 """
+
+_PROJECTION_MIGRATION = "projection-source-v1"
 
 
 @dataclass
@@ -50,12 +70,18 @@ class TimelineBlock:
     capture_count: int = 0
     id: str = ""
     created_at: datetime | None = None
+    source_digest: str = ""
+    # ``None`` means a newly constructed trusted value and is initialized
+    # below.  An empty string read from SQLite remains empty and fails closed.
+    projection_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id:
             self.id = _make_id(self.start_time)
         if self.created_at is None:
             self.created_at = datetime.now().astimezone()
+        if self.projection_digest is None:
+            self.projection_digest = projection_digest(self)
 
 
 def _make_id(start: datetime) -> str:
@@ -66,12 +92,142 @@ def _make_id(start: datetime) -> str:
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(timeline_state)")}
-    if "processed_from" not in columns:
-        # An upper bound created by an older build cannot prove which earlier
-        # windows were actually inspected.  Leave the new lower bound NULL so
-        # the producer safely reconstructs its coverage range.
-        conn.execute("ALTER TABLE timeline_state ADD COLUMN processed_from TEXT")
+    block_columns = {row[1] for row in conn.execute("PRAGMA table_info(timeline_blocks)")}
+    state_columns = {row[1] for row in conn.execute("PRAGMA table_info(timeline_state)")}
+    migration_missing = (
+        conn.execute(
+            "SELECT 1 FROM timeline_schema_migrations WHERE name=?",
+            (_PROJECTION_MIGRATION,),
+        ).fetchone()
+        is None
+    )
+    if not (
+        {"projection_digest", "source_digest"} - block_columns
+        or "processed_from" not in state_columns
+        or migration_missing
+    ):
+        return
+
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Every schema decision is repeated after taking the writer lock. Two
+        # upgrading processes can both observe the old schema, but only one
+        # executes each transactional ALTER/backfill.
+        block_columns = {row[1] for row in conn.execute("PRAGMA table_info(timeline_blocks)")}
+        if "projection_digest" not in block_columns:
+            # Trust existing rows exactly once at the explicit migration
+            # boundary. Later blank values are never auto-healed.
+            conn.execute(
+                "ALTER TABLE timeline_blocks ADD COLUMN projection_digest TEXT NOT NULL DEFAULT ''"
+            )
+        if "source_digest" not in block_columns:
+            conn.execute(
+                "ALTER TABLE timeline_blocks ADD COLUMN source_digest TEXT NOT NULL DEFAULT ''"
+            )
+        state_columns = {row[1] for row in conn.execute("PRAGMA table_info(timeline_state)")}
+        if "processed_from" not in state_columns:
+            # An old upper bound cannot prove which earlier windows were
+            # inspected. Leave the new lower bound NULL for safe recovery.
+            conn.execute("ALTER TABLE timeline_state ADD COLUMN processed_from TEXT")
+        if (
+            conn.execute(
+                "SELECT 1 FROM timeline_schema_migrations WHERE name=?",
+                (_PROJECTION_MIGRATION,),
+            ).fetchone()
+            is None
+        ):
+            _backfill_projection_migration(conn)
+            conn.execute(
+                "INSERT INTO timeline_schema_migrations(name) VALUES (?)",
+                (_PROJECTION_MIGRATION,),
+            )
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def _backfill_projection_migration(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        """
+        SELECT id, start_time, end_time, timezone, entries, apps_used,
+               capture_count, created_at
+          FROM timeline_blocks
+         ORDER BY id
+        """
+    ).fetchall()
+    for row in rows:
+        try:
+            if (
+                not isinstance(row[0], str)
+                or not row[0]
+                or not isinstance(row[1], str)
+                or not row[1]
+                or not isinstance(row[2], str)
+                or not row[2]
+                or not isinstance(row[3], str)
+                or not isinstance(row[4], str)
+                or not row[4]
+                or not isinstance(row[5], str)
+                or not row[5]
+                or not isinstance(row[7], str)
+                or not row[7]
+            ):
+                continue
+            entries = json.loads(row[4])
+            apps = json.loads(row[5])
+            start_value = datetime.fromisoformat(row[1])
+            end_value = datetime.fromisoformat(row[2])
+            created_at_value = datetime.fromisoformat(row[7])
+            if not _duration_is_valid(start_value, end_value):
+                continue
+            start = start_value.isoformat()
+            end = end_value.isoformat()
+            created_at = created_at_value.isoformat()
+            capture_count = row[6]
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if (
+            type(capture_count) is not int
+            or capture_count < 0
+            or not isinstance(entries, list)
+            or any(not isinstance(value, str) for value in entries)
+            or not isinstance(apps, list)
+            or any(not isinstance(value, str) for value in apps)
+        ):
+            continue
+        try:
+            sources = _direct_sources(conn, row[0])
+        except (TypeError, ValueError):
+            continue
+        source_digest = timeline_block_sources_digest(sources) if sources else ""
+        digest = timeline_block_projection_digest(
+            block_id=row[0],
+            start=start,
+            end=end,
+            timezone=row[3],
+            entries=entries,
+            apps=apps,
+            capture_count=capture_count,
+            created_at=created_at,
+            source_digest=source_digest,
+        )
+        try:
+            conn.execute(
+                """
+                UPDATE timeline_blocks
+                   SET start_time=?, end_time=?, created_at=?,
+                       source_digest=?, projection_digest=?
+                 WHERE id=?
+                """,
+                (start, end, created_at, source_digest, digest, row[0]),
+            )
+        except sqlite3.IntegrityError:
+            # Semantically duplicate legacy time spellings can coexist under
+            # the old text UNIQUE key. Keep the colliding row unbound and
+            # non-canonical so all ordinary reads quarantine it.
+            continue
 
 
 def has_window(conn: sqlite3.Connection, start: datetime, end: datetime) -> bool:
@@ -82,12 +238,27 @@ def has_window(conn: sqlite3.Connection, start: datetime, end: datetime) -> bool
     return row is not None
 
 
+def window_state(conn: sqlite3.Connection, start: datetime, end: datetime) -> str:
+    """Return ``missing``, ``current``, or fail-closed ``invalid``."""
+    row = conn.execute(
+        "SELECT * FROM timeline_blocks WHERE start_time=? AND end_time=? LIMIT 1",
+        (start.isoformat(), end.isoformat()),
+    ).fetchone()
+    if row is None:
+        return "missing"
+    return "current" if _current_block(conn, row) is not None else "invalid"
+
+
 def insert(conn: sqlite3.Connection, block: TimelineBlock) -> None:
+    if not _semantic_types_are_valid(block):
+        raise ValueError("timeline block has invalid fields or duration")
+    block.projection_digest = projection_digest(block)
     conn.execute(
         """
         INSERT OR IGNORE INTO timeline_blocks
-            (id, start_time, end_time, timezone, entries, apps_used, capture_count, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, start_time, end_time, timezone, entries, apps_used, capture_count,
+             created_at, source_digest, projection_digest)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             block.id,
@@ -98,6 +269,8 @@ def insert(conn: sqlite3.Connection, block: TimelineBlock) -> None:
             json.dumps(block.apps_used, ensure_ascii=False),
             block.capture_count,
             (block.created_at or datetime.now().astimezone()).isoformat(),
+            block.source_digest,
+            block.projection_digest,
         ),
     )
 
@@ -107,7 +280,11 @@ def insert_or_get(conn: sqlite3.Connection, block: TimelineBlock) -> tuple[Timel
     before = conn.total_changes
     insert(conn, block)
     created = conn.total_changes > before
-    persisted = get_window(conn, block.start_time, block.end_time)
+    row = conn.execute(
+        "SELECT * FROM timeline_blocks WHERE start_time=? AND end_time=? LIMIT 1",
+        (block.start_time.isoformat(), block.end_time.isoformat()),
+    ).fetchone()
+    persisted = _row_projection_block(row) if row else None
     if persisted is None:
         raise RuntimeError("timeline block insert did not produce a persisted window")
     return persisted, created
@@ -118,25 +295,22 @@ def get_window(conn: sqlite3.Connection, start: datetime, end: datetime) -> Time
         "SELECT * FROM timeline_blocks WHERE start_time=? AND end_time=? LIMIT 1",
         (start.isoformat(), end.isoformat()),
     ).fetchone()
-    return _row_to_block(row) if row else None
+    return _current_block(conn, row) if row else None
 
 
 def get_by_id(conn: sqlite3.Connection, block_id: str) -> TimelineBlock | None:
     """Return one exact timeline block for trusted evidence inspection."""
     row = conn.execute("SELECT * FROM timeline_blocks WHERE id=? LIMIT 1", (block_id,)).fetchone()
-    return _row_to_block(row) if row else None
+    return _current_block(conn, row) if row else None
 
 
 def get_latest_end(conn: sqlite3.Connection) -> datetime | None:
-    row = conn.execute(
-        "SELECT end_time FROM timeline_blocks ORDER BY julianday(end_time) DESC LIMIT 1"
-    ).fetchone()
-    if not row:
-        return None
-    try:
-        return datetime.fromisoformat(row[0])
-    except (TypeError, ValueError):
-        return None
+    rows = conn.execute("SELECT * FROM timeline_blocks ORDER BY julianday(end_time) DESC")
+    for row in rows:
+        block = _current_block(conn, row)
+        if block is not None:
+            return block.end_time
+    return None
 
 
 def get_processed_through(conn: sqlite3.Connection) -> datetime | None:
@@ -237,11 +411,18 @@ def _instant(value: datetime) -> datetime:
 
 def query_recent(conn: sqlite3.Connection, *, limit: int = 12) -> list[TimelineBlock]:
     """Most recent blocks, oldest first in the returned list."""
-    rows = conn.execute(
-        "SELECT * FROM timeline_blocks ORDER BY start_time DESC LIMIT ?",
-        (limit,),
-    ).fetchall()
-    blocks = [_row_to_block(r) for r in rows]
+    requested = max(0, int(limit))
+    if requested == 0:
+        return []
+    rows = conn.execute("SELECT * FROM timeline_blocks ORDER BY start_time DESC")
+    blocks: list[TimelineBlock] = []
+    for row in rows:
+        block = _current_block(conn, row)
+        if block is None:
+            continue
+        blocks.append(block)
+        if len(blocks) >= requested:
+            break
     blocks.reverse()
     return blocks
 
@@ -252,28 +433,203 @@ def query_since(conn: sqlite3.Connection, since: datetime) -> list[TimelineBlock
         "SELECT * FROM timeline_blocks WHERE end_time > ? ORDER BY start_time ASC",
         (since.isoformat(),),
     ).fetchall()
-    return [_row_to_block(r) for r in rows]
+    return [block for row in rows if (block := _current_block(conn, row)) is not None]
 
 
 def _row_to_block(row: sqlite3.Row | tuple) -> TimelineBlock:
     # Row indexing works for both sqlite3.Row and tuple
     get = row.__getitem__
+    entries_raw = get("entries")
+    apps_raw = get("apps_used")
+    start_raw = get("start_time")
+    end_raw = get("end_time")
+    created_at_raw = get("created_at")
+    if (
+        not isinstance(entries_raw, str)
+        or not entries_raw
+        or not isinstance(apps_raw, str)
+        or not apps_raw
+        or not isinstance(start_raw, str)
+        or not start_raw
+        or not isinstance(end_raw, str)
+        or not end_raw
+        or not isinstance(created_at_raw, str)
+        or not created_at_raw
+    ):
+        raise ValueError("timeline projection fields must be non-empty strings")
+    start = datetime.fromisoformat(start_raw)
+    end = datetime.fromisoformat(end_raw)
+    created_at = datetime.fromisoformat(created_at_raw)
+    if (
+        start_raw != start.isoformat()
+        or end_raw != end.isoformat()
+        or created_at_raw != created_at.isoformat()
+    ):
+        raise ValueError("timeline timestamps must use canonical ISO format")
     return TimelineBlock(
         id=get("id"),
-        start_time=datetime.fromisoformat(get("start_time")),
-        end_time=datetime.fromisoformat(get("end_time")),
-        timezone=get("timezone") or "",
-        entries=json.loads(get("entries") or "[]"),
-        apps_used=json.loads(get("apps_used") or "[]"),
-        capture_count=get("capture_count") or 0,
-        created_at=datetime.fromisoformat(get("created_at")) if get("created_at") else None,
+        start_time=start,
+        end_time=end,
+        timezone=get("timezone"),
+        entries=json.loads(entries_raw),
+        apps_used=json.loads(apps_raw),
+        capture_count=get("capture_count"),
+        created_at=created_at,
+        source_digest=get("source_digest"),
+        projection_digest=get("projection_digest"),
     )
+
+
+def projection_digest(block: TimelineBlock) -> str:
+    """Return the immutable digest for a parsed timeline block."""
+    return timeline_block_projection_digest(
+        block_id=block.id,
+        start=block.start_time.isoformat(),
+        end=block.end_time.isoformat(),
+        timezone=block.timezone,
+        entries=block.entries,
+        apps=block.apps_used,
+        capture_count=block.capture_count,
+        created_at=block.created_at.isoformat() if block.created_at else "",
+        source_digest=block.source_digest,
+    )
+
+
+def projection_is_current(block: TimelineBlock) -> bool:
+    """Fail closed when any persisted timeline projection field changed."""
+    try:
+        return bool(
+            _semantic_types_are_valid(block)
+            and block.projection_digest
+            and block.projection_digest == projection_digest(block)
+        )
+    except (TypeError, ValueError):
+        return False
+
+
+def bind_sources(
+    conn: sqlite3.Connection,
+    block_id: str,
+    sources: list[EvidenceRef],
+) -> bool:
+    """Set a block's immutable source binding exactly once."""
+    if not sources:
+        return False
+    row = conn.execute(
+        "SELECT * FROM timeline_blocks WHERE id=? LIMIT 1",
+        (block_id,),
+    ).fetchone()
+    block = _row_projection_block(row) if row else None
+    if block is None:
+        return False
+    digest = timeline_block_sources_digest(sources)
+    if block.source_digest:
+        return block.source_digest == digest
+    old_projection = block.projection_digest
+    block.source_digest = digest
+    block.projection_digest = projection_digest(block)
+    result = conn.execute(
+        """
+        UPDATE timeline_blocks
+           SET source_digest=?, projection_digest=?
+         WHERE id=? AND source_digest='' AND projection_digest=?
+        """,
+        (digest, block.projection_digest, block_id, old_projection),
+    )
+    return result.rowcount == 1
+
+
+def sources_are_current(conn: sqlite3.Connection, block: TimelineBlock) -> bool:
+    try:
+        sources = _direct_sources(conn, block.id)
+    except (TypeError, ValueError):
+        return False
+    return bool(
+        sources
+        and block.source_digest
+        and block.source_digest == timeline_block_sources_digest(sources)
+    )
+
+
+def _semantic_types_are_valid(block: TimelineBlock) -> bool:
+    return bool(
+        isinstance(block.id, str)
+        and block.id
+        and isinstance(block.start_time, datetime)
+        and isinstance(block.end_time, datetime)
+        and isinstance(block.timezone, str)
+        and isinstance(block.entries, list)
+        and all(isinstance(value, str) for value in block.entries)
+        and isinstance(block.apps_used, list)
+        and all(isinstance(value, str) for value in block.apps_used)
+        and type(block.capture_count) is int
+        and block.capture_count >= 0
+        and isinstance(block.created_at, datetime)
+        and isinstance(block.source_digest, str)
+        and isinstance(block.projection_digest, str)
+        and _duration_is_valid(block.start_time, block.end_time)
+    )
+
+
+def _duration_is_valid(start: datetime, end: datetime) -> bool:
+    try:
+        duration = _instant(end) - _instant(start)
+    except (TypeError, ValueError):
+        return False
+    return timedelta(0) < duration <= MAX_BLOCK_DURATION
+
+
+def _direct_sources(conn: sqlite3.Connection, block_id: str) -> list[EvidenceRef]:
+    table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='provenance_edges'"
+    ).fetchone()
+    if table is None:
+        return []
+    rows = conn.execute(
+        """
+        SELECT source_kind, source_id, source_path, source_timestamp, source_hash
+          FROM provenance_edges
+         WHERE subject_kind='timeline_block' AND subject_id=? AND subject_path=''
+         ORDER BY ordinal, source_kind, source_path, source_id
+        """,
+        (block_id,),
+    ).fetchall()
+    return [
+        EvidenceRef(
+            kind=row[0],
+            id=row[1],
+            path=row[2],
+            timestamp=row[3],
+            content_hash=row[4],
+        )
+        for row in rows
+    ]
+
+
+def _row_projection_block(row: sqlite3.Row | tuple) -> TimelineBlock | None:
+    try:
+        block = _row_to_block(row)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return block if projection_is_current(block) else None
+
+
+def _current_block(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row | tuple,
+) -> TimelineBlock | None:
+    block = _row_projection_block(row)
+    return block if block is not None and sources_are_current(conn, block) else None
 
 
 def floor_to_window(moment: datetime, window_minutes: int) -> datetime:
     """Floor to the wall-clock window boundary. 14:07:42 → 14:05:00 (w=5)."""
-    floor_min = (moment.minute // window_minutes) * window_minutes
-    return moment.replace(minute=floor_min, second=0, microsecond=0)
+    if window_minutes < 1 or window_minutes > int(MAX_BLOCK_DURATION.total_seconds() // 60):
+        raise ValueError("window_minutes must be in [1, 1440]")
+    midnight = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+    minutes_since_midnight = moment.hour * 60 + moment.minute
+    floor_minutes = (minutes_since_midnight // window_minutes) * window_minutes
+    return midnight + timedelta(minutes=floor_minutes)
 
 
 def ceil_to_window(moment: datetime, window_minutes: int) -> datetime:

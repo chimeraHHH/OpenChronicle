@@ -38,14 +38,18 @@ from .. import paths
 from ..capture import filenames as capture_filenames
 from ..config import Config
 from ..logger import get
+from ..memory_candidates import store as candidate_store
+from ..privacy.egress import model_egress_lock, privacy_egress_lock
 from ..prompts import load as load_prompt
 from ..provenance.models import EvidenceRef, content_digest, timeline_block_digest
+from ..services.context import ContextService
 from ..session import store as session_store
 from ..store import entries as entries_mod
 from ..store import files as files_mod
 from ..store import fts
 from ..timeline import store as timeline_store
 from . import llm as llm_mod
+from . import tools as tools_mod
 
 # Number of preceding entries from the same event-YYYY-MM-DD.md file to show
 # the reducer as context. Lets a new session summary align with / avoid
@@ -69,8 +73,14 @@ class ReducerInputChanged(RuntimeError):
 
 @contextmanager
 def _publish_fence(conn: sqlite3.Connection, generation: int):
-    """Serialize publish with clean and reject pre-clean reducer snapshots."""
-    with files_mod.review_operation_lock():
+    """Serialize final authorization and publish with every explicit cleanup.
+
+    Provider I/O happens before callers enter this short fence.  Holding both
+    stores in the canonical review→capture order keeps raw-retention cleanup
+    from crossing the final policy check, Markdown append, and reducer progress
+    commit.
+    """
+    with privacy_egress_lock():
         if fts.content_generation(conn, "reducer") != generation:
             raise ReducerInputChanged("reducer input was invalidated by explicit cleanup")
         yield
@@ -79,8 +89,8 @@ def _publish_fence(conn: sqlite3.Connection, generation: int):
 @dataclass
 class ReduceResult:
     session_id: str
-    succeeded: bool          # LLM produced parseable output
-    written: bool            # entry landed in event-YYYY-MM-DD.md
+    succeeded: bool  # LLM produced parseable output
+    written: bool  # entry landed in event-YYYY-MM-DD.md
     entry_id: str = ""
     path: str = ""
     sub_tasks: list[str] = field(default_factory=list)
@@ -246,7 +256,9 @@ def _reduce_window_locked(
             session_store.insert(
                 conn,
                 session_store.SessionRow(
-                    id=session_id, start_time=session_start, end_time=session_end,
+                    id=session_id,
+                    start_time=session_start,
+                    end_time=session_end,
                     status="ended",
                 ),
             )
@@ -333,14 +345,21 @@ def _reduce_window_locked(
     if existing is not None and existing.status == "reduced":
         logger.info("session %s already reduced, skipping", session_id)
         return ReduceResult(
-            session_id=session_id, succeeded=True, written=False,
-            start_time=session_start, end_time=session_end, is_final=is_final,
+            session_id=session_id,
+            succeeded=True,
+            written=False,
+            start_time=session_start,
+            end_time=session_end,
+            is_final=is_final,
         )
 
     if is_final and not _terminal_timeline_ready(
         blocks=blocks,
         session_end=window_end,
-        window_minutes=max(1, int(cfg.timeline.window_minutes)),
+        window_minutes=min(
+            int(timeline_store.MAX_BLOCK_DURATION.total_seconds() // 60),
+            max(1, int(cfg.timeline.window_minutes)),
+        ),
         processed_range=processed_range,
     ):
         # The terminal callback can beat the timeline producer for the bucket
@@ -364,7 +383,9 @@ def _reduce_window_locked(
         if is_final:
             logger.info(
                 "session %s: terminal reduce has 0 blocks in %s → %s, marking reduced (no-op)",
-                session_id, window_start.isoformat(), window_end.isoformat(),
+                session_id,
+                window_start.isoformat(),
+                window_end.isoformat(),
             )
             with _publish_fence(conn, generation):
                 session_store.mark_reduced(
@@ -376,11 +397,16 @@ def _reduce_window_locked(
         else:
             logger.debug(
                 "session %s: flush has 0 new blocks since %s",
-                session_id, window_start.isoformat(),
+                session_id,
+                window_start.isoformat(),
             )
         return ReduceResult(
-            session_id=session_id, succeeded=True, written=False,
-            start_time=session_start, end_time=session_end, is_final=is_final,
+            session_id=session_id,
+            succeeded=True,
+            written=False,
+            start_time=session_start,
+            end_time=session_end,
+            is_final=is_final,
         )
 
     if (
@@ -404,9 +430,57 @@ def _reduce_window_locked(
             is_final=True,
         )
 
+    blocks = _policy_allowed_blocks(conn, cfg, blocks)
+    if not blocks:
+        logger.info(
+            "session %s: %s has 0 policy-allowed timeline blocks, skipping model egress",
+            session_id,
+            "terminal reduce" if is_final else "flush",
+        )
+        with _publish_fence(conn, generation):
+            if is_final:
+                session_store.mark_reduced(
+                    conn,
+                    session_id,
+                    terminal_path=event_daily_name,
+                    terminal_noop=True,
+                )
+            else:
+                # Consume the closed, policy-excluded interval so every flush
+                # does not reconsider the same denied blocks forever.
+                session_store.set_flush_end(conn, session_id, materialized_end)
+        return ReduceResult(
+            session_id=session_id,
+            succeeded=True,
+            written=False,
+            start_time=session_start,
+            end_time=session_end,
+            is_final=is_final,
+        )
+
+    stable_entry_id = _event_entry_id(
+        session_id=session_id,
+        start_time=window_start,
+        end_time=materialized_end,
+        is_final=is_final,
+    )
+    preceding_text, preceding_evidence = _load_preceding_entries(
+        conn,
+        cfg,
+        event_daily_name,
+        _PRECEDING_ENTRY_LIMIT,
+        exclude_entry_id=stable_entry_id,
+    )
     payload = _call_reducer_llm(
-        cfg, blocks, window_start, materialized_end,
+        cfg,
+        blocks,
+        window_start,
+        materialized_end,
+        conn=conn,
         event_daily_name=event_daily_name,
+        preceding_text=preceding_text,
+        preceding_evidence=preceding_evidence,
+        exclude_entry_id=stable_entry_id,
     )
 
     if payload is None:
@@ -415,17 +489,24 @@ def _reduce_window_locked(
             # naturally covers a bigger window.
             logger.warning(
                 "session %s: flush reducer LLM failed at window %s → %s, will retry on next tick",
-                session_id, window_start.isoformat(), window_end.isoformat(),
+                session_id,
+                window_start.isoformat(),
+                window_end.isoformat(),
             )
             return ReduceResult(
-                session_id=session_id, succeeded=False, written=False,
-                start_time=session_start, end_time=session_end, is_final=False,
+                session_id=session_id,
+                succeeded=False,
+                written=False,
+                start_time=session_start,
+                end_time=session_end,
+                is_final=False,
             )
         retry_count = existing.retry_count if existing else 0
         if retry_count + 1 >= _MAX_RETRIES:
             logger.warning(
                 "session %s: reducer exhausted %d attempts, writing heuristic fallback",
-                session_id, _MAX_RETRIES,
+                session_id,
+                _MAX_RETRIES,
             )
             payload = _heuristic_payload(blocks)
             succeeded = False
@@ -442,24 +523,44 @@ def _reduce_window_locked(
                 )
             logger.warning(
                 "session %s: reducer failed (retry %d/%d), next attempt at %s",
-                session_id, retry_count + 1, _MAX_RETRIES, next_retry_at.isoformat(),
+                session_id,
+                retry_count + 1,
+                _MAX_RETRIES,
+                next_retry_at.isoformat(),
             )
             return ReduceResult(
-                session_id=session_id, succeeded=False, written=False,
-                start_time=session_start, end_time=session_end, is_final=True,
+                session_id=session_id,
+                succeeded=False,
+                written=False,
+                start_time=session_start,
+                end_time=session_end,
+                is_final=True,
             )
     else:
         succeeded = True
 
     summary = str(payload.get("summary") or "").strip()
-    sub_tasks = [
-        str(t).strip() for t in (payload.get("sub_tasks") or []) if str(t).strip()
-    ]
+    sub_tasks = [str(t).strip() for t in (payload.get("sub_tasks") or []) if str(t).strip()]
     if not sub_tasks:
         sub_tasks = _heuristic_payload(blocks)["sub_tasks"]
     sub_tasks = [_attach_drill_down_breadcrumb(s) for s in sub_tasks]
 
     with _publish_fence(conn, generation):
+        # Retention cleanup may remove raw observations while network I/O is in
+        # flight. Re-authorize the exact block and preceding-memory snapshots
+        # under the short capture lock before materializing provider output.
+        current_blocks = _policy_allowed_blocks(conn, cfg, blocks)
+        if _block_bindings(current_blocks) != _block_bindings(blocks):
+            raise ReducerInputChanged("reducer timeline input changed before publication")
+        current_preceding, current_preceding_evidence = _load_preceding_entries(
+            conn,
+            cfg,
+            event_daily_name,
+            _PRECEDING_ENTRY_LIMIT,
+            exclude_entry_id=stable_entry_id,
+        )
+        if current_preceding != preceding_text or current_preceding_evidence != preceding_evidence:
+            raise ReducerInputChanged("reducer memory input changed before publication")
         entry_id, path_name, entry_created = _append_event_entry(
             conn,
             event_daily_name=event_daily_name,
@@ -471,6 +572,7 @@ def _reduce_window_locked(
             heuristic=not succeeded,
             is_final=is_final,
             blocks=blocks,
+            preceding_evidence=preceding_evidence,
         )
 
         if is_final:
@@ -493,7 +595,9 @@ def _reduce_window_locked(
         "session %s %s → %s#%s (%d sub_tasks, window %s-%s, llm_ok=%s)",
         session_id,
         "reduced" if is_final else "flushed",
-        path_name, entry_id, len(sub_tasks),
+        path_name,
+        entry_id,
+        len(sub_tasks),
         window_start.strftime("%H:%M"),
         materialized_end.strftime("%H:%M"),
         succeeded,
@@ -521,6 +625,7 @@ def reduce_session_async(
     on_done: callable | None = None,  # type: ignore[valid-type]
 ) -> threading.Thread:
     """Spawn a daemon thread that reduces the session. Fire-and-forget."""
+
     def _run() -> None:
         try:
             result = reduce_session(
@@ -533,13 +638,9 @@ def reduce_session_async(
                 try:
                     on_done(result)
                 except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "session %s: on_done callback failed: %s", session_id, exc
-                    )
+                    logger.warning("session %s: on_done callback failed: %s", session_id, exc)
         except Exception as exc:  # noqa: BLE001
-            logger.error(
-                "session %s: reducer thread crashed: %s", session_id, exc, exc_info=True
-            )
+            logger.error("session %s: reducer thread crashed: %s", session_id, exc, exc_info=True)
 
     t = threading.Thread(target=_run, name=f"reduce-{session_id}", daemon=True)
     t.start()
@@ -595,6 +696,7 @@ def reduce_all_pending(cfg: Config) -> list[ReduceResult]:
 
 # ─── Block selection + prompt rendering ─────────────────────────────────────
 
+
 def _blocks_for_session(
     conn: sqlite3.Connection,
     start: datetime,
@@ -619,33 +721,29 @@ def _blocks_for_session(
     """
     rows = conn.execute(
         """
-        SELECT * FROM timeline_blocks
-         WHERE julianday(end_time) > julianday(?) - 2
+        SELECT id FROM timeline_blocks
+         WHERE julianday(start_time) > julianday(?) - 2
            AND julianday(start_time) < julianday(?) + 2
+           AND julianday(end_time) > julianday(?) - 2
         """,
-        (start.isoformat(), end.isoformat()),
+        (start.isoformat(), end.isoformat(), start.isoformat()),
     ).fetchall()
     blocks: list[timeline_store.TimelineBlock] = []
     for r in rows:
-        try:
-            block = timeline_store.TimelineBlock(
-                id=r["id"],
-                start_time=datetime.fromisoformat(r["start_time"]),
-                end_time=datetime.fromisoformat(r["end_time"]),
-                timezone=r["timezone"] or "",
-                entries=json.loads(r["entries"] or "[]"),
-                apps_used=json.loads(r["apps_used"] or "[]"),
-                capture_count=r["capture_count"] or 0,
-                created_at=datetime.fromisoformat(r["created_at"])
-                if r["created_at"] else None,
-            )
-        except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            logger.warning("session reducer skipped corrupt timeline block: %s", exc)
+        block_id = r["id"]
+        if not isinstance(block_id, str):
+            logger.warning("session reducer skipped corrupt timeline block identity")
             continue
-        intersects = (
-            _instant(block.end_time) > _instant(start)
-            and _instant(block.start_time) < _instant(end)
-        )
+        block = timeline_store.get_by_id(conn, block_id)
+        if block is None:
+            logger.warning(
+                "session reducer skipped timeline block with stale projection or sources: %s",
+                block_id,
+            )
+            continue
+        intersects = _instant(block.end_time) > _instant(start) and _instant(
+            block.start_time
+        ) < _instant(end)
         complete = _instant(block.end_time) <= _instant(end)
         if intersects and (complete or not complete_only):
             blocks.append(block)
@@ -681,6 +779,31 @@ def _instant(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         value = value.astimezone()
     return value.astimezone(UTC)
+
+
+def _policy_allowed_blocks(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    blocks: list[timeline_store.TimelineBlock],
+) -> list[timeline_store.TimelineBlock]:
+    """Drop whole derived blocks whose raw ancestry is no longer allowed."""
+    authorizer = ContextService(conn, cfg)
+    allowed: list[timeline_store.TimelineBlock] = []
+    for block in blocks:
+        ref = EvidenceRef(
+            kind="timeline_block",
+            id=block.id,
+            timestamp=block.start_time.isoformat(),
+            content_hash=timeline_block_digest(
+                start=block.start_time.isoformat(),
+                end=block.end_time.isoformat(),
+                entries=block.entries,
+                apps=block.apps_used,
+            ),
+        )
+        if authorizer.evidence_allowed(ref):
+            allowed.append(block)
+    return allowed
 
 
 def _format_blocks(blocks: list[timeline_store.TimelineBlock]) -> str:
@@ -724,13 +847,18 @@ def _attach_drill_down_breadcrumb(sub_task: str) -> str:
         return sub_task
     start_h, start_m, _end_h, _end_m, app_raw = m.groups()
     app = app_raw.strip().replace('"', "'")
-    breadcrumb = (
-        f' — raw: read_recent_capture(at="{start_h}:{start_m}", app_name="{app}")'
-    )
+    breadcrumb = f' — raw: read_recent_capture(at="{start_h}:{start_m}", app_name="{app}")'
     return sub_task.rstrip() + breadcrumb
 
 
-def _load_preceding_entries(file_name: str, limit: int) -> str:
+def _load_preceding_entries(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    file_name: str,
+    limit: int,
+    *,
+    exclude_entry_id: str = "",
+) -> tuple[str, list[EvidenceRef]]:
     """Return the last ``limit`` entries of ``file_name`` as a single string.
 
     Used to give the reducer context about what's already been written to
@@ -739,23 +867,64 @@ def _load_preceding_entries(file_name: str, limit: int) -> str:
     explicitly supersede them instead of silently duplicating.
     """
     path = files_mod.memory_path(file_name)
+    if candidate_store.is_tombstoned(
+        conn,
+        kind="memory_file",
+        artifact_id=file_name,
+    ):
+        return "(no prior entries today)", []
     if not path.exists():
-        return "(no prior entries today)"
+        return "(no prior entries today)", []
     try:
         parsed = files_mod.read_file(path)
     except Exception:  # noqa: BLE001
-        return "(prior entries unavailable)"
-    if not parsed.entries:
-        return "(no prior entries today)"
-    tail = parsed.entries[-limit:]
+        return "(prior entries unavailable)", []
+    entries = parsed.entries
+    if exclude_entry_id:
+        existing_index = next(
+            (index for index, entry in enumerate(entries) if entry.id == exclude_entry_id),
+            None,
+        )
+        if existing_index is not None:
+            # A deterministic replay must not make the entry depend on itself
+            # (or on entries appended after it).
+            entries = entries[:existing_index]
+    visible = [
+        entry
+        for entry in entries
+        if not candidate_store.is_tombstoned(
+            conn,
+            kind="memory_entry",
+            artifact_id=entry.id,
+            path=file_name,
+        )
+        and tools_mod.memory_entry_allowed(
+            conn,
+            cfg,
+            path=file_name,
+            entry=entry,
+        )
+    ]
+    if not visible:
+        return "(no prior entries today)", []
+    tail = visible[-limit:]
     out: list[str] = []
+    evidence: list[EvidenceRef] = []
     for e in tail:
+        ref = EvidenceRef(
+            kind="memory_entry",
+            id=e.id,
+            path=file_name,
+            timestamp=e.timestamp,
+            content_hash=content_digest(e.body),
+        )
+        evidence.append(ref)
         out.append(f"### [{e.timestamp}] {{id: {e.id}}}")
         body = e.body.strip()
         if body:
             out.append(body)
         out.append("")
-    return "\n".join(out).strip()
+    return "\n".join(out).strip(), evidence
 
 
 def _call_reducer_llm(
@@ -764,37 +933,80 @@ def _call_reducer_llm(
     start_time: datetime,
     end_time: datetime,
     *,
+    conn: sqlite3.Connection,
     event_daily_name: str,
+    preceding_text: str | None = None,
+    preceding_evidence: list[EvidenceRef] | None = None,
+    exclude_entry_id: str = "",
 ) -> dict[str, Any] | None:
-    preceding_text = _load_preceding_entries(event_daily_name, _PRECEDING_ENTRY_LIMIT)
-    prompt = load_prompt("session_reduce.md").format(
-        start_time=_format_time(start_time),
-        end_time=_format_time(end_time),
-        block_count=len(blocks),
-        capture_count=sum(b.capture_count for b in blocks),
-        blocks_text=_format_blocks(blocks),
-        preceding_text=preceding_text,
-        event_daily_name=event_daily_name,
-    )
-    try:
-        resp = llm_mod.call_llm(
-            cfg, "reducer",
-            messages=[{"role": "user", "content": prompt}],
-            json_mode=True,
+    if preceding_text is None:
+        preceding_text, _ = _load_preceding_entries(
+            conn,
+            cfg,
+            event_daily_name,
+            _PRECEDING_ENTRY_LIMIT,
         )
-        text = llm_mod.extract_text(resp).strip()
-        if not text:
+    with model_egress_lock():
+        current_blocks = _policy_allowed_blocks(conn, cfg, blocks)
+        if _block_bindings(current_blocks) != _block_bindings(blocks):
+            raise ReducerInputChanged("reducer timeline input changed before provider egress")
+        current_preceding, current_evidence = _load_preceding_entries(
+            conn,
+            cfg,
+            event_daily_name,
+            _PRECEDING_ENTRY_LIMIT,
+            exclude_entry_id=exclude_entry_id,
+        )
+        if preceding_evidence is not None and (
+            current_preceding != preceding_text or current_evidence != preceding_evidence
+        ):
+            raise ReducerInputChanged("reducer memory input changed before provider egress")
+        prompt = load_prompt("session_reduce.md").format(
+            start_time=_format_time(start_time),
+            end_time=_format_time(end_time),
+            block_count=len(blocks),
+            capture_count=sum(b.capture_count for b in blocks),
+            blocks_text=_format_blocks(blocks),
+            preceding_text=current_preceding,
+            event_daily_name=event_daily_name,
+        )
+        try:
+            resp = llm_mod.call_llm(
+                cfg,
+                "reducer",
+                messages=[{"role": "user", "content": prompt}],
+                json_mode=True,
+            )
+            text = llm_mod.extract_text(resp).strip()
+            if not text:
+                return None
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
             return None
-        data = json.loads(text)
-        if isinstance(data, dict):
-            return data
-        return None
-    except json.JSONDecodeError as exc:
-        logger.warning("reducer: malformed JSON from LLM: %s", exc)
-        return None
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("reducer: LLM call failed: %s", exc)
-        return None
+        except json.JSONDecodeError as exc:
+            logger.warning("reducer: malformed JSON from LLM: %s", exc)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reducer: LLM call failed: %s", exc)
+            return None
+
+
+def _block_bindings(
+    blocks: list[timeline_store.TimelineBlock],
+) -> list[tuple[str, str]]:
+    return [
+        (
+            block.id,
+            timeline_block_digest(
+                start=block.start_time.isoformat(),
+                end=block.end_time.isoformat(),
+                entries=block.entries,
+                apps=block.apps_used,
+            ),
+        )
+        for block in blocks
+    ]
 
 
 def _heuristic_payload(
@@ -814,14 +1026,14 @@ def _heuristic_payload(
     start_hm = blocks[0].start_time.strftime("%H:%M")
     end_hm = blocks[-1].end_time.strftime("%H:%M")
     sub_tasks = [
-        f"[{start_hm}-{end_hm}, {app}] active during the session, involving —"
-        for app in apps
+        f"[{start_hm}-{end_hm}, {app}] active during the session, involving —" for app in apps
     ] or [f"[{start_hm}-{end_hm}, Unknown] no notable activity, involving —"]
     summary = f"Used {', '.join(apps)}." if apps else ""
     return {"summary": summary, "sub_tasks": sub_tasks}
 
 
 # ─── Entry writing ──────────────────────────────────────────────────────────
+
 
 def _event_daily_name(start_time: datetime) -> str:
     return f"event-{start_time.strftime('%Y-%m-%d')}.md"
@@ -847,9 +1059,7 @@ def _event_daily_names_between(start_time: datetime, end_time: datetime) -> list
         if not memory_dir.exists():
             return []
         return sorted(
-            path.name
-            for path in memory_dir.glob("event-????-??-??.md")
-            if path.is_file()
+            path.name for path in memory_dir.glob("event-????-??-??.md") if path.is_file()
         )
 
     names: list[str] = []
@@ -1037,10 +1247,7 @@ def _recover_materialized_flushes(
             materialized_end = capture_filenames.parse_capture_stem(encoded_end)
             if materialized_end is None:
                 continue
-            if not (
-                _instant(session_start) < _instant(materialized_end)
-                <= _instant(upper_bound)
-            ):
+            if not (_instant(session_start) < _instant(materialized_end) <= _instant(upper_bound)):
                 logger.warning(
                     "session %s ignored out-of-range flush boundary %s",
                     session_id,
@@ -1095,6 +1302,7 @@ def _append_event_entry(
     heuristic: bool,
     is_final: bool,
     blocks: list[timeline_store.TimelineBlock],
+    preceding_evidence: list[EvidenceRef] | None = None,
 ) -> tuple[str, str, bool]:
     name = event_daily_name
     day = name.removeprefix("event-").removesuffix(".md")
@@ -1125,24 +1333,11 @@ def _append_event_entry(
         end_time=end_time,
         is_final=is_final,
     )
-    evidence_refs = [
-        EvidenceRef(
-            kind="session",
-            id=session_id,
-            timestamp=start_time.isoformat(),
-            content_hash=content_digest(
-                json.dumps(
-                    {
-                        "start": start_time.isoformat(),
-                        "end": end_time.isoformat(),
-                        "final": is_final,
-                    },
-                    sort_keys=True,
-                )
-            ),
-        )
-    ]
-    evidence_refs.extend(
+    # Session rows are mutable orchestration state, not immutable content.
+    # Timeline blocks and preceding entries fully ground the reducer output;
+    # do not attach a pseudo hash that cannot be recomputed after status/window
+    # progress changes.
+    evidence_refs = list(
         EvidenceRef(
             kind="timeline_block",
             id=block.id,
@@ -1156,6 +1351,7 @@ def _append_event_entry(
         )
         for block in blocks
     )
+    evidence_refs.extend(preceding_evidence or [])
     entry_id, created = entries_mod.append_entry_once(
         conn,
         name=name,

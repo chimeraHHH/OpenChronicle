@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from openchronicle.capture.event_dispatcher import EventDispatcher
@@ -77,3 +78,61 @@ def test_dispatcher_filters_before_copy_or_enqueue() -> None:
 
     assert filtered == ["com.example.denied"]
     assert captured == []
+
+
+def test_pre_capture_dedup_logs_never_copy_watcher_title(caplog) -> None:
+    marker = "https://forbidden.invalid/SECRET-WATCHER-TITLE"
+    dispatcher = EventDispatcher(
+        lambda _trigger: None,
+        min_capture_gap_seconds=0,
+        dedup_interval_seconds=0,
+        same_window_dedup_seconds=60,
+    )
+    event = {
+        "event_type": "UserTextInput",
+        "bundle_id": "com.apple.Safari",
+        "window_title": marker,
+    }
+
+    component_logger = logging.getLogger("openchronicle.capture")
+    component_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.DEBUG, logger="openchronicle.capture"):
+            dispatcher.on_event(event)
+            dispatcher.on_event(event)
+    finally:
+        component_logger.removeHandler(caplog.handler)
+
+    assert "same-window dedup" in caplog.text
+    assert marker not in caplog.text
+
+
+def test_capture_callback_exception_text_is_not_a_log_sink(caplog) -> None:
+    marker = "SECRET-CALLBACK-EXCEPTION"
+
+    def fail(_trigger):
+        raise RuntimeError(marker)
+
+    dispatcher = EventDispatcher(
+        fail,
+        min_capture_gap_seconds=0,
+        dedup_interval_seconds=0,
+        same_window_dedup_seconds=0,
+    )
+
+    component_logger = logging.getLogger("openchronicle.capture")
+    component_logger.addHandler(caplog.handler)
+    try:
+        with caplog.at_level(logging.WARNING, logger="openchronicle.capture"):
+            dispatcher.on_event(
+                {
+                    "event_type": "UserMouseClick",
+                    "bundle_id": "com.example.editor",
+                    "window_title": "Safe",
+                }
+            )
+    finally:
+        component_logger.removeHandler(caplog.handler)
+
+    assert "capture callback failed" in caplog.text
+    assert marker not in caplog.text

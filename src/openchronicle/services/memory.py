@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import frontmatter
 
+from ..capture import store_lock as capture_store
+from ..config import Config
 from ..logger import get
 from ..memory_candidates import store as candidate_store
 from ..memory_candidates.store import MemoryCandidate
@@ -18,6 +20,7 @@ from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, content_digest
 from ..store import entries as entries_store
 from ..store import files as files_store
+from .context import ContextService
 
 logger = get("openchronicle.memory")
 
@@ -83,9 +86,20 @@ class MemoryService:
     the exact content and evidence first.
     """
 
-    def __init__(self, conn: sqlite3.Connection, *, soft_limit_tokens: int | None = None):
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        soft_limit_tokens: int | None = None,
+        cfg: Config | None = None,
+    ):
         self.conn = conn
         self.soft_limit_tokens = soft_limit_tokens
+        # Trusted product/CLI adapters always pass their freshly loaded config
+        # so approval is fenced by the current privacy policy. ``None`` keeps
+        # the lower-level service usable for isolated local migration/tests
+        # that do not perform a product-facing approval.
+        self.cfg = cfg
 
     def propose_candidate(
         self,
@@ -101,7 +115,10 @@ class MemoryService:
         proposal_slot: int = 0,
         transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
     ) -> MemoryCandidate:
-        with _review_operation_lock():
+        # The transaction guard revalidates capture-derived evidence. Acquire
+        # capture before BEGIN IMMEDIATE so capture persistence (capture→DB)
+        # cannot deadlock against a proposal holding DB→capture.
+        with _review_operation_lock(), capture_store.capture_store_lock():
             return self._propose_candidate_locked(
                 kind=kind,
                 target_path=target_path,
@@ -143,7 +160,7 @@ class MemoryService:
             raise ValueError("confidence must be between 0 and 1")
         conflict_key = conflict_key.strip().casefold()
         digest = content_digest(normalized_content)
-        proposal_digest = _candidate_idempotency_key(
+        proposal_digest = candidate_store.proposal_digest(
             kind=clean_kind,
             target_path=target_path,
             content_hash=digest,
@@ -244,6 +261,21 @@ class MemoryService:
                 current.conflict_key if conflict_key is None else conflict_key.strip().casefold()
             )
             digest = content_digest(normalized_content)
+            sources = provenance_store.direct_sources(
+                self.conn,
+                _candidate_ref(candidate_id),
+            )
+            if not candidate_store.proposal_is_current(current, sources):
+                raise candidate_store.CandidateConflict(
+                    "candidate evidence binding changed"
+                )
+            next_proposal_digest = candidate_store.proposal_digest(
+                kind=current.kind,
+                target_path=current.target_path,
+                content_hash=digest,
+                tags=clean_tags,
+                evidence=sources,
+            )
             self.conn.execute("BEGIN IMMEDIATE")
             try:
                 has_conflict = any(
@@ -263,6 +295,7 @@ class MemoryService:
                     content_hash=digest,
                     tags=clean_tags,
                     conflict_key=next_conflict_key,
+                    proposal_digest=next_proposal_digest,
                     status="conflict" if has_conflict else "pending",
                 )
                 self.conn.execute("COMMIT")
@@ -273,6 +306,10 @@ class MemoryService:
                 raise
 
     def approve_candidate(self, candidate_id: str, *, expected_version: int) -> MemoryCandidate:
+        if self.cfg is None:
+            raise RuntimeError(
+                "candidate approval requires the current privacy configuration"
+            )
         with _review_operation_lock():
             return self._approve_candidate_locked(candidate_id, expected_version=expected_version)
 
@@ -281,8 +318,8 @@ class MemoryService:
     ) -> MemoryCandidate:
         current = self._required(candidate_id)
         if current.status == "accepted":
-            return current
-        if current.status == "applying":
+            pass
+        elif current.status == "applying":
             if expected_version not in {current.version, current.version - 1}:
                 raise candidate_store.CandidateConflict("candidate version changed")
         else:
@@ -291,16 +328,32 @@ class MemoryService:
             if current.status != "pending":
                 raise candidate_store.CandidateConflict("candidate must be pending before approval")
 
-        sources = provenance_store.direct_sources(self.conn, _candidate_ref(candidate_id))
+        sources = provenance_store.direct_sources(
+            self.conn, _candidate_ref(candidate_id)
+        )
         invalid_sources = [
             source for source in sources if not provenance_store.is_current(self.conn, source)
         ]
-        if not sources or invalid_sources:
+        binding_changed = not candidate_store.proposal_is_current(current, sources)
+        assert self.cfg is not None
+        policy_denied = bool(
+            sources
+            and not ContextService(self.conn, self.cfg).evidence_allowed(
+                _candidate_ref(candidate_id), embedded_sources=sources
+            )
+        )
+        if not sources or invalid_sources or binding_changed or policy_denied:
             detail = (
                 "candidate has no durable evidence"
                 if not sources
-                else "candidate evidence is missing or changed"
+                else (
+                    "candidate evidence is excluded by the current privacy policy"
+                    if policy_denied
+                    else "candidate evidence is missing, changed, or rebound"
+                )
             )
+            if current.status == "accepted":
+                raise candidate_store.CandidateConflict(detail)
             latest = self._required(candidate_id)
             candidate_store.transition(
                 self.conn,
@@ -311,6 +364,8 @@ class MemoryService:
                 error=detail,
             )
             raise candidate_store.CandidateConflict(detail)
+        if current.status == "accepted":
+            return current
 
         if current.status == "applying":
             applying = current
@@ -325,24 +380,65 @@ class MemoryService:
         entry_id = _candidate_entry_id(candidate_id)
         entry_sources = [_candidate_ref(candidate_id), *sources]
         try:
-            if not files_store.memory_path(applying.target_path).exists():
-                with contextlib.suppress(FileExistsError):
-                    entries_store.create_file(
-                        self.conn,
-                        name=applying.target_path,
-                        description=f"Reviewed {applying.kind} memories.",
-                        tags=applying.tags,
-                        owner_candidate_id=applying.id,
+            # Cleanup and capture writes use the same lock. Re-read both the
+            # hashes and current policy inside that fence immediately before
+            # publishing the reviewed text to durable memory.
+            with capture_store.capture_store_lock():
+                publish_sources = provenance_store.direct_sources(
+                    self.conn, _candidate_ref(candidate_id)
+                )
+                publish_denied = (
+                    publish_sources != sources
+                    or not candidate_store.proposal_is_current(
+                        applying,
+                        publish_sources,
                     )
-            entries_store.append_entry_once(
-                self.conn,
-                name=applying.target_path,
-                content=applying.content,
-                tags=applying.tags,
-                entry_id=entry_id,
-                evidence_refs=entry_sources,
-                soft_limit_tokens=self.soft_limit_tokens,
-            )
+                    or any(
+                        not provenance_store.is_current(self.conn, source)
+                        for source in publish_sources
+                    )
+                    or not ContextService(
+                            self.conn, self.cfg
+                        ).evidence_allowed(
+                            _candidate_ref(candidate_id),
+                            embedded_sources=publish_sources,
+                        )
+                )
+                if publish_denied:
+                    latest = self._required(candidate_id)
+                    if latest.status == "applying":
+                        candidate_store.transition(
+                            self.conn,
+                            candidate_id=candidate_id,
+                            expected_version=latest.version,
+                            from_statuses=("applying",),
+                            to_status="conflict",
+                            error=(
+                                "candidate evidence changed or was excluded "
+                                "before publication"
+                            ),
+                        )
+                    raise candidate_store.CandidateConflict(
+                        "candidate evidence changed or was excluded before publication"
+                    )
+                if not files_store.memory_path(applying.target_path).exists():
+                    with contextlib.suppress(FileExistsError):
+                        entries_store.create_file(
+                            self.conn,
+                            name=applying.target_path,
+                            description=f"Reviewed {applying.kind} memories.",
+                            tags=applying.tags,
+                            owner_candidate_id=applying.id,
+                        )
+                entries_store.append_entry_once(
+                    self.conn,
+                    name=applying.target_path,
+                    content=applying.content,
+                    tags=applying.tags,
+                    entry_id=entry_id,
+                    evidence_refs=entry_sources,
+                    soft_limit_tokens=self.soft_limit_tokens,
+                )
         except BaseException as exc:
             latest = self._required(candidate_id)
             if latest.status == "applying":
@@ -1060,20 +1156,3 @@ def _normalize_tags(tags: list[str]) -> list[str]:
         if tag not in result:
             result.append(tag)
     return result
-
-
-def _candidate_idempotency_key(
-    *,
-    kind: str,
-    target_path: str,
-    content_hash: str,
-    tags: list[str],
-    evidence: list[EvidenceRef],
-) -> str:
-    source_keys = sorted(
-        f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}" for ref in evidence
-    )
-    payload = "\0".join(
-        ["memory-candidate-v1", kind, target_path, content_hash, *sorted(tags), *source_keys]
-    )
-    return hashlib.sha256(payload.encode()).hexdigest()

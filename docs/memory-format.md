@@ -37,14 +37,15 @@ needs_compact: false
 
 # User Profile
 
-## [2026-04-20T14:02:11] {id: 20260420-1402-a1b23c} #identity
+## [2026-04-20T14:02:11] {id: 20260420-1402-a1b23c} #identity #oc-origin:manual-v1
 User goes by Kming. Based in Shanghai.
 
-## [2026-04-20T16:30:05] {id: 20260420-1630-3f0e99} #work #employer
+## [2026-04-20T16:30:05] {id: 20260420-1630-3f0e99} #work #employer #oc-origin:manual-v1
 ~~User works at Old Corp as a principal engineer.~~ #superseded-by:20260421-0915-c4f1a5
 
-## [2026-04-21T09:15:00] {id: 20260421-0915-c4f1a5} #work #employer
+## [2026-04-21T09:15:00] {id: 20260421-0915-c4f1a5} #work #employer #oc-origin:derived-v1
 User joined Acme Corp as a senior engineer.
+<!-- oc-provenance: {"v":1,"sources":[{"kind":"memory_entry","id":"20260420-1630-3f0e99","path":"user-profile.md","timestamp":"2026-04-20T16:30:05+08:00","content_hash":"<sha256>"}]} -->
 ```
 
 ### Frontmatter fields
@@ -71,6 +72,23 @@ Hand-editing frontmatter is allowed; run `rebuild-index` afterward to sync the F
 - **Id.** `YYYYMMDD-HHMM` + 6 hex chars from `blake2s(os.urandom(8), digest_size=3)`. Collision probability <0.1% even under heavy batched writes within the same minute.
 - **Tags.** 1–3 per entry, hashtag-style. Indexed for `read_memory(tags=...)` and `search`.
 
+### Origin marker and legacy migration
+
+Every canonical entry heading also carries exactly one reserved trust marker:
+
+- `#oc-origin:manual-v1` — an explicit local, human-authored trust root;
+- `#oc-origin:automation-v1` — automation output without evidence ancestry;
+- `#oc-origin:derived-v1` — output with a canonical `oc-provenance` frame.
+
+The marker remains visible in Markdown but is removed from user-facing tags and
+tag search. Application writes set it automatically. For hand-written entries,
+add `#oc-origin:manual-v1` to the heading and run `rebuild-index`. An unmarked
+legacy entry, a duplicate/unknown origin marker, and an automation entry without
+live provenance are deliberately absent from MCP, desktop, snapshot, and model
+inputs. An empty or fully quarantined file does not expose its path or
+frontmatter through those surfaces. This explicit marker prevents a lost
+provenance frame from silently turning model output into trusted local memory.
+
 ### Body
 
 1–3 sentences. Self-contained — a reader should understand the fact without the surrounding entries. See `prompts/schema.md` for tense / subject-clarity rules.
@@ -90,9 +108,22 @@ Nothing is deleted. The timeline is intact, and `read_memory` / `search` with `i
 
 ## Compaction
 
-When a file's entry count gets large, the writer can flag it with `flag_compact`. The compact stage rewrites the file to preserve the *facts* while reducing tokens — e.g., by merging multiple supersedes into a single "current state" + historical note.
+When a file's entry count gets large, the writer can flag it with `flag_compact`.
+The compact stage accepts only non-empty files made entirely of explicit
+`manual-v1` entries. Automation, unmarked legacy, invalid-origin, and any
+provenance-bearing file is refused before provider egress.
 
-A regex-based fact-preservation check rejects any rewrite that drops >5% of unique noun phrases. Rejected rewrites leave the file flagged for manual review; they never silently lose information.
+For an eligible file, the compact stage may rewrite entry bodies to preserve the
+*facts* while reducing tokens. Entry IDs, timestamps, count, order, origin
+markers, and provenance-free status must remain exact. Local frontmatter is
+authoritative and cannot be replaced by model output; only `needs_compact` is
+cleared after a successful write.
+
+A regex-based fact-preservation check rejects any rewrite that drops >5% of
+unique noun phrases. Canonical parsing also drops unframed model text. The
+writeback compares the file with the exact pre-call snapshot, so an external
+edit causes a retry rather than an overwrite. Rejected rewrites leave the file
+flagged for manual review; they never silently lose information.
 
 Trigger knobs live in `[writer]`:
 

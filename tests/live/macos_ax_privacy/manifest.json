@@ -1,0 +1,50 @@
+{
+  "report_schema_version": 1,
+  "minimum_marker_counts": {
+    "control": 2,
+    "forbidden": 3
+  },
+  "required_checks": [
+    "fixture_ready",
+    "two_visible_windows",
+    "focused_window_scoped_ax",
+    "scheduler_exact_identity_capture",
+    "url_metadata_only_persisted",
+    "exact_window_screenshot_verified",
+    "exact_window_public_color_observed",
+    "exact_window_sibling_color_absent",
+    "secure_text_redacted",
+    "normal_text_observed",
+    "url_like_marker_observed",
+    "excluded_title_denied_before_capture",
+    "excluded_url_denied_before_capture",
+    "rapid_focus_fail_closed",
+    "helper_permission_denial_content_fail_closed",
+    "helper_crash_content_fail_closed",
+    "screenshots_remained_disabled",
+    "timeline_prompt_observed",
+    "session_prompt_observed",
+    "classifier_prompt_observed",
+    "forbidden_markers_absent_from_sinks"
+  ],
+  "required_sinks": [
+    "capture_json",
+    "logs",
+    "sqlite_capture_fts",
+    "timeline",
+    "session",
+    "timeline_prompt",
+    "session_prompt",
+    "classifier_prompt"
+  ],
+  "forbidden_zero_sinks": [
+    "capture_json",
+    "logs",
+    "sqlite_capture_fts",
+    "timeline",
+    "session",
+    "timeline_prompt",
+    "session_prompt",
+    "classifier_prompt"
+  ]
+}

@@ -59,6 +59,24 @@ def create_file(
     tags: list[str],
     owner_candidate_id: str | None = None,
 ) -> Path:
+    with files_mod.review_operation_lock():
+        return _create_file_locked(
+            conn,
+            name=name,
+            description=description,
+            tags=tags,
+            owner_candidate_id=owner_candidate_id,
+        )
+
+
+def _create_file_locked(
+    conn: sqlite3.Connection,
+    *,
+    name: str,
+    description: str,
+    tags: list[str],
+    owner_candidate_id: str | None,
+) -> Path:
     require_autocommit(conn)
     if not description.strip():
         raise ValueError("description is required")
@@ -106,16 +124,19 @@ def append_entry(
     content: str,
     tags: list[str],
     soft_limit_tokens: int | None = None,
+    origin: str = files_mod.AUTOMATION_ENTRY_ORIGIN,
 ) -> str:
     """Append a new entry, returning its id."""
-    entry_id, _created = _append_entry(
-        conn,
-        name=name,
-        content=content,
-        tags=tags,
-        soft_limit_tokens=soft_limit_tokens,
-        requested_id=None,
-    )
+    with files_mod.review_operation_lock():
+        entry_id, _created = _append_entry(
+            conn,
+            name=name,
+            content=content,
+            tags=tags,
+            soft_limit_tokens=soft_limit_tokens,
+            requested_id=None,
+            origin=origin,
+        )
     return entry_id
 
 
@@ -128,6 +149,7 @@ def append_entry_once(
     entry_id: str,
     evidence_refs: list[EvidenceRef] | None = None,
     soft_limit_tokens: int | None = None,
+    origin: str = files_mod.AUTOMATION_ENTRY_ORIGIN,
 ) -> tuple[str, bool]:
     """Append a deterministic entry once and repair a missing FTS row.
 
@@ -146,6 +168,7 @@ def append_entry_once(
             soft_limit_tokens=soft_limit_tokens,
             requested_id=entry_id,
             evidence_refs=evidence_refs,
+            origin=origin,
         )
 
 
@@ -158,6 +181,7 @@ def _append_entry(
     soft_limit_tokens: int | None,
     requested_id: str | None,
     evidence_refs: list[EvidenceRef] | None = None,
+    origin: str,
 ) -> tuple[str, bool]:
     require_autocommit(conn)
     path = files_mod.memory_path(name)
@@ -173,7 +197,20 @@ def _append_entry(
         conn, kind="memory_entry", artifact_id=entry_id, path=path.name
     ):
         raise RuntimeError(f"entry {entry_id} is pending permanent purge")
-    heading = files_mod.render_heading(timestamp=ts, entry_id=entry_id, tags=tags)
+    effective_origin = (
+        files_mod.DERIVED_ENTRY_ORIGIN if evidence_refs else origin
+    )
+    if effective_origin not in {
+        files_mod.MANUAL_ENTRY_ORIGIN,
+        files_mod.AUTOMATION_ENTRY_ORIGIN,
+        files_mod.DERIVED_ENTRY_ORIGIN,
+    }:
+        raise ValueError("invalid memory entry origin")
+    heading = files_mod.render_heading(
+        timestamp=ts,
+        entry_id=entry_id,
+        tags=[*tags, f"{files_mod.ENTRY_ORIGIN_TAG_PREFIX}{effective_origin}"],
+    )
     body = content.strip()
     files_mod.validate_entry_body(body)
     if any(not tag or any(char.isspace() for char in tag) for tag in tags):
@@ -230,8 +267,8 @@ def _append_entry(
                         prefix=prefix,
                         timestamp=existing.timestamp,
                         tags=" ".join(existing.tags),
-                        content=existing.body,
-                        superseded=0,
+                        content=entry_index_content(existing),
+                        superseded=entry_index_superseded(existing),
                     )
                 if evidence_refs is not None:
                     provenance_store.replace_sources(
@@ -275,6 +312,11 @@ def _append_entry(
                     soft_limit_tokens,
                 )
 
+        indexed_entry = next(
+            entry
+            for entry in reversed(files_mod._parse_entries(post.content))
+            if entry.id == entry_id
+        )
         files_mod.atomic_write_text(path, frontmatter.dumps(post) + "\n")
 
         # Update FTS inside the lock too — a concurrent appender that
@@ -286,10 +328,10 @@ def _append_entry(
             id=entry_id,
             path=path.name,
             prefix=prefix,
-            timestamp=ts,
-            tags=" ".join(tags),
-            content=body,
-            superseded=0,
+            timestamp=indexed_entry.timestamp,
+            tags=" ".join(indexed_entry.tags),
+            content=entry_index_content(indexed_entry),
+            superseded=entry_index_superseded(indexed_entry),
         )
         if evidence_refs is not None:
             provenance_store.replace_sources(
@@ -586,7 +628,12 @@ def _supersede_entry_locked(
         new_id = make_id(ts)
 
         new_heading = files_mod.render_heading(
-            timestamp=ts, entry_id=new_id, tags=tags or target.tags
+            timestamp=ts,
+            entry_id=new_id,
+            tags=[
+                *(tags or target.tags),
+                f"{files_mod.ENTRY_ORIGIN_TAG_PREFIX}{files_mod.DERIVED_ENTRY_ORIGIN}",
+            ],
         )
 
         # Modify file text directly to preserve formatting
@@ -638,20 +685,37 @@ def _supersede_entry_locked(
         post = frontmatter.loads(text)
         post.metadata["entry_count"] = int(post.metadata.get("entry_count", 0)) + 1
         post.metadata["updated"] = files_mod.today()
+        updated_entries = files_mod._parse_entries(post.content)
+        updated_target = next(
+            entry
+            for entry in updated_entries
+            if entry.id == old_entry_id
+        )
+        replacement = next(
+            entry for entry in reversed(updated_entries) if entry.id == new_id
+        )
         files_mod.atomic_write_text(path, frontmatter.dumps(post) + "\n")
 
         # FTS
-        fts.mark_superseded(conn, old_entry_id)
         prefix = _ensure_prefix(name)
+        fts.mark_superseded(
+            conn,
+            old_entry_id,
+            path=path.name,
+            prefix=prefix,
+            timestamp=updated_target.timestamp,
+            tags=" ".join(updated_target.tags),
+            content=entry_index_content(updated_target),
+        )
         fts.insert_entry(
             conn,
             id=new_id,
             path=path.name,
             prefix=prefix,
-            timestamp=ts,
-            tags=" ".join(tags or target.tags),
-            content=body,
-            superseded=0,
+            timestamp=replacement.timestamp,
+            tags=" ".join(replacement.tags),
+            content=entry_index_content(replacement),
+            superseded=entry_index_superseded(replacement),
         )
         provenance_store.replace_sources(
             conn,
@@ -741,7 +805,6 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
                     ):
                         deferred.append((path, prefix, e))
                         continue
-                    superseded = 1 if (e.superseded_by or _body_is_striked(e.body)) else 0
                     fts.insert_entry(
                         conn,
                         id=e.id,
@@ -749,8 +812,8 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
                         prefix=prefix,
                         timestamp=e.timestamp,
                         tags=" ".join(e.tags),
-                        content=_strip_strike(e.body),
-                        superseded=superseded,
+                        content=entry_index_content(e),
+                        superseded=entry_index_superseded(e),
                     )
                     provenance_store.record_sources(
                         conn,
@@ -895,6 +958,25 @@ def _body_is_striked(body: str) -> bool:
 
 def _strip_strike(body: str) -> str:
     return _STRIKE_RE.sub(r"\1", body)
+
+
+def entry_index_content(entry: files_mod.ParsedEntry) -> str:
+    """Return the deterministic FTS content projection for one Markdown entry.
+
+    Supersession wraps the complete old body in ``~~`` while intentionally
+    retaining the original searchable text in FTS.  Inline Markdown strikeout
+    in an otherwise-current body is ordinary user content and must not be
+    rewritten by an index rebuild.
+    """
+    stripped = entry.body.strip()
+    if _body_is_striked(entry.body):
+        return stripped[2:-2]
+    return entry.body
+
+
+def entry_index_superseded(entry: files_mod.ParsedEntry) -> int:
+    """Return the canonical integer projection for FTS supersession state."""
+    return 1 if (entry.superseded_by or _body_is_striked(entry.body)) else 0
 
 
 def write_preset_files(conn: sqlite3.Connection) -> None:
