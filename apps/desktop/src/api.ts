@@ -43,9 +43,7 @@ const wrapCategories: WrapCategory[] = [
   "needs_review",
 ];
 const dailyWrapStatuses = new Set<DailyWrap["status"]>([
-  "running",
   "succeeded",
-  "failed",
 ]);
 const dailyWrapCoverageStatuses = new Set<DailyWrap["coverage_status"]>([
   "ready",
@@ -231,7 +229,6 @@ function wrapPayload(value: unknown): DailyWrap {
     dailyWrapCoverageStatuses,
     "Daily Wrap coverage status",
   );
-  const completedAt = raw.completed_at === null ? null : optionalString(raw.completed_at, "Daily Wrap completion time");
   return {
     id: stringValue(raw.id, "Daily Wrap id"),
     local_date: stringValue(raw.local_date, "Daily Wrap local date"),
@@ -239,11 +236,9 @@ function wrapPayload(value: unknown): DailyWrap {
     scope: stringValue(raw.scope, "Daily Wrap scope"),
     status,
     coverage_status: coverage,
-    attempt_count: numberValue(raw.attempt_count, "Daily Wrap attempt count"),
     revision: numberValue(raw.revision, "Daily Wrap revision"),
-    updated_at: stringValue(raw.updated_at, "Daily Wrap updated time"),
-    ...(completedAt === undefined ? {} : { completed_at: completedAt }),
-    last_error: optionalString(raw.last_error, "Daily Wrap error") ?? "",
+    published_input_digest:
+      optionalString(raw.published_input_digest, "Daily Wrap published digest") ?? "",
     output: wrapOutput(raw.output),
   };
 }
@@ -337,7 +332,6 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
       status,
       coverage_status: coverage,
       revision,
-      updated_at: stringValue(item.updated_at, "Daily Wrap summary updated time"),
       has_output: revision > 0,
       item_counts: itemCounts,
     };

@@ -55,6 +55,19 @@ class CaptureConfig:
     excluded_bundle_ids: list[str] = field(default_factory=list)
     excluded_app_names: list[str] = field(default_factory=list)
     excluded_window_title_patterns: list[str] = field(default_factory=list)
+    # URL config and supported-browser eligibility run before AX; candidate
+    # evaluation runs on the ephemeral structured tree. Despite the ``patterns``
+    # name these are bounded literals, never regular expressions: bare host
+    # names match that host and its subdomains and full URLs use a component-
+    # boundary prefix. Allow rules accept only those two safe forms; exclusion
+    # rules additionally accept conservative case-insensitive substrings. Empty
+    # lists preserve capture defaults. Once either list is non-empty, only a
+    # supported browser family is eligible: policy requires one explicit
+    # HTTP(S) address from an exact stable AX identifier, and scans the full AX
+    # tree as an additional deny surface. Unknown/non-browser bundles fail
+    # before AX. Successful observations retain URL/identity metadata only.
+    allowed_url_patterns: list[str] = field(default_factory=list)
+    excluded_url_patterns: list[str] = field(default_factory=list)
     deny_unknown_windows: bool = True
     # Screenshots duplicate substantially more context than structured AX and
     # are not consumed by the current memory pipeline, so opt in explicitly.
@@ -286,14 +299,16 @@ min_capture_gap_seconds = 2.0 # minimum gap between consecutive captures
 dedup_interval_seconds = 1.0  # per-event-type dedup window
 same_window_dedup_seconds = 5.0  # don't re-capture the same bundle+window unless 5s have passed (or it's a focus change)
 buffer_retention_hours = 168           # 7 days; stale absorbed captures past this are deleted
-screenshot_retention_hours = 24        # after 24h, strip screenshot (77% of bytes) but keep AX+text
+screenshot_retention_hours = 24        # normal captures: strip screenshot after 24h; URL-policy captures never have one
 buffer_max_mb = 2000                   # best-effort target over absorbed files (0 to disable)
 allowed_bundle_ids = []                # non-empty = capture only these bundle IDs
 excluded_bundle_ids = []               # exact, case-insensitive
 excluded_app_names = []                # exact, case-insensitive
 excluded_window_title_patterns = []    # substring, case-insensitive
+allowed_url_patterns = []              # known-browser stable-ID URL literals; non-empty requires a match (not regex/glob)
+excluded_url_patterns = []             # exclusions win; active URL policy persists URL/identity metadata only
 deny_unknown_windows = true            # fail closed when active app identity is unavailable
-include_screenshot = false             # opt in; screenshots are not used downstream today
+include_screenshot = false             # opt in only without URL policy; URL-policy captures never include pixels
 screenshot_max_width = 1920
 screenshot_jpeg_quality = 80
 ax_depth = 100                # Electron apps (Claude Desktop, VS Code, Slack) have deep DOM; 8 only reaches the chrome

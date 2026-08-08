@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from .. import __version__, paths
@@ -10,11 +12,19 @@ from ..capture import store_lock as capture_store
 from ..config import Config
 from ..daily_wrap.service import DailyWrapService
 from ..memory_candidates import store as candidate_store
+from ..privacy import policy as privacy_policy
+from ..privacy.egress import privacy_egress_fenced
+from ..provenance import store as provenance_store
+from ..provenance.models import EvidenceRef
+from ..services.context import ContextService
+from ..services.evidence import EvidenceResolver
 from ..services.memory import MemoryService
+from ..store import files as files_store
 from ..store import fts
 from ..timeline import store as timeline_store
 
 
+@privacy_egress_fenced
 def build_snapshot(
     conn,
     cfg: Config,
@@ -33,44 +43,139 @@ def build_snapshot(
     pid = cli_mod._read_pid()
     paused = paths.paused_flag().exists()
     with capture_store.capture_store_lock():
-        recent_captures = fts.recent_captures(conn, limit=1)
-        capture_count = int(conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0])
-    last_capture = recent_captures[0] if recent_captures else None
+        indexed_capture_count = int(
+            conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0]
+        )
+        recent_captures = (
+            fts.recent_captures(conn, limit=indexed_capture_count)
+            if indexed_capture_count
+            else []
+        )
+        authorized_captures = [
+            row for row in recent_captures if _capture_row_allowed(conn, cfg, row)
+        ]
+    capture_count = len(authorized_captures)
+    last_capture = authorized_captures[0] if authorized_captures else None
     last_timestamp = last_capture.timestamp if last_capture else None
     health, _style = cli_mod._health_status(pid, last_timestamp)
 
     conn.execute("BEGIN")
     try:
-        session_row = conn.execute(
-            """
-            SELECT COUNT(*) AS total,
-                   SUM(status='active') AS active,
-                   SUM(status='ended') AS ended,
-                   SUM(status='reduced') AS reduced,
-                   SUM(status='failed') AS failed
-              FROM sessions
-            """
-        ).fetchone()
-        file_rows = [
+        context = ContextService(conn, cfg)
+        visible_sessions = [
             row
-            for row in fts.list_files(conn, include_dormant=True, include_archived=True)
-            if not candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=row.path)
+            for row in conn.execute("SELECT * FROM sessions").fetchall()
+            if _session_allowed(conn, context, str(row["id"]))
         ]
-        entry_count = int(conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0])
-        timeline_count = int(conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0])
-        timeline = timeline_store.query_recent(conn, limit=timeline_limit) if timeline_limit else []
-        candidate_counts = {
-            str(row["status"]): int(row["count"])
-            for row in conn.execute(
-                "SELECT status, COUNT(*) AS count FROM memory_candidates GROUP BY status"
-            ).fetchall()
+        session_counts = {
+            "total": len(visible_sessions),
+            **{
+                status: sum(str(row["status"]) == status for row in visible_sessions)
+                for status in ("active", "ended", "reduced", "failed")
+            },
+        }
+        memory_counts = {
+            "active_files": 0,
+            "dormant_files": 0,
+            "archived_files": 0,
+            "entries": 0,
+        }
+        for file_row in fts.list_files(
+            conn, include_dormant=True, include_archived=True
+        ):
+            if candidate_store.is_tombstoned(
+                conn, kind="memory_file", artifact_id=file_row.path
+            ):
+                continue
+            try:
+                parsed = files_store.read_file(
+                    files_store.memory_path(file_row.path)
+                )
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+            if not context.memory_file_metadata_allowed(parsed):
+                continue
+            visible_entries = [
+                entry
+                for entry in parsed.entries
+                if not candidate_store.is_tombstoned(
+                    conn,
+                    kind="memory_entry",
+                    artifact_id=entry.id,
+                    path=parsed.path.name,
+                )
+                and context.memory_entry_allowed(
+                    path=parsed.path.name, entry=entry
+                )
+            ]
+            if not visible_entries:
+                continue
+            status_key = f"{file_row.status}_files"
+            if status_key in memory_counts:
+                memory_counts[status_key] += 1
+            memory_counts["entries"] += len(visible_entries)
+        raw_timeline_count = int(
+            conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
+        )
+        visible_timeline = (
+            [
+                block
+                for block in timeline_store.query_recent(
+                    conn, limit=raw_timeline_count
+                )
+                if context.evidence_allowed(
+                    EvidenceRef(kind="timeline_block", id=block.id)
+                )
+            ]
+            if raw_timeline_count
+            else []
+        )
+        timeline_count = len(visible_timeline)
+        timeline = (
+            visible_timeline[-timeline_limit:]
+            if timeline_limit
+            else []
+        )
+        resolver = EvidenceResolver(conn, cfg)
+        all_candidate_rows = conn.execute(
+            "SELECT id, status FROM memory_candidates"
+        ).fetchall()
+        visible_candidate_ids = {
+            str(row["id"])
+            for row in all_candidate_rows
+            if resolver.resolve(
+                EvidenceRef(kind="memory_candidate", id=str(row["id"]))
+            )["status"]
+            == "current"
         }
         candidates = (
-            candidate_store.list_review_snapshot(conn, limit=candidate_limit)
+            [
+                candidate
+                for candidate in candidate_store.list_review_snapshot(
+                    conn, limit=1_000
+                )
+                if candidate.id in visible_candidate_ids
+            ][:candidate_limit]
             if candidate_limit
             else []
         )
-        wraps = DailyWrapService(conn, cfg).list(limit=wrap_limit) if wrap_limit else []
+        candidate_counts = {
+            status: sum(
+                str(row["status"]) == status
+                and str(row["id"]) in visible_candidate_ids
+                for row in all_candidate_rows
+            )
+            for status in candidate_store.VALID_STATUSES
+        }
+        wraps = (
+            [
+                row
+                for row in DailyWrapService(conn, cfg).list(limit=365)
+                if context.daily_wrap_allowed(row.id, expected_row=row)
+            ][:wrap_limit]
+            if wrap_limit
+            else []
+        )
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -113,15 +218,10 @@ def build_snapshot(
         },
         "counts": {
             "sessions": {
-                key: int(session_row[key] or 0)
+                key: int(session_counts[key])
                 for key in ("total", "active", "ended", "reduced", "failed")
             },
-            "memory": {
-                "active_files": sum(row.status == "active" for row in file_rows),
-                "dormant_files": sum(row.status == "dormant" for row in file_rows),
-                "archived_files": sum(row.status == "archived" for row in file_rows),
-                "entries": entry_count,
-            },
+            "memory": memory_counts,
             "timeline_blocks": timeline_count,
             "candidates": {
                 status: candidate_counts.get(status, 0)
@@ -163,6 +263,29 @@ def build_snapshot(
     }
 
 
+def _session_allowed(conn, context: ContextService, session_id: str) -> bool:
+    """Expose session status only through a current, policy-allowed entry."""
+    for dependent in provenance_store.direct_dependents(
+        conn, EvidenceRef(kind="session", id=session_id)
+    ):
+        if dependent.kind != "memory_entry" or not dependent.path:
+            continue
+        try:
+            parsed = files_store.read_file(
+                files_store.memory_path(dependent.path)
+            )
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        entry = next(
+            (item for item in parsed.entries if item.id == dependent.id), None
+        )
+        if entry is not None and context.memory_entry_allowed(
+            path=dependent.path, entry=entry
+        ):
+            return True
+    return False
+
+
 def _wrap_summary(row) -> dict[str, Any]:
     output = row.output if isinstance(row.output, dict) else {}
     return {
@@ -170,7 +293,7 @@ def _wrap_summary(row) -> dict[str, Any]:
         "local_date": str(row.local_date)[:10],
         "timezone": str(row.timezone)[:100],
         "scope": str(row.scope)[:100],
-        "status": str(row.status)[:50],
+        "status": "succeeded",
         "coverage_status": str(row.coverage_status)[:50],
         "revision": row.revision,
         "summary": str(output.get("summary") or "")[:500],
@@ -178,9 +301,59 @@ def _wrap_summary(row) -> dict[str, Any]:
             category: len(output.get(category, [])) if isinstance(output.get(category), list) else 0
             for category in ("completed", "progressed", "open", "blocked", "needs_review")
         },
-        "updated_at": str(row.updated_at)[:100],
-        "completed_at": str(row.completed_at)[:100] if row.completed_at else None,
     }
+
+
+def _capture_row_allowed(conn, cfg: Config, row) -> bool:
+    """Authenticate one index row against its JSON and current policy."""
+    if (
+        not isinstance(row.id, str)
+        or not row.id
+        or Path(row.id).name != row.id
+        or candidate_store.is_tombstoned(
+            conn, kind="capture_file", artifact_id=f"{row.id}.json"
+        )
+    ):
+        return False
+    capture_path = paths.capture_buffer_dir() / f"{row.id}.json"
+    if capture_path.is_symlink() or not capture_path.is_file():
+        return False
+    try:
+        data = json.loads(
+            capture_path.read_text(encoding="utf-8")
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    if (
+        not isinstance(data, dict)
+        or not privacy_policy.evaluate_stored_observation(
+            cfg.capture, observation=data
+        ).allowed
+    ):
+        return False
+    meta = data.get("window_meta")
+    focused = data.get("focused_element")
+    meta = meta if isinstance(meta, dict) else {}
+    focused = focused if isinstance(focused, dict) else {}
+
+    def text(value: object) -> str:
+        return value if isinstance(value, str) else ""
+
+    return (
+        row.observation_id == text(data.get("observation_id"))
+        and row.timestamp == text(data.get("timestamp"))
+        and row.app_name == text(meta.get("app_name"))
+        and row.bundle_id == text(meta.get("bundle_id"))
+        and row.window_title == text(meta.get("title"))
+        and row.focused_role == text(focused.get("role"))
+        and row.focused_value == text(focused.get("value"))
+        and row.url == text(data.get("url"))
+        and fts.get_capture_visible_text(conn, row.id)
+        == text(data.get("visible_text"))
+        and not candidate_store.is_tombstoned(
+            conn, kind="capture_file", artifact_id=f"{row.id}.json"
+        )
+    )
 
 
 def _bounded_config_list(value: object, *, max_length: int = 300) -> list[str]:

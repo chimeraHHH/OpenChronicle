@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -8,13 +9,82 @@ import pytest
 
 from openchronicle import config as config_mod
 from openchronicle import paths
+from openchronicle.provenance import store as provenance_store
+from openchronicle.provenance.models import (
+    EvidenceRef,
+    observation_digest,
+    timeline_block_digest,
+)
 from openchronicle.session import store as session_store
+from openchronicle.store import files as files_mod
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
 from openchronicle.writer import session_reducer
 
 _TZ = timezone(timedelta(hours=8))
 _SID = "sess_test0000"
+
+
+def _unrestricted_cfg(ac_root: Path) -> config_mod.Config:
+    cfg = config_mod.load(ac_root / "config.toml")
+    cfg.capture.deny_unknown_windows = False
+    return cfg
+
+
+def _block_ref(block: timeline_store.TimelineBlock) -> EvidenceRef:
+    return EvidenceRef(
+        kind="timeline_block",
+        id=block.id,
+        timestamp=block.start_time.isoformat(),
+        content_hash=timeline_block_digest(
+            start=block.start_time.isoformat(),
+            end=block.end_time.isoformat(),
+            entries=block.entries,
+            apps=block.apps_used,
+        ),
+    )
+
+
+def _insert_live_block(
+    conn,
+    block: timeline_store.TimelineBlock,
+) -> timeline_store.TimelineBlock:
+    """Persist a block with current raw-observation ancestry."""
+    capture_name = f"{block.id}.json"
+    observation_id = "obs_" + hashlib.blake2s(
+        block.id.encode(), digest_size=16
+    ).hexdigest()
+    visible_text = "\n".join(block.entries)
+    app_name = block.apps_used[0] if block.apps_used else "Editor"
+    capture = {
+        "timestamp": block.start_time.isoformat(),
+        "schema_version": 4,
+        "observation_id": observation_id,
+        "window_meta": {
+            "app_name": app_name,
+            "bundle_id": "com.example.editor",
+            "title": "Reducer provenance fixture",
+        },
+        "focused_element": {"role": "AXTextArea", "value": visible_text},
+        "visible_text": visible_text,
+        "url": "",
+    }
+    capture_path = paths.capture_buffer_dir() / capture_name
+    capture_path.write_text(json.dumps(capture), encoding="utf-8")
+    observation = EvidenceRef(
+        kind="observation",
+        id=observation_id,
+        path=capture_name,
+        timestamp=block.start_time.isoformat(),
+        content_hash=observation_digest(capture),
+    )
+    timeline_store.insert(conn, block)
+    provenance_store.replace_sources(
+        conn,
+        subject=EvidenceRef(kind="timeline_block", id=block.id),
+        sources=[observation],
+    )
+    return block
 
 
 def test_attach_drill_down_breadcrumb_unit() -> None:
@@ -50,7 +120,7 @@ def _seed_blocks(start: datetime) -> list[timeline_store.TimelineBlock]:
                 apps_used=["Cursor"],
                 capture_count=6,
             )
-            timeline_store.insert(conn, b)
+            _insert_live_block(conn, b)
             bs.append(b)
     return bs
 
@@ -58,7 +128,7 @@ def _seed_blocks(start: datetime) -> list[timeline_store.TimelineBlock]:
 def test_reducer_happy_path_writes_event_daily(ac_root: Path, monkeypatch) -> None:
     start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
     end = start + timedelta(minutes=15)
-    _seed_blocks(start)
+    blocks = _seed_blocks(start)
 
     with fts.cursor() as conn:
         session_store.insert(
@@ -79,7 +149,7 @@ def test_reducer_happy_path_writes_event_daily(ac_root: Path, monkeypatch) -> No
         ),
     )
 
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     result = session_reducer.reduce_session(
         cfg, session_id=_SID, start_time=start, end_time=end,
     )
@@ -98,6 +168,11 @@ def test_reducer_happy_path_writes_event_daily(ac_root: Path, monkeypatch) -> No
     assert 'raw: read_recent_capture(at="10:00", app_name="Cursor")' in md
     # The result list also carries it.
     assert any('read_recent_capture(at="10:00"' in s for s in result.sub_tasks)
+
+    parsed = files_mod.read_file(paths.memory_dir() / result.path)
+    generated = next(entry for entry in parsed.entries if entry.id == result.entry_id)
+    assert generated.evidence_refs == [_block_ref(block) for block in blocks]
+    assert all(ref.kind != "session" for ref in generated.evidence_refs)
 
     with fts.cursor() as conn:
         row = session_store.get_by_id(conn, _SID)
@@ -118,7 +193,7 @@ def test_reducer_no_blocks_marks_reduced_no_write(ac_root: Path, monkeypatch) ->
         timeline_store.advance_processed_through(conn, end, window_start=start)
 
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     result = session_reducer.reduce_session(
         cfg, session_id="sess_empty", start_time=start, end_time=end,
     )
@@ -142,7 +217,7 @@ def test_terminal_reduce_includes_block_straddling_exact_session_end(
     session_end = block_start + timedelta(seconds=50)
     session_id = "sess_partial_terminal"
     with fts.cursor() as conn:
-        timeline_store.insert(
+        _insert_live_block(
             conn,
             timeline_store.TimelineBlock(
                 start_time=block_start,
@@ -173,7 +248,7 @@ def test_terminal_reduce_includes_block_straddling_exact_session_end(
 
     monkeypatch.setattr(session_reducer, "_call_reducer_llm", payload)
     result = session_reducer.reduce_session(
-        config_mod.load(ac_root / "config.toml"),
+        _unrestricted_cfg(ac_root),
         session_id=session_id,
         start_time=session_start,
         end_time=session_end,
@@ -187,6 +262,53 @@ def test_terminal_reduce_includes_block_straddling_exact_session_end(
     with fts.cursor() as conn:
         row = session_store.get_by_id(conn, session_id)
     assert row is not None and row.status == "reduced"
+
+
+def test_tampered_timeline_block_cannot_bridge_terminal_coverage(
+    ac_root: Path,
+) -> None:
+    block_start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
+    session_start = block_start + timedelta(seconds=10)
+    session_end = block_start + timedelta(seconds=50)
+    session_id = "sess_tampered_terminal_bridge"
+    block = timeline_store.TimelineBlock(
+        id="tlb-tampered-terminal-bridge",
+        start_time=block_start,
+        end_time=block_start + timedelta(minutes=1),
+        entries=["[Editor] canonical terminal evidence"],
+        apps_used=["Editor"],
+        capture_count=1,
+    )
+    with fts.cursor() as conn:
+        _insert_live_block(conn, block)
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id=session_id,
+                start_time=session_start,
+                end_time=session_end,
+                status="ended",
+            ),
+        )
+        conn.execute(
+            "UPDATE timeline_blocks SET entries=? WHERE id=?",
+            ('["TAMPERED_TERMINAL_BRIDGE"]', block.id),
+        )
+
+    result = session_reducer.reduce_session(
+        _unrestricted_cfg(ac_root),
+        session_id=session_id,
+        start_time=session_start,
+        end_time=session_end,
+    )
+
+    assert result.written is False
+    assert result.succeeded is False
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, session_id)
+    assert row is not None
+    assert row.status == "ended"
+    assert row.classifier_terminal_noop is False
 
 
 def test_terminal_waits_for_late_timeline_tail_then_pending_retry_writes(
@@ -218,7 +340,7 @@ def test_terminal_waits_for_late_timeline_tail_then_pending_retry_writes(
         }
 
     monkeypatch.setattr(session_reducer, "_call_reducer_llm", payload)
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     deferred = session_reducer.reduce_session(
         cfg,
         session_id=session_id,
@@ -232,7 +354,7 @@ def test_terminal_waits_for_late_timeline_tail_then_pending_retry_writes(
     with fts.cursor() as conn:
         row = session_store.get_by_id(conn, session_id)
         assert row is not None and row.status == "ended"
-        timeline_store.insert(
+        _insert_live_block(
             conn,
             timeline_store.TimelineBlock(
                 start_time=block_start,
@@ -305,7 +427,7 @@ def test_terminal_uses_one_way_watermark_then_blocks_read_order(
         producer_commits_after_watermark_read,
     )
     result = session_reducer.reduce_session(
-        config_mod.load(ac_root / "config.toml"),
+        _unrestricted_cfg(ac_root),
         session_id=session_id,
         start_time=session_start,
         end_time=session_end,
@@ -346,7 +468,7 @@ def test_upper_watermark_cannot_prove_target_at_coverage_start(
         )
 
     result = session_reducer.reduce_session(
-        config_mod.load(ac_root / "config.toml"),
+        _unrestricted_cfg(ac_root),
         session_id=session_id,
         start_time=session_start,
         end_time=session_end,
@@ -366,7 +488,7 @@ def test_active_flush_waits_for_block_that_extends_past_now(
     now = block_start + timedelta(seconds=50)
     session_id = "sess_partial_flush"
     with fts.cursor() as conn:
-        timeline_store.insert(
+        _insert_live_block(
             conn,
             timeline_store.TimelineBlock(
                 start_time=block_start,
@@ -393,7 +515,7 @@ def test_active_flush_waits_for_block_that_extends_past_now(
         ),
     )
     result = session_reducer.flush_active_session(
-        config_mod.load(ac_root / "config.toml"),
+        _unrestricted_cfg(ac_root),
         session_id=session_id,
         session_start=session_start,
         now=now,
@@ -420,7 +542,7 @@ def test_reducer_llm_failure_schedules_retry(ac_root: Path, monkeypatch) -> None
     # Non-JSON output → json.JSONDecodeError in _call_reducer_llm → None → retry.
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK_JSON", "not json at all")
 
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     result = session_reducer.reduce_session(
         cfg, session_id="sess_failing", start_time=start, end_time=end,
     )
@@ -457,7 +579,7 @@ def test_reducer_exhausted_retries_writes_heuristic(ac_root: Path, monkeypatch) 
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK_JSON", "still garbage")
 
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     result = session_reducer.reduce_session(
         cfg, session_id="sess_last_chance", start_time=start, end_time=end,
     )
@@ -488,7 +610,7 @@ def test_reducer_idempotent_on_already_reduced(ac_root: Path, monkeypatch) -> No
         )
 
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     result = session_reducer.reduce_session(
         cfg, session_id="sess_done", start_time=start, end_time=end,
     )
@@ -525,7 +647,7 @@ def test_flush_active_session_writes_partial_entry(
         ),
     )
 
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     result = session_reducer.flush_active_session(
         cfg, session_id="sess_flush1", session_start=start, now=now,
     )
@@ -552,7 +674,7 @@ def test_terminal_reduce_after_flush_covers_trailing_window(
     # Two blocks: 17:00-17:05 (flushed) and 17:05-17:10 (trailing).
     with fts.cursor() as conn:
         for i in range(2):
-            timeline_store.insert(
+            _insert_live_block(
                 conn,
                 timeline_store.TimelineBlock(
                     start_time=start + timedelta(minutes=5 * i),
@@ -588,7 +710,7 @@ def test_terminal_reduce_after_flush_covers_trailing_window(
         ),
     )
 
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     result = session_reducer.reduce_session(
         cfg, session_id="sess_flush2", start_time=start, end_time=end,
     )
@@ -615,17 +737,15 @@ def test_flush_advances_only_to_persisted_block_boundary_and_accepts_late_block(
     session_id = "sess_late_block"
     start = datetime(2026, 4, 21, 18, 0, tzinfo=_TZ)
     first_end = start + timedelta(minutes=1)
+    first_block = timeline_store.TimelineBlock(
+        start_time=start,
+        end_time=first_end,
+        entries=["[Editor] first minute"],
+        apps_used=["Editor"],
+        capture_count=1,
+    )
     with fts.cursor() as conn:
-        timeline_store.insert(
-            conn,
-            timeline_store.TimelineBlock(
-                start_time=start,
-                end_time=first_end,
-                entries=["[Editor] first minute"],
-                apps_used=["Editor"],
-                capture_count=1,
-            ),
-        )
+        _insert_live_block(conn, first_block)
         session_store.insert(
             conn,
             session_store.SessionRow(
@@ -645,7 +765,7 @@ def test_flush_advances_only_to_persisted_block_boundary_and_accepts_late_block(
         }
 
     monkeypatch.setattr(session_reducer, "_call_reducer_llm", record_window)
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     first = session_reducer.flush_active_session(
         cfg,
         session_id=session_id,
@@ -659,17 +779,15 @@ def test_flush_advances_only_to_persisted_block_boundary_and_accepts_late_block(
     assert windows == [(start, first_end)]
 
     late_end = start + timedelta(minutes=5)
+    late_block = timeline_store.TimelineBlock(
+        start_time=first_end,
+        end_time=late_end,
+        entries=["[Editor] late materialized block"],
+        apps_used=["Editor"],
+        capture_count=4,
+    )
     with fts.cursor() as conn:
-        timeline_store.insert(
-            conn,
-            timeline_store.TimelineBlock(
-                start_time=first_end,
-                end_time=late_end,
-                entries=["[Editor] late materialized block"],
-                apps_used=["Editor"],
-                capture_count=4,
-            ),
-        )
+        _insert_live_block(conn, late_block)
 
     second = session_reducer.flush_active_session(
         cfg,
@@ -684,6 +802,16 @@ def test_flush_advances_only_to_persisted_block_boundary_and_accepts_late_block(
     assert row is not None and row.flush_end == late_end
     markdown = (paths.memory_dir() / "event-2026-04-21.md").read_text()
     assert markdown.count(f"Session {session_id} [flush]") == 2
+    parsed = files_mod.read_file(paths.memory_dir() / "event-2026-04-21.md")
+    first_entry = next(entry for entry in parsed.entries if entry.id == first.entry_id)
+    second_entry = next(entry for entry in parsed.entries if entry.id == second.entry_id)
+    assert first_entry.evidence_refs == [_block_ref(first_block)]
+    assert second_entry.evidence_refs[0] == _block_ref(late_block)
+    assert [(ref.kind, ref.id) for ref in second_entry.evidence_refs] == [
+        ("timeline_block", late_block.id),
+        ("memory_entry", first.entry_id),
+    ]
+    assert all(ref.kind != "session" for ref in second_entry.evidence_refs)
 
 
 def test_flush_crash_replay_recovers_watermark_without_second_llm(
@@ -694,7 +822,7 @@ def test_flush_crash_replay_recovers_watermark_without_second_llm(
     start = datetime(2026, 4, 21, 19, 0, tzinfo=_TZ)
     block_end = start + timedelta(minutes=1)
     with fts.cursor() as conn:
-        timeline_store.insert(
+        _insert_live_block(
             conn,
             timeline_store.TimelineBlock(
                 start_time=start,
@@ -727,7 +855,7 @@ def test_flush_crash_replay_recovers_watermark_without_second_llm(
         raise RuntimeError("simulated process death before flush progress")
 
     monkeypatch.setattr(session_store, "set_flush_end", crash_before_progress)
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     with pytest.raises(RuntimeError, match="simulated process death"):
         session_reducer.flush_active_session(
             cfg,
@@ -784,7 +912,7 @@ def test_retry_due_picks_up_failed_rows(ac_root: Path, monkeypatch) -> None:
         json.dumps({"summary": "recovered", "sub_tasks": ["[15:00-15:15, Cursor] ok, involving —"]}),
     )
 
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     results = session_reducer.retry_due(cfg)
     assert len(results) == 1
     assert results[0].succeeded is True

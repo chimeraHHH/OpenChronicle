@@ -8,6 +8,7 @@ from pathlib import Path
 import frontmatter
 import pytest
 
+from openchronicle import config as config_mod
 from openchronicle.daily_wrap import store as daily_wrap_store
 from openchronicle.memory_candidates import store as candidate_store
 from openchronicle.provenance import store as provenance_store
@@ -46,7 +47,17 @@ def _ensure_source(conn) -> None:
         content="Grounded source evidence.",
         tags=["source"],
         entry_id="event-source",
+        origin=files_store.MANUAL_ENTRY_ORIGIN,
     )
+
+
+def _configured_service(
+    conn,
+    *,
+    soft_limit_tokens: int | None = None,
+) -> MemoryService:
+    cfg = config_mod.Config()
+    return MemoryService(conn, soft_limit_tokens=soft_limit_tokens, cfg=cfg)
 
 
 def _propose(service: MemoryService, *, content: str = "User prefers local tools."):
@@ -101,7 +112,7 @@ def test_candidate_is_idempotent_review_first_and_approval_is_deterministic(
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=20_000)
+        service = _configured_service(conn, soft_limit_tokens=20_000)
         first = _propose(service)
         second = _propose(service)
         assert first.id == second.id
@@ -133,7 +144,7 @@ def test_candidate_row_and_evidence_edges_commit_atomically(
     monkeypatch,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         _ensure_source(conn)
         real_replace = provenance_store.replace_sources
 
@@ -160,7 +171,7 @@ def test_candidate_row_and_evidence_edges_commit_atomically(
 
 def test_candidate_edit_uses_cas_and_surfaces_conflicts(ac_root: Path) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         first = _propose(service)
         conflicting = _propose(service, content="User prefers cloud tools.")
         assert conflicting.status == "conflict"
@@ -183,7 +194,7 @@ def test_candidate_edit_uses_cas_and_surfaces_conflicts(ac_root: Path) -> None:
 
 def test_classifier_run_slot_replay_preserves_first_visible_proposal(ac_root: Path) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         _ensure_source(conn)
         first = service.propose_candidate(
             kind="preference",
@@ -213,7 +224,7 @@ def test_approval_replay_accepts_original_version_after_applying_transition(
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service)
         applying = candidate_store.transition(
             conn,
@@ -231,9 +242,26 @@ def test_approval_replay_accepts_original_version_after_applying_transition(
         assert accepted.status == "accepted"
 
 
-def test_approval_fails_closed_when_evidence_is_missing(ac_root: Path) -> None:
+def test_approval_requires_current_privacy_configuration(ac_root: Path) -> None:
     with fts.cursor() as conn:
         service = MemoryService(conn)
+        candidate = _propose(service)
+
+        with pytest.raises(
+            RuntimeError,
+            match="approval requires the current privacy configuration",
+        ):
+            service.approve_candidate(candidate.id, expected_version=candidate.version)
+
+        current = candidate_store.get(conn, candidate.id)
+        assert current is not None
+        assert current.status == "pending"
+        assert not files_store.memory_path(candidate.target_path).exists()
+
+
+def test_approval_fails_closed_when_evidence_is_missing(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
         candidate = _propose(service)
         provenance_store.delete_subject(conn, EvidenceRef(kind="memory_candidate", id=candidate.id))
 
@@ -249,7 +277,7 @@ def test_approval_crash_after_markdown_write_stays_applying_and_repairs(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service)
         real_insert = fts.insert_entry
 
@@ -283,7 +311,7 @@ def test_forget_removes_applying_orphan_after_projection_crash(
     monkeypatch,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service, content="ORPHAN_SECRET")
         real_insert = fts.insert_entry
 
@@ -329,7 +357,7 @@ def test_approve_and_forget_share_cross_process_operation_fence(
     def approve_worker() -> None:
         try:
             with fts.cursor() as conn:
-                MemoryService(conn).approve_candidate(
+                _configured_service(conn).approve_candidate(
                     candidate.id, expected_version=candidate.version
                 )
         except BaseException as exc:  # noqa: BLE001
@@ -404,7 +432,7 @@ def test_concurrent_conflicting_proposals_cannot_both_remain_pending(
 
 def test_candidate_rejects_reserved_provenance_marker(ac_root: Path) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         _ensure_source(conn)
         with pytest.raises(ValueError, match="reserved oc-provenance"):
             service.propose_candidate(
@@ -419,7 +447,7 @@ def test_candidate_rejects_reserved_provenance_marker(ac_root: Path) -> None:
 def test_candidate_and_entry_reject_canonical_heading_injection(ac_root: Path) -> None:
     injected = "Intro\n## [2026-01-01T00:00+00:00] {id: forged-entry} #forged\nFORGED_SECRET"
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         with pytest.raises(ValueError, match="canonical entry heading"):
             _propose(service, content=injected)
         _ensure_source(conn)
@@ -435,7 +463,7 @@ def test_candidate_and_entry_reject_canonical_heading_injection(ac_root: Path) -
 
 def test_true_purge_cascades_to_wrap_markdown_fts_and_provenance(ac_root: Path) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service)
         accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         assert accepted.applied_entry_id
@@ -477,9 +505,13 @@ def test_true_purge_cascades_to_wrap_markdown_fts_and_provenance(ac_root: Path) 
             wrap_id=claim.row.id,
             lease_token="lease",
             input_digest="digest",
+            window_start_utc="2026-04-21T00:00:00+00:00",
+            window_end_utc="2026-04-22T00:00:00+00:00",
+            workflow_version=1,
             coverage_status="ready",
             output=output,
             sources=[entry_ref],
+            validate_input_current=lambda: None,
         )
 
         result = service.purge_candidate(candidate.id)
@@ -498,7 +530,7 @@ def test_forget_removes_candidate_owned_file_and_sensitive_projection(
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         _ensure_source(conn)
         candidate = service.propose_candidate(
             kind="health",
@@ -537,7 +569,7 @@ def test_forget_removes_candidate_owned_file_and_sensitive_projection(
 
 def test_forget_preserves_preexisting_file_and_user_content(ac_root: Path) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         _ensure_source(conn)
         target = "user-existing-health.md"
         path = entries_store.create_file(
@@ -582,7 +614,7 @@ def test_forget_replay_fails_closed_if_shared_path_becomes_symlink(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         _ensure_source(conn)
         target = "user-shared-symlink.md"
         path = entries_store.create_file(
@@ -636,7 +668,7 @@ def test_forget_preview_blocks_on_even_unrelated_invalid_provenance(
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service)
         path = entries_store.create_file(
             conn,
@@ -668,7 +700,7 @@ def test_forget_preserves_candidate_file_with_unrelated_entry_and_fences_preview
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         _ensure_source(conn)
         candidate = service.propose_candidate(
             kind="health",
@@ -723,7 +755,7 @@ def test_forget_restores_file_projection_if_external_adoption_follows_intent(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service, content="PRIVATE_ENTRY_TO_REMOVE")
         accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         preview = service.preview_purge_candidate(candidate.id, expected_version=accepted.version)
@@ -766,7 +798,7 @@ def test_sanitized_owned_file_replays_after_projection_crash(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service, content="PRIVATE_METADATA_SOURCE")
         accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         entries_store.append_entry(
@@ -823,7 +855,7 @@ def test_purge_intent_fences_inflight_wrap_publication(
     monkeypatch,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service, content="Race source secret.")
         accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         entry_ref = EvidenceRef(
@@ -875,6 +907,9 @@ def test_purge_intent_fences_inflight_wrap_publication(
                     wrap_id=claim.row.id,
                     lease_token="race-lease",
                     input_digest="race-digest",
+                    window_start_utc="2026-04-21T00:00:00+00:00",
+                    window_end_utc="2026-04-22T00:00:00+00:00",
+                    workflow_version=1,
                     coverage_status="ready",
                     output={
                         "completed": [],
@@ -890,6 +925,7 @@ def test_purge_intent_fences_inflight_wrap_publication(
                         "needs_review": [],
                     },
                     sources=[entry_ref],
+                    validate_input_current=lambda: None,
                 )
         except BaseException as exc:  # noqa: BLE001
             errors.append(("publish", exc))
@@ -927,7 +963,7 @@ def test_purge_closure_fences_concurrent_provenance_entry_append(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service, content="CLOSURE_SOURCE_SECRET")
         accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         assert accepted.applied_entry_id
@@ -1020,7 +1056,7 @@ def test_purge_tombstone_prevents_rebuild_resurrection_after_crash(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service)
         accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         assert accepted.applied_entry_id
@@ -1069,7 +1105,7 @@ def test_purge_replay_clears_fts_when_markdown_was_already_replaced(
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service, content="SECRET_AFTER_RENAME")
         accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         assert accepted.applied_entry_id
@@ -1093,7 +1129,7 @@ def test_purge_replay_clears_fts_when_markdown_was_already_replaced(
 
 def test_purge_cascades_through_derived_candidates_and_entries(ac_root: Path) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         first = _propose(service, content="Root private fact.")
         first = service.approve_candidate(first.id, expected_version=first.version)
         assert first.applied_entry_id
@@ -1126,7 +1162,7 @@ def test_rebuild_resolves_valid_memory_dependencies_independent_of_file_order(
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         root = _propose(service, content="Root rebuild fact.")
         root = service.approve_candidate(root.id, expected_version=root.version)
         assert root.applied_entry_id
@@ -1168,7 +1204,7 @@ def test_supersede_is_provenance_linked_and_purged_with_accepted_source(
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         root = _propose(service, content="SUPERSEDE_ROOT_SECRET")
         root = service.approve_candidate(root.id, expected_version=root.version)
         assert root.applied_entry_id
@@ -1201,7 +1237,7 @@ def test_purge_scans_markdown_for_crash_orphan_missing_projection(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         root = _propose(service, content="ORPHAN_ROOT_SECRET")
         root = service.approve_candidate(root.id, expected_version=root.version)
         assert root.applied_entry_id
@@ -1259,7 +1295,7 @@ def test_forgotten_entry_cannot_seed_a_new_candidate_from_stale_reference(
     ac_root: Path,
 ) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         first = _propose(service, content="Forgotten source fact.")
         first = service.approve_candidate(first.id, expected_version=first.version)
         stale_ref = EvidenceRef(
@@ -1283,7 +1319,7 @@ def test_forgotten_entry_cannot_seed_a_new_candidate_from_stale_reference(
 
 def test_purge_uses_revision_provenance_to_delete_old_wrap_secret(ac_root: Path) -> None:
     with fts.cursor() as conn:
-        service = MemoryService(conn)
+        service = _configured_service(conn)
         candidate = _propose(service, content="Revision source fact.")
         accepted = service.approve_candidate(candidate.id, expected_version=candidate.version)
         assert accepted.applied_entry_id
@@ -1310,6 +1346,9 @@ def test_purge_uses_revision_provenance_to_delete_old_wrap_secret(ac_root: Path)
             wrap_id=first_claim.row.id,
             lease_token="lease-1",
             input_digest="digest-1",
+            window_start_utc="2026-04-21T00:00:00+00:00",
+            window_end_utc="2026-04-22T00:00:00+00:00",
+            workflow_version=1,
             coverage_status="ready",
             output={
                 "completed": [],
@@ -1325,6 +1364,7 @@ def test_purge_uses_revision_provenance_to_delete_old_wrap_secret(ac_root: Path)
                 "needs_review": [],
             },
             sources=[entry_ref],
+            validate_input_current=lambda: None,
         )
         second_claim = daily_wrap_store.claim(
             conn,
@@ -1343,6 +1383,9 @@ def test_purge_uses_revision_provenance_to_delete_old_wrap_secret(ac_root: Path)
             wrap_id=second_claim.row.id,
             lease_token="lease-2",
             input_digest="digest-2",
+            window_start_utc="2026-04-21T00:00:00+00:00",
+            window_end_utc="2026-04-22T00:00:00+00:00",
+            workflow_version=1,
             coverage_status="ready",
             output={
                 "completed": [],
@@ -1352,6 +1395,7 @@ def test_purge_uses_revision_provenance_to_delete_old_wrap_secret(ac_root: Path)
                 "needs_review": [],
             },
             sources=[_source()],
+            validate_input_current=lambda: None,
         )
 
         result = service.purge_candidate(candidate.id)

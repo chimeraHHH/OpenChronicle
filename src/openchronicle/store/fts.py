@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS content_generations (
 );
 INSERT OR IGNORE INTO content_generations(scope, generation)
 VALUES ('reducer', 0);
+INSERT OR IGNORE INTO content_generations(scope, generation)
+VALUES ('timeline', 0);
 
 -- Mirrors capture-buffer/*.json S1 fields for keyword search. The JSON file on
 -- disk stays authoritative for screenshots (not duplicated here). Populated
@@ -98,8 +100,11 @@ END;
 class EntryHit:
     id: str
     path: str
+    prefix: str
     timestamp: str
+    tags: str
     content: str
+    superseded: int
     rank: float
 
 
@@ -326,8 +331,25 @@ def insert_entry(
     )
 
 
-def mark_superseded(conn: sqlite3.Connection, entry_id: str) -> None:
-    conn.execute("UPDATE entries SET superseded=1 WHERE id=?", (entry_id,))
+def mark_superseded(
+    conn: sqlite3.Connection,
+    entry_id: str,
+    *,
+    path: str,
+    prefix: str,
+    timestamp: str,
+    tags: str,
+    content: str,
+) -> None:
+    """Update the complete index projection for a superseded entry."""
+    conn.execute(
+        """
+        UPDATE entries
+           SET prefix=?, timestamp=?, tags=?, content=?, superseded=1
+         WHERE id=? AND path=?
+        """,
+        (prefix, timestamp, tags, content, entry_id, path),
+    )
 
 
 def delete_entries_for(conn: sqlite3.Connection, path: str) -> None:
@@ -365,6 +387,7 @@ def search(
     since: str | None = None,
     until: str | None = None,
     top_k: int = 5,
+    offset: int = 0,
     include_superseded: bool = False,
 ) -> list[EntryHit]:
     safe_query = _safe_fts_query(query)
@@ -388,17 +411,21 @@ def search(
         clauses.append("superseded = 0")
 
     sql = (
-        "SELECT id, path, timestamp, content, bm25(entries) AS rank "
-        "FROM entries WHERE " + " AND ".join(clauses) + " ORDER BY rank LIMIT ?"
+        "SELECT id, path, prefix, timestamp, tags, content, superseded, "
+        "       bm25(entries) AS rank "
+        "FROM entries WHERE " + " AND ".join(clauses) + " ORDER BY rank, rowid LIMIT ? OFFSET ?"
     )
-    args.append(top_k)
+    args.extend((top_k, offset))
     rows = conn.execute(sql, args).fetchall()
     return [
         EntryHit(
             id=r["id"],
             path=r["path"],
+            prefix=r["prefix"],
             timestamp=r["timestamp"],
+            tags=r["tags"],
             content=r["content"],
+            superseded=r["superseded"],
             rank=r["rank"],
         )
         for r in rows
@@ -484,6 +511,7 @@ def search_captures(
     until: str | None = None,
     app_name: str | None = None,
     limit: int = 10,
+    offset: int = 0,
 ) -> list[CaptureHit]:
     """BM25 + snippet search over capture S1 fields.
 
@@ -518,9 +546,9 @@ def search_captures(
         "       bm25(captures_fts) AS rank "
         "  FROM captures c "
         "  JOIN captures_fts ON captures_fts.rowid = c.rowid "
-        " WHERE " + " AND ".join(clauses) + " ORDER BY rank LIMIT ?"
+        " WHERE " + " AND ".join(clauses) + " ORDER BY rank, c.rowid LIMIT ? OFFSET ?"
     )
-    args.append(limit)
+    args.extend((limit, offset))
     rows = conn.execute(sql, args).fetchall()
     return [
         CaptureHit(
@@ -547,6 +575,7 @@ def recent_captures(
     until: str | None = None,
     app_name: str | None = None,
     limit: int = 20,
+    offset: int = 0,
 ) -> list[CaptureHit]:
     """Newest-first capture rows without keyword filtering — used by current_context."""
     clauses: list[str] = [
@@ -570,9 +599,9 @@ def recent_captures(
         "SELECT id, observation_id, timestamp, app_name, bundle_id, window_title, "
         "       focused_role, focused_value, url "
         f"  FROM captures {where} "
-        " ORDER BY timestamp DESC LIMIT ?"
+        " ORDER BY timestamp DESC, rowid DESC LIMIT ? OFFSET ?"
     )
-    args.append(limit)
+    args.extend((limit, offset))
     rows = conn.execute(sql, args).fetchall()
     return [
         CaptureHit(
@@ -606,6 +635,7 @@ def recent(
     *,
     since: str | None = None,
     limit: int = 20,
+    offset: int = 0,
     prefix_filter: list[str] | None = None,
     include_superseded: bool = False,
 ) -> list[EntryHit]:
@@ -623,14 +653,22 @@ def recent(
 
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = (
-        f"SELECT id, path, timestamp, content, 0.0 AS rank FROM entries {where} "
-        "ORDER BY timestamp DESC LIMIT ?"
+        f"SELECT id, path, prefix, timestamp, tags, content, superseded, "
+        f"       0.0 AS rank FROM entries {where} "
+        "ORDER BY timestamp DESC, rowid DESC LIMIT ? OFFSET ?"
     )
-    args.append(limit)
+    args.extend((limit, offset))
     rows = conn.execute(sql, args).fetchall()
     return [
         EntryHit(
-            id=r["id"], path=r["path"], timestamp=r["timestamp"], content=r["content"], rank=0.0
+            id=r["id"],
+            path=r["path"],
+            prefix=r["prefix"],
+            timestamp=r["timestamp"],
+            tags=r["tags"],
+            content=r["content"],
+            superseded=r["superseded"],
+            rank=0.0,
         )
         for r in rows
     ]

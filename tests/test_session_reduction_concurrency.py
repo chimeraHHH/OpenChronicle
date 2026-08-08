@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +10,8 @@ from pathlib import Path
 
 from openchronicle import config as config_mod
 from openchronicle import paths
+from openchronicle.provenance import store as provenance_store
+from openchronicle.provenance.models import EvidenceRef, observation_digest
 from openchronicle.session import store as session_store
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
@@ -16,9 +20,57 @@ from openchronicle.writer import session_reducer
 _TZ = timezone(timedelta(hours=8))
 
 
+def _unrestricted_cfg(ac_root: Path) -> config_mod.Config:
+    cfg = config_mod.load(ac_root / "config.toml")
+    cfg.capture.deny_unknown_windows = False
+    return cfg
+
+
+def _insert_live_block(
+    conn,
+    block: timeline_store.TimelineBlock,
+) -> timeline_store.TimelineBlock:
+    """Persist a block with current raw-observation ancestry."""
+    capture_name = f"{block.id}.json"
+    observation_id = "obs_" + hashlib.blake2s(
+        block.id.encode(), digest_size=16
+    ).hexdigest()
+    visible_text = "\n".join(block.entries)
+    app_name = block.apps_used[0] if block.apps_used else "Editor"
+    capture = {
+        "timestamp": block.start_time.isoformat(),
+        "schema_version": 4,
+        "observation_id": observation_id,
+        "window_meta": {
+            "app_name": app_name,
+            "bundle_id": "com.example.editor",
+            "title": "Reducer concurrency provenance fixture",
+        },
+        "focused_element": {"role": "AXTextArea", "value": visible_text},
+        "visible_text": visible_text,
+        "url": "",
+    }
+    capture_path = paths.capture_buffer_dir() / capture_name
+    capture_path.write_text(json.dumps(capture), encoding="utf-8")
+    observation = EvidenceRef(
+        kind="observation",
+        id=observation_id,
+        path=capture_name,
+        timestamp=block.start_time.isoformat(),
+        content_hash=observation_digest(capture),
+    )
+    timeline_store.insert(conn, block)
+    provenance_store.replace_sources(
+        conn,
+        subject=EvidenceRef(kind="timeline_block", id=block.id),
+        sources=[observation],
+    )
+    return block
+
+
 def _seed_session(session_id: str, start: datetime, end: datetime) -> None:
     with fts.cursor() as conn:
-        timeline_store.insert(
+        _insert_live_block(
             conn,
             timeline_store.TimelineBlock(
                 start_time=start,
@@ -66,7 +118,7 @@ def test_concurrent_terminal_reducers_write_session_once(
         return _payload(*args, **kwargs)
 
     monkeypatch.setattr(session_reducer, "_call_reducer_llm", slow_payload)
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     barrier = threading.Barrier(2)
 
     def run_one():
@@ -102,7 +154,7 @@ def test_terminal_reduction_replay_repairs_index_without_duplicate_markdown(
     end = start + timedelta(minutes=5)
     _seed_session(session_id, start, end)
     monkeypatch.setattr(session_reducer, "_call_reducer_llm", _payload)
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
 
     first = session_reducer.reduce_session(
         cfg,
@@ -175,7 +227,7 @@ def test_concurrent_failed_reducers_consume_one_retry(
         return None
 
     monkeypatch.setattr(session_reducer, "_call_reducer_llm", slow_failure)
-    cfg = config_mod.load(ac_root / "config.toml")
+    cfg = _unrestricted_cfg(ac_root)
     barrier = threading.Barrier(3)
 
     def run_one():

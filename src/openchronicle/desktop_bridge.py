@@ -16,16 +16,18 @@ from . import paths
 from .daily_wrap import store as daily_wrap_store
 from .daily_wrap.service import DailyWrapService
 from .memory_candidates import store as candidate_store
+from .privacy.egress import privacy_egress_lock
 from .provenance import store as provenance_store
 from .provenance.models import EvidenceRef
 from .services.capture_control import PauseStateConflict, set_paused
+from .services.context import ContextService
 from .services.evidence import EvidenceResolver
 from .services.memory import MemoryService, PurgeClosureUnverifiable, StalePurgePlan
 from .services.snapshot import build_snapshot
 from .store import files as files_store
 from .store import fts
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_REQUEST_BYTES = 64 * 1024
 
 
@@ -37,7 +39,25 @@ class BridgeError(Exception):
 
 
 def handle_request_bytes(payload: bytes) -> tuple[dict[str, Any], int]:
-    """Validate and execute exactly one request without writing to stdout."""
+    """Validate and execute exactly one request without writing to stdout.
+
+    The exception boundary deliberately encloses both privacy-fence acquisition
+    and release.  Lock backend failures must use the same sanitized, one-line
+    protocol response as operation failures instead of escaping the sidecar.
+    """
+    try:
+        with privacy_egress_lock():
+            return _handle_request_unfenced(payload)
+    except sqlite3.OperationalError as exc:
+        if "locked" in str(exc).casefold() or "busy" in str(exc).casefold():
+            return _error("BUSY", "The local store is busy; retry shortly."), 3
+        return _error("INTERNAL_ERROR", "The local operation failed."), 1
+    except Exception:  # noqa: BLE001 - lock failures use the sanitized protocol
+        return _error("INTERNAL_ERROR", "The local operation failed."), 1
+
+
+def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
+    """Handle operation errors before they unwind through lock context managers."""
     try:
         request = _decode_request(payload)
         result = _dispatch(request["operation"], request["params"])
@@ -146,12 +166,15 @@ def _candidate_get(params: dict[str, Any]) -> dict[str, Any]:
     candidate_id = _bounded_string(params["candidate_id"], 128, nonempty=True)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
         candidate = service.get_candidate(candidate_id)
         if candidate is None:
             raise KeyError(candidate_id)
         ref = EvidenceRef(kind="memory_candidate", id=candidate_id)
+        _require_visible_subject(conn, cfg, ref)
         evidence = [
             _reference_summary(conn, source)
             for source in provenance_store.direct_sources(conn, ref)[:100]
@@ -170,8 +193,13 @@ def _candidate_edit(params: dict[str, Any]) -> dict[str, Any]:
     tags = _string_list(params["tags"], max_items=100, max_length=100)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
+        _require_visible_subject(
+            conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id)
+        )
         updated = service.edit_candidate(
             candidate_id,
             expected_version=expected_version,
@@ -189,7 +217,9 @@ def _candidate_approve(params: dict[str, Any]) -> dict[str, Any]:
     candidate_id, expected_version = _candidate_cas_params(params)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
         approved = service.approve_candidate(candidate_id, expected_version=expected_version)
         return {"candidate": _candidate_payload(approved)}
@@ -202,8 +232,13 @@ def _candidate_reject(params: dict[str, Any]) -> dict[str, Any]:
     reason = _bounded_string(params.get("reason", ""), 1_000, nonempty=False)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
+        _require_visible_subject(
+            conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id)
+        )
         rejected = service.reject_candidate(
             candidate_id, expected_version=expected_version, reason=reason
         )
@@ -214,8 +249,13 @@ def _candidate_forget_preview(params: dict[str, Any]) -> dict[str, Any]:
     candidate_id, expected_version = _candidate_cas_params(params)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         service.resume_pending_purges()
+        _require_visible_subject(
+            conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id)
+        )
         return service.preview_purge_candidate(
             candidate_id, expected_version=expected_version
         ).to_dict()
@@ -230,7 +270,9 @@ def _candidate_forget_commit(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid purge plan digest")
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        )
         result = service.purge_candidate(
             candidate_id,
             expected_version=expected_version,
@@ -254,7 +296,9 @@ def _wrap_get(params: dict[str, Any]) -> dict[str, Any]:
     cfg = config_mod.load()
     with fts.cursor() as conn:
         row = DailyWrapService(conn, cfg).get(target_date, timezone, scope=scope)
-        if row is None:
+        if row is None or not ContextService(conn, cfg).daily_wrap_allowed(
+            row.id, expected_row=row
+        ):
             raise KeyError(local_date)
         return {"wrap": _wrap_payload(row)}
 
@@ -267,8 +311,9 @@ def _provenance_trace(params: dict[str, Any]) -> dict[str, Any]:
     )
     ref = _request_ref(params, id_field="artifact_id")
     max_depth = _bounded_int(params.get("max_depth", 4), 1, 8)
+    cfg = config_mod.load()
     with fts.cursor() as conn, files_store.review_operation_lock():
-        _require_visible_subject(conn, ref)
+        _require_visible_subject(conn, cfg, ref)
         direct = provenance_store.direct_sources(conn, ref)[:100]
         trace = _trace_sources_bounded(conn, ref, max_depth=max_depth, max_nodes=256)
         return {
@@ -351,15 +396,13 @@ def _wrap_payload(row) -> dict[str, Any]:
         "window_start_utc": str(row.window_start_utc)[:100],
         "window_end_utc": str(row.window_end_utc)[:100],
         "workflow_version": int(row.workflow_version),
-        "status": str(row.status)[:50],
+        # Only authorized published revisions reach this projection.  Do not
+        # expose mutable scheduler status, attempts, errors, or job timestamps.
+        "status": "succeeded",
         "coverage_status": str(row.coverage_status)[:50],
-        "attempt_count": int(row.attempt_count),
+        "published_input_digest": str(row.published_input_digest)[:128],
         "output": _bounded_wrap_output(row.output),
         "revision": int(row.revision),
-        "created_at": str(row.created_at)[:100],
-        "updated_at": str(row.updated_at)[:100],
-        "completed_at": str(row.completed_at)[:100] if row.completed_at else None,
-        "last_error": str(row.last_error)[:1_000],
     }
 
 
@@ -459,26 +502,8 @@ def _trace_sources_bounded(
     return result
 
 
-def _require_visible_subject(conn, ref: EvidenceRef) -> None:
-    if ref.kind == "memory_candidate":
-        if (
-            candidate_store.is_tombstoned(conn, kind="memory_candidate", artifact_id=ref.id)
-            or candidate_store.get(conn, ref.id) is None
-        ):
-            raise KeyError(ref.id)
-        return
-    if ref.kind == "memory_entry" and candidate_store.is_tombstoned(
-        conn, kind="memory_entry", artifact_id=ref.id, path=ref.path
-    ):
-        raise KeyError(ref.id)
-    wrap_id = ref.id if ref.kind == "daily_wrap" else ref.path
-    if ref.kind in {"daily_wrap", "daily_wrap_item", "daily_wrap_revision"} and (
-        not wrap_id
-        or candidate_store.is_tombstoned(conn, kind="daily_wrap", artifact_id=wrap_id)
-        or daily_wrap_store.get_by_id(conn, wrap_id) is None
-    ):
-        raise KeyError(ref.id)
-    if ref.kind not in {
+def _require_visible_subject(conn, cfg: config_mod.Config, ref: EvidenceRef) -> None:
+    supported = {
         "observation",
         "timeline_block",
         "session",
@@ -487,8 +512,42 @@ def _require_visible_subject(conn, ref: EvidenceRef) -> None:
         "daily_wrap",
         "daily_wrap_item",
         "daily_wrap_revision",
-    }:
+    }
+    if ref.kind not in supported:
         raise ValueError("unsupported provenance kind")
+
+    if ref.kind == "daily_wrap_revision":
+        row = daily_wrap_store.get_by_id(conn, ref.path) if ref.path else None
+        if (
+            not ref.path
+            or candidate_store.is_tombstoned(
+                conn, kind="daily_wrap", artifact_id=ref.path
+            )
+            or row is None
+            or provenance_store.availability(conn, ref) != "available"
+            or not ContextService(conn, cfg).daily_wrap_allowed(
+                ref.path, expected_row=row
+            )
+            or not ContextService(conn, cfg).evidence_allowed(ref)
+        ):
+            raise KeyError(ref.id)
+        return
+
+    canonical = ref
+    if ref.kind in {"observation", "timeline_block", "memory_entry"}:
+        current_hash = provenance_store.current_content_hash(conn, ref)
+        if not current_hash:
+            raise KeyError(ref.id)
+        canonical = EvidenceRef(
+            kind=ref.kind,
+            id=ref.id,
+            path=ref.path,
+            timestamp=ref.timestamp,
+            content_hash=current_hash,
+        )
+    resolution = EvidenceResolver(conn, cfg).resolve(canonical)
+    if resolution.get("status") != "current":
+        raise KeyError(ref.id)
 
 
 def _fields(

@@ -15,9 +15,10 @@ The manager is driven by two callbacks:
   * ``check_cuts()``      — called on a 30 s tick so idle gaps are
     detected even when no new events come in.
 
-On session end, ``on_session_end(session_id, start, end)`` is fired
-synchronously. The daemon hooks this to spawn the S2 reducer thread
-and persist the session row.
+On session end, ``on_session_persist(session_id, start, end)`` is always fired
+synchronously. ``on_session_end`` then dispatches ordinary post-close work;
+the daemon can suppress that second callback during final shutdown after the
+durable row has been written.
 """
 
 from __future__ import annotations
@@ -54,17 +55,24 @@ class SessionManager:
         soft_cut_minutes: int = 3,
         max_session_hours: int = 2,
         on_session_start: Callable[[str, datetime], None] | None = None,
-        on_session_end: Callable[[str, datetime, datetime], None] | None = None,
+        on_session_persist: Callable[[str, datetime, datetime], None] | None = None,
+        on_session_end: Callable[[str, datetime, datetime], object | None] | None = None,
         clock: Callable[[], datetime] = _local_now,
     ) -> None:
         self._gap_minutes = gap_minutes
         self._soft_cut_minutes = soft_cut_minutes
         self._max_session_hours = max_session_hours
         self._on_session_start = on_session_start
+        self._on_session_persist = on_session_persist
         self._on_session_end = on_session_end
         self._clock = clock
 
         self._lock = threading.Lock()
+        # Session-end dispatch may return a started worker thread. Keep every
+        # such handle until daemon shutdown joins it under the singleton
+        # lease; fire-and-forget reducers must never overlap a replacement
+        # daemon's writes.
+        self._end_callback_threads: set[threading.Thread] = set()
 
         self.current_session_id: str | None = None
         self.session_start: datetime | None = None
@@ -87,6 +95,27 @@ class SessionManager:
             if not self.is_active or self.current_session_id is None or self.session_start is None:
                 return None
             return self.current_session_id, self.session_start
+
+    def drain_end_callbacks(self) -> None:
+        """Join every tracked session-end worker, including late additions."""
+        while True:
+            with self._lock:
+                threads = tuple(self._end_callback_threads)
+            if not threads:
+                return
+            current = threading.current_thread()
+            for thread in threads:
+                if thread is not current:
+                    thread.join()
+            with self._lock:
+                self._end_callback_threads.difference_update(
+                    thread for thread in threads if not thread.is_alive()
+                )
+                # A current-thread handle cannot be joined. This method is a
+                # daemon-owner API and should not be called by an end worker;
+                # fail loudly instead of silently releasing the lease.
+                if current in self._end_callback_threads:
+                    raise RuntimeError("an end-callback thread cannot drain itself")
 
     def on_event(self, trigger: dict[str, Any]) -> None:
         """Called for every capture-worthy event from the dispatcher."""
@@ -143,14 +172,19 @@ class SessionManager:
                         )
                         self._end_locked(self.last_event_time)
 
-    def force_end(self, *, reason: str = "forced") -> str | None:
-        """Close the current session immediately (daily cron / shutdown)."""
+    def force_end(
+        self,
+        *,
+        reason: str = "forced",
+        run_end_callback: bool = True,
+    ) -> str | None:
+        """Close the session, optionally suppressing post-persist dispatch."""
         with self._lock:
             if not self.is_active:
                 return None
             logger.info("session force-ended: %s", reason)
             end = self.last_event_time or self._clock()
-            return self._end_locked(end)
+            return self._end_locked(end, run_end_callback=run_end_callback)
 
     def _start_locked(self, timestamp: datetime) -> str:
         self.current_session_id = f"sess_{uuid.uuid4().hex[:12]}"
@@ -172,7 +206,12 @@ class SessionManager:
                 logger.warning("on_session_start callback failed: %s", exc)
         return self.current_session_id
 
-    def _end_locked(self, end_time: datetime) -> str | None:
+    def _end_locked(
+        self,
+        end_time: datetime,
+        *,
+        run_end_callback: bool = True,
+    ) -> str | None:
         if not self.is_active:
             return None
         session_id = self.current_session_id
@@ -190,9 +229,31 @@ class SessionManager:
             end_time.isoformat(),
         )
 
-        if self._on_session_end and session_id and start_time is not None:
+        if self._on_session_persist and session_id and start_time is not None:
             try:
-                self._on_session_end(session_id, start_time, end_time)
+                self._on_session_persist(session_id, start_time, end_time)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("on_session_persist callback failed: %s", exc)
+
+        if (
+            run_end_callback
+            and self._on_session_end
+            and session_id
+            and start_time is not None
+        ):
+            try:
+                callback_result = self._on_session_end(
+                    session_id,
+                    start_time,
+                    end_time,
+                )
+                if isinstance(callback_result, threading.Thread):
+                    self._end_callback_threads = {
+                        thread
+                        for thread in self._end_callback_threads
+                        if thread.is_alive()
+                    }
+                    self._end_callback_threads.add(callback_result)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("on_session_end callback failed: %s", exc)
 

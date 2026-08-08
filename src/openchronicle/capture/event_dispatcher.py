@@ -47,8 +47,9 @@ class EventDispatcher:
 
     ``capture_fn`` should be idempotent and safe to call from this thread.
     It will be called with a kwarg ``trigger`` carrying a deep-copied snapshot
-    of the full watcher event. Downstream capture and session code therefore
-    sees the exact element, PID, and event timestamp that caused the capture.
+    of the full watcher event so debounce cannot observe producer mutation.
+    The capture scheduler treats it only as a wake-up signal and projects it
+    to exact identity fields before persistence or session delivery.
     """
 
     def __init__(
@@ -171,9 +172,8 @@ class EventDispatcher:
                 and (now - self._last_capture_monotonic) < self._same_window_dedup
             ):
                 logger.debug(
-                    "capture skipped (same-window dedup <%.1fs): %s",
+                    "capture skipped (same-window dedup <%.1fs)",
                     self._same_window_dedup,
-                    trigger["window_title"][:40],
                 )
                 return
 
@@ -187,8 +187,10 @@ class EventDispatcher:
 
         try:
             self._capture_fn(trigger)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("capture callback failed: %s", exc)
+        except Exception:  # noqa: BLE001
+            # A callback can fail while it still owns the full watcher frame.
+            # Exception text is therefore not a safe secondary log sink.
+            logger.warning("capture callback failed")
 
     def shutdown(self) -> None:
         self._cancel_debounce()

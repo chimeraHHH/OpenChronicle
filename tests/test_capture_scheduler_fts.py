@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import stat
+import threading
 import time
 from pathlib import Path
 
+import pytest
+
+from openchronicle import cli
 from openchronicle.capture import scheduler as scheduler_mod
-from openchronicle.config import CaptureConfig
+from openchronicle.config import CaptureConfig, Config
+from openchronicle.mcp import captures as mcp_captures
+from openchronicle.memory_candidates import store as candidate_store
 from openchronicle.store import fts
 from openchronicle.timeline import aggregator as timeline_aggregator
 
@@ -112,9 +119,7 @@ def test_built_capture_gets_authoritative_timestamp_at_locked_persistence(
 
     assert out["timestamp"] == persisted_timestamp
     assert "14-02-00.125" in path.name
-    old_end = scheduler_mod.filenames.parse_timestamp(
-        "2026-04-22T14:01:00+08:00"
-    )
+    old_end = scheduler_mod.filenames.parse_timestamp("2026-04-22T14:01:00+08:00")
     assert old_end is not None
     assert timeline_aggregator.capture_paths_by_window(old_end, 1) == {}
 
@@ -158,6 +163,7 @@ def test_heartbeat_capture_creates_identity_event_for_session_hook(
         value="durable",
         text="heartbeat session evidence",
     )
+    out["trigger"] = {"event_type": "heartbeat"}
     events: list[dict] = []
     runner = scheduler_mod._CaptureRunner(
         CaptureConfig(),
@@ -183,6 +189,148 @@ def test_heartbeat_capture_creates_identity_event_for_session_hook(
             "timestamp": "2026-04-22T14:00:00+08:00",
         }
     ]
+
+
+def test_session_hook_never_receives_watcher_content_details(ac_root: Path, monkeypatch) -> None:
+    marker = "SECRET-WATCHER-HOOK-VALUE"
+    out = _capture_dict(
+        ts="2026-04-22T14:00:00+08:00",
+        app="Cursor",
+        title="safe.py",
+        value="safe",
+        text="safe evidence",
+    )
+    out["trigger"] = {
+        "event_type": "UserTextInput",
+        "details": {"value": marker},
+    }
+    events: list[dict] = []
+    runner = scheduler_mod._CaptureRunner(
+        CaptureConfig(),
+        object(),
+        pre_capture_hook=events.append,
+    )
+    monkeypatch.setattr(scheduler_mod, "_build_capture", lambda *_args: out)
+    monkeypatch.setattr(
+        scheduler_mod,
+        "_write_capture",
+        lambda _out: ac_root / "capture-buffer" / "written.json",
+    )
+
+    runner.run(
+        {
+            "event_type": "UserTextInput",
+            "details": {"value": marker},
+        }
+    )
+
+    assert len(events) == 1
+    assert events[0]["event_type"] == "UserTextInput"
+    assert "details" not in events[0]
+    assert marker not in repr(events)
+
+
+def test_stop_worker_discards_full_backlog_and_active_native_result(
+    ac_root: Path, monkeypatch
+) -> None:
+    """A timed-out native build cannot write or fire hooks after shutdown."""
+    out = _capture_dict(
+        ts="2026-04-22T14:00:00+08:00",
+        app="Cursor",
+        title="shutdown.py",
+        value="durable",
+        text="must be discarded after shutdown begins",
+    )
+    build_started = threading.Event()
+    release_build = threading.Event()
+    writes: list[dict] = []
+    hooks: list[dict] = []
+
+    def blocking_build(*_args):
+        build_started.set()
+        assert release_build.wait(timeout=5)
+        return out
+
+    runner = scheduler_mod._CaptureRunner(
+        CaptureConfig(),
+        object(),
+        pre_capture_hook=hooks.append,
+    )
+    monkeypatch.setattr(scheduler_mod, "_build_capture", blocking_build)
+    monkeypatch.setattr(
+        scheduler_mod,
+        "_write_capture",
+        lambda capture: writes.append(capture),
+    )
+
+    runner.start_worker()
+    runner.run_threaded({"event_type": "active"})
+    assert build_started.wait(timeout=5)
+    for index in range(runner._MAX_PENDING):
+        runner.run_threaded({"event_type": f"queued-{index}"})
+
+    runner.stop_worker(timeout=0.01)
+    old_worker = runner._worker
+    assert runner._accepting is False
+    assert old_worker is not None and old_worker.is_alive()
+    assert writes == []
+    assert hooks == []
+
+    # Triggers after stop are rejected, and the active native result is
+    # discarded when it eventually returns.
+    runner.run_threaded({"event_type": "too-late"})
+    release_build.set()
+    old_worker.join(timeout=5)
+    assert not old_worker.is_alive()
+    assert runner._worker is None
+    assert writes == []
+    assert hooks == []
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_uses_bounded_worker_and_stops_on_cancellation(monkeypatch) -> None:
+    queued: list[dict | None] = []
+    stopped: list[bool] = []
+
+    class Provider:
+        available = True
+
+    class FakeRunner:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def start_worker(self) -> None:
+            return None
+
+        def run(self, _trigger) -> None:
+            raise AssertionError("heartbeat bypassed the bounded worker")
+
+        def run_threaded(self, trigger) -> None:
+            queued.append(trigger)
+
+        def stop_worker(self) -> None:
+            stopped.append(True)
+
+    sleep_calls = 0
+
+    async def one_heartbeat_then_cancel(_seconds: float) -> None:
+        nonlocal sleep_calls
+        sleep_calls += 1
+        if sleep_calls > 1:
+            raise asyncio.CancelledError
+
+    cfg = CaptureConfig()
+    cfg.event_driven = False
+    cfg.heartbeat_minutes = 1
+    monkeypatch.setattr(scheduler_mod.ax_capture, "create_provider", lambda **_kw: Provider())
+    monkeypatch.setattr(scheduler_mod, "_CaptureRunner", FakeRunner)
+    monkeypatch.setattr(scheduler_mod.asyncio, "sleep", one_heartbeat_then_cancel)
+
+    with pytest.raises(asyncio.CancelledError):
+        await scheduler_mod.run_forever(cfg)
+
+    assert queued == [None, None]
+    assert stopped == [True]
 
 
 def test_cleanup_buffer_removes_fts_rows(ac_root: Path) -> None:
@@ -406,6 +554,106 @@ def test_cleanup_retains_json_when_fts_delete_fails(
 
     assert stats["deleted"] == 0
     assert path.exists()
+
+
+def test_retention_unlink_failure_stays_tombstoned_and_recovers(
+    ac_root: Path,
+    monkeypatch,
+) -> None:
+    marker = "AUTOMATIC_RETENTION_UNLINK_SECRET"
+    out = _capture_dict(
+        ts="2026-04-22T14:00:00+08:00",
+        app="Cursor",
+        title="private-retention.py",
+        value="",
+        text=marker,
+    )
+    path = scheduler_mod._write_capture(out)
+    long_ago = time.time() - 10 * 24 * 3600
+    os.utime(path, (long_ago, long_ago))
+    real_unlink = Path.unlink
+
+    def fail_target(target: Path, *args, **kwargs) -> None:
+        if target == path:
+            raise PermissionError("immutable automatic-retention capture")
+        real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_target)
+    stats = scheduler_mod.cleanup_buffer(
+        retention_hours=1,
+        processed_before_ts="2099-01-01T00:00:00+00:00",
+    )
+
+    assert stats == {"deleted": 0, "stripped": 0, "evicted": 0}
+    assert path.exists()
+    with fts.cursor() as conn:
+        assert fts.search_captures(conn, query=marker) == []
+        tombstones = candidate_store.list_tombstones(conn, kind="capture_file")
+    assert [row.artifact_id for row in tombstones] == [path.name]
+    assert "unlink failed" in tombstones[0].last_error
+
+    cfg = Config()
+    cfg.capture.deny_unknown_windows = False
+    assert mcp_captures.read_recent_capture(cfg=cfg) is None
+    cli.rebuild_captures_index()
+    assert mcp_captures.search_captures(cfg=cfg, query=marker) == []
+
+    # A later pass can retry the residual file and clears the deny marker only
+    # after unlink succeeds.
+    monkeypatch.setattr(Path, "unlink", real_unlink)
+    retry = scheduler_mod.cleanup_buffer(
+        retention_hours=1,
+        processed_before_ts="2099-01-01T00:00:00+00:00",
+    )
+    assert retry == {"deleted": 1, "stripped": 0, "evicted": 0}
+    assert not path.exists()
+    with fts.cursor() as conn:
+        assert not candidate_store.is_tombstoned(
+            conn,
+            kind="capture_file",
+            artifact_id=path.name,
+        )
+
+
+def test_size_eviction_unlink_failure_stays_tombstoned(
+    ac_root: Path,
+    monkeypatch,
+) -> None:
+    marker = "AUTOMATIC_SIZE_EVICTION_SECRET"
+    out = _capture_dict(
+        ts="2026-04-22T14:00:00+08:00",
+        app="Cursor",
+        title="private-size.py",
+        value="",
+        text=marker + ("x" * 1_200_000),
+    )
+    path = scheduler_mod._write_capture(out)
+    real_unlink = Path.unlink
+
+    def fail_target(target: Path, *args, **kwargs) -> None:
+        if target == path:
+            raise PermissionError("immutable size-eviction capture")
+        real_unlink(target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_target)
+    stats = scheduler_mod.cleanup_buffer(
+        retention_hours=24 * 365,
+        processed_before_ts="2099-01-01T00:00:00+00:00",
+        max_mb=1,
+    )
+
+    assert stats == {"deleted": 0, "stripped": 0, "evicted": 0}
+    assert path.exists()
+    with fts.cursor() as conn:
+        assert fts.search_captures(conn, query=marker) == []
+        assert candidate_store.is_tombstoned(
+            conn,
+            kind="capture_file",
+            artifact_id=path.name,
+        )
+    cfg = Config()
+    cfg.capture.deny_unknown_windows = False
+    assert mcp_captures.read_recent_capture(cfg=cfg) is None
 
 
 def test_cleanup_eviction_also_drops_fts(ac_root: Path) -> None:

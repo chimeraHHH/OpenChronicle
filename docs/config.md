@@ -106,14 +106,16 @@ min_capture_gap_seconds = 2.0        # hard floor between consecutive captures, 
 dedup_interval_seconds = 1.0         # same-event-type dedup window
 same_window_dedup_seconds = 5.0      # non-focus-change events in the same bundle+window are dropped if within this gap
 buffer_retention_hours = 168         # 7 days; stale absorbed captures past this are deleted
-screenshot_retention_hours = 24      # after 24h, strip screenshot (77% of bytes) but keep AX+text
+screenshot_retention_hours = 24      # normal captures only; URL-policy captures never have screenshots
 buffer_max_mb = 2000                 # best-effort target over absorbed files (0 disables)
 allowed_bundle_ids = []              # non-empty = capture only these bundle IDs
 excluded_bundle_ids = []             # exact, case-insensitive
 excluded_app_names = []              # exact, case-insensitive
 excluded_window_title_patterns = []  # substring, case-insensitive
-deny_unknown_windows = true          # fail closed if active app identity is unavailable
-include_screenshot = false           # opt in; screenshots are unused downstream today
+allowed_url_patterns = []             # supported-browser stable-ID URL literal allowlist
+excluded_url_patterns = []            # exclusions win; successful URL policy stores metadata only
+deny_unknown_windows = true           # policy default; exact focused identity is always required
+include_screenshot = false            # opt-in exact-CGWindowID JPEG; unused downstream today
 screenshot_max_width = 1920
 screenshot_jpeg_quality = 80
 ax_depth = 100                       # Electron apps need deep trees; 8 only reaches chrome
@@ -128,18 +130,65 @@ Tuning notes:
 - **Exclusions.** Bundle IDs and app names use case-insensitive exact matching;
   window-title patterns use case-insensitive substring matching. These checks
   run before AX collection, screenshots, persistence, indexing, and model use.
+- **URL rules.** Despite the `patterns` name, both lists contain bounded
+  literals, never regular expressions. A bare hostname matches the exact host
+  or a DNS-label subdomain. A full HTTP(S) URL is canonicalized and matches
+  only at the start of the observed URL on a component boundary; it cannot be
+  smuggled through an unrelated query or fragment. Allow rules accept only
+  those two forms. Exclusion rules additionally accept non-host literals with
+  case-insensitive substring semantics. Each list accepts at
+  most 128 items, each item at most 512 characters, and observed URLs at most
+  4,096 characters. Scheme and host case, IDNA hosts, default ports, and
+  percent-escape case are normalized; credentials, whitespace/control
+  characters, malformed percent escapes, and malformed URLs are rejected.
+  Exclusions win. A non-empty allowlist must match the one trusted address, and
+  every URL-like value found elsewhere in the tree must also pass. Missing,
+  invalid, incomplete, or ambiguous evidence fails closed.
+- **URL-policy scope.** With either rule list active, only the known Safari,
+  Chrome/Edge/Brave/Opera, Firefox, and Arc bundle/family adapters are eligible.
+  Unknown browsers and ordinary apps are rejected before AX; use bundle/title
+  policy without URL rules for them. A family adapter must find exactly one
+  explicit HTTP(S) address in an editable browser-chrome control by exact
+  stable `identifier`/`domIdentifier`. The exact-label fallback used by normal
+  S1 extraction cannot authorize policy. A separate bounded full-tree scan is
+  an additional deny surface, never address evidence: page content and URL
+  decoys cannot grant capture. Unsupported URI schemes, malformed fields,
+  resource overages, and ambiguous controls deny the observation.
+- **URL-policy completeness and persistence.** The helper must return a
+  versioned receipt proving an unpruned focused-window tree at the effective
+  `ax_depth`. Two snapshots must retain identical exact-window identity and
+  address/full-scan evidence, including provenance and source paths. This is a
+  race mitigation, not an atomic browser transaction. On success, schema v5 /
+  policy v3 `url_metadata_only` persistence keeps app, bundle, PID,
+  `CGWindowID`, bounds, and the approved explicit URL; raw AX, focused content,
+  AX metadata, and screenshots are absent, and visible text/titles are empty.
+  Scheme-less candidates are conservatively evaluated as both HTTP and HTTPS,
+  remain `null` in S1, and are ultimately rejected because they cannot supply
+  explicit durable URL evidence. Malformed configuration denies every app
+  before AX. The retained URL is an editable address-control value, not proof
+  that navigation committed or that the document was loaded; a typed-but-not-
+  submitted value can therefore yield a URL-only activity record.
 - **`deny_unknown_windows`.** Defaults to `true`. If macOS active-window
-  metadata cannot provide a bundle ID, capture stops instead of bypassing an
-  allow/exclude rule.
+  policy metadata cannot provide a bundle ID, it cannot bypass a rule. The
+  capture scheduler is stricter regardless of this compatibility knob: every
+  observation always requires an unambiguous exact `WindowMeta` containing
+  app, bundle, title, PID, `CGWindowID`, and valid bounds.
 - **`include_screenshot`.** Defaults to `false`. Screenshots are not consumed by
-  the current memory stages and currently cover the primary display rather than
-  only the verified window. Enable them only for an explicit, non-sensitive
-  debugging or future vision workflow.
+  the current memory stages. When enabled, the native helper captures only the
+  verified `CGWindowID` through CoreGraphics and rechecks the complete identity
+  before and after pixels/encoding; Python validates the returned JPEG and
+  identity. There is no full-display, monitor, bounds-crop, or `mss` fallback.
+  Missing Screen Recording permission or any helper/image/identity failure
+  drops the entire observation rather than retaining AX-only content.
+  Screenshots additionally require both URL rule lists to be empty.
 - **Desktop privacy view.** The Stage 1 shell displays these effective rules and
   retention values read-only. It intentionally does not rewrite `config.toml`;
   safe editing still requires a comment-preserving, allowlisted, etag-bound
   settings service. Pause/resume is the only immediate privacy mutation.
-- **`ax_depth`.** Native Cocoa apps are fine at 20. Electron apps (Claude Desktop, VS Code, Slack, Notion) put user content past layer 20 — stay at 100 unless you're CPU-constrained.
+- **`ax_depth`.** Native Cocoa apps are often fine at 20. Electron apps (Claude
+  Desktop, VS Code, Slack, Notion) put user content past layer 20 — stay at 100
+  unless you're CPU-constrained. When URL policy is active, reaching this depth
+  is a fail-closed observation error rather than silent truncation.
 - **`debounce_seconds`.** Lower = more captures during typing; higher = fewer near-duplicates.
 - **`same_window_dedup_seconds`.** When the user types for a long time in the same document, this is the knob that decides how frequently you re-capture the same (bundle, window) pair. Focus changes always bypass this.
 - **`heartbeat_minutes`.** Periodic capture as a safety net. `0` disables it completely (watcher-only). Values `>0` are clamped to a 60s floor.
@@ -154,14 +203,14 @@ Tuning notes:
 
 ```toml
 [timeline]
-window_minutes = 1                # wall-clock aligned (:00/:01/:02/...)
+window_minutes = 1                # wall-clock aligned (:00/:01/:02/...); effective range 1..1440
 cold_lookback_minutes = 30        # default seed when no older retained/pending evidence exists
 recent_context_blocks = 720       # ~12h of 1-min blocks; consulted by tooling
 ```
 
 Timeline is always-on and acts as a **verbatim-preserving normalizer** — it de-duplicates snapshots and strips UI chrome but preserves the user's typed text, URLs, titles, and proper nouns unchanged. Real compression happens in the reducer.
 
-`window_minutes` is effectively locked in once blocks exist — changing it later produces new-sized blocks going forward, but old blocks keep their original boundaries (they're keyed by `(start_time, end_time)`). The default 1-min size pairs with the reducer's flush tick (default 5-min) so each flush consumes ~5 blocks. A larger timeline window cuts LLM calls per hour but risks the model sliding from normalization into summarization.
+`window_minutes` is effectively locked in once blocks exist — changing it later produces new-sized blocks going forward, but old blocks keep their original boundaries (they're keyed by `(start_time, end_time)`). The effective value is clamped to `1..1440`; longer rows are quarantined. The default 1-min size pairs with the reducer's flush tick (default 5-min) so each flush consumes ~5 blocks. A larger timeline window cuts LLM calls per hour but risks the model sliding from normalization into summarization.
 
 `cold_lookback_minutes` is not a data-loss cutoff. On a fresh/legacy state the
 producer seeds from the earliest of this default horizon, any valid retained
@@ -320,7 +369,7 @@ openchronicle status
 - `gpt-5.4-nano   ✓ 234 ms` — provider answered.
 - `claude-haiku-4-5   ✗ AuthenticationError: …` — provider rejected the request. Typos in `model`, missing `api_key_env`, wrong `base_url`, or expired keys all show up here on the first `status` call instead of silently failing inside the writer hours later.
 
-Probes for stages that share an identical `(model, base_url, api_key)` are deduplicated, so the common case (one model for all stages) makes one network call. Run them in parallel and the whole status command stays under ~5s even if one provider is slow.
+Probes for stages that share an identical `(model, base_url, api_key)` are deduplicated, so the common case (one model for all stages) makes one network call. They run in parallel and the whole status command stays under ~5s even if one provider is slow. Provider I/O runs outside the capture-store lock; after probes finish, `status` takes only a short cleanup/capture fence to rebuild, authorize, and serialize its final local snapshot.
 
 To skip the network round-trip — e.g. on a flight, in CI, or just to inspect the resolved config — set the mock env var:
 

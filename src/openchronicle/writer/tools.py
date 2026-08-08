@@ -7,15 +7,21 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..config import Config
 from ..logger import get
 from ..memory_candidates import store as candidate_store
+from ..privacy.egress import privacy_egress_fenced
 from ..provenance.models import EvidenceRef, content_digest
+from ..services.context import ContextService
 from ..services.memory import MemoryService
+from ..services.memory_projection import canonical_entry_hits_locked
 from ..store import entries as entries_mod
 from ..store import files as files_mod
 from ..store import fts
 
 logger = get("openchronicle.writer")
+
+_POLICY_SEARCH_RECALL_LIMIT = 100
 
 
 @dataclass
@@ -26,17 +32,49 @@ class CommitState:
     created_paths: list[str] = field(default_factory=list)
     flagged_compact: list[str] = field(default_factory=list)
     candidate_ids: list[str] = field(default_factory=list)
+    # Every source whose content has been exposed to this classifier turn.
+    # Candidate authorization is deliberately based on this conservative
+    # closure, not only on the subset the model chooses to cite.
     allowed_evidence: dict[str, EvidenceRef] = field(default_factory=dict)
+    evidence_conflicts: set[str] = field(default_factory=set)
     producer_run_key: str = ""
     next_proposal_slot: int = 0
     commit_callback: Callable[[CommitState], None] | None = None
     mutation_guard: Callable[[sqlite3.Connection], None] | None = None
 
+    def expose_evidence(self, ref: EvidenceRef) -> bool:
+        """Register one prompt-visible source without laundering revisions."""
+        existing = self.allowed_evidence.get(ref.key)
+        if existing is None:
+            self.allowed_evidence[ref.key] = ref
+            return True
+        if existing == ref:
+            return True
+        # Evidence tokens intentionally hide hashes.  If an identity changes
+        # while the same model turn is alive, retaining either revision would
+        # let output derived from the other one acquire the wrong provenance.
+        self.evidence_conflicts.add(ref.key)
+        return False
+
 
 # ─── tool implementations ────────────────────────────────────────────────
 
+
+def memory_entry_allowed(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    path: str,
+    entry: files_mod.ParsedEntry,
+) -> bool:
+    """Shared writer-facing adapter for the central egress authorizer."""
+    return ContextService(conn, cfg).memory_entry_allowed(path=path, entry=entry)
+
+
+@privacy_egress_fenced
 def tool_read_memory(
     conn: sqlite3.Connection,
+    cfg: Config,
     *,
     path: str,
     tail_n: int = 10,
@@ -51,28 +89,20 @@ def tool_read_memory(
     except ValueError:
         return {"error": f"file not found: {path}"}
     with files_mod.store_write_lock(), files_mod.file_lock(p):
-        if candidate_store.is_tombstoned(
-            conn, kind="memory_file", artifact_id=p.name
-        ):
+        if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=p.name):
             return {"error": f"file not found: {path}"}
         if not p.exists():
             return {"error": f"file not found: {path}"}
         parsed = files_mod.read_file(p)
-        if candidate_store.is_tombstoned(
-            conn, kind="memory_file", artifact_id=p.name
-        ):
+        if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=p.name):
             return {"error": f"file not found: {path}"}
-        if any(not entry.provenance_valid for entry in parsed.entries):
-            return {"error": f"invalid provenance frame in {path}"}
         visible = [
             entry
             for entry in parsed.entries
             if not candidate_store.is_tombstoned(
                 conn, kind="memory_entry", artifact_id=entry.id, path=p.name
             )
-            and entries_mod.dependency_sources_are_live(
-                conn, entry.evidence_refs
-            )
+            and memory_entry_allowed(conn, cfg, path=p.name, entry=entry)
         ]
         tail = visible[-tail_n:]
         entries: list[dict[str, Any]] = []
@@ -85,7 +115,7 @@ def tool_read_memory(
                 content_hash=content_digest(entry.body),
             )
             if state is not None:
-                state.allowed_evidence[ref.key] = ref
+                state.expose_evidence(ref)
             entries.append(
                 {
                     "id": entry.id,
@@ -96,19 +126,17 @@ def tool_read_memory(
                     "evidence_token": ref.key,
                 }
             )
-        return {
-            "path": p.name,
-            "description": parsed.description,
-            "tags": parsed.tags,
-            "status": parsed.status,
-            "entry_count": len(visible),
-            "updated": parsed.updated,
-            "entries": entries,
-        }
+        if not entries:
+            # Do not turn an otherwise hidden/empty container into a file
+            # existence and metadata oracle for the remote classifier.
+            return {"error": f"file not found: {path}"}
+        return {"path": p.name, "entries": entries}
 
 
+@privacy_egress_fenced
 def tool_search_memory(
     conn: sqlite3.Connection,
+    cfg: Config,
     *,
     query: str,
     top_k: int = 5,
@@ -118,69 +146,49 @@ def tool_search_memory(
     if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 20:
         return {"error": "top_k must be an integer in [1, 20]"}
     with files_mod.store_write_lock():
-        hits = fts.search(
-            conn,
-            query=query,
-            path_patterns=[
-                f"{prefix}*"
-                for prefix in files_mod.VALID_PREFIXES
-                if prefix != "event-"
-            ],
-            top_k=top_k,
-            include_superseded=include_superseded,
-        )
         results: list[dict[str, Any]] = []
-        parsed_by_path: dict[str, files_mod.ParsedFile | None] = {}
-        for hit in hits:
-            if candidate_store.is_tombstoned(
-                conn, kind="memory_file", artifact_id=hit.path
-            ):
-                continue
-            if candidate_store.is_tombstoned(
-                conn, kind="memory_entry", artifact_id=hit.id, path=hit.path
-            ):
-                continue
-            if hit.path not in parsed_by_path:
-                try:
-                    parsed_by_path[hit.path] = files_mod.read_file(
-                        files_mod.memory_path(hit.path)
-                    )
-                except (FileNotFoundError, ValueError):
-                    parsed_by_path[hit.path] = None
-            parsed = parsed_by_path[hit.path]
-            if parsed is None:
-                continue
-            current = next(
-                (entry for entry in parsed.entries if entry.id == hit.id), None
+        offset = 0
+        while len(results) < top_k:
+            hits = fts.search(
+                conn,
+                query=query,
+                path_patterns=[
+                    f"{prefix}*" for prefix in files_mod.VALID_PREFIXES if prefix != "event-"
+                ],
+                # FTS is recall-only. Page before applying the caller's limit
+                # so a long stale/tombstoned prefix cannot hide later current
+                # canonical Markdown entries from the classifier.
+                top_k=_POLICY_SEARCH_RECALL_LIMIT,
+                offset=offset,
+                include_superseded=include_superseded,
             )
-            if (
-                current is None
-                or not current.provenance_valid
-                or not entries_mod.dependency_sources_are_live(
-                    conn, current.evidence_refs
+            if not hits:
+                break
+            offset += len(hits)
+            for hit in canonical_entry_hits_locked(conn, cfg, hits):
+                ref = EvidenceRef(
+                    kind="memory_entry",
+                    id=hit.id,
+                    path=hit.path,
+                    timestamp=hit.timestamp,
+                    content_hash=content_digest(hit.content),
                 )
-                or content_digest(current.body) != content_digest(hit.content)
-            ):
-                continue
-            ref = EvidenceRef(
-                kind="memory_entry",
-                id=hit.id,
-                path=hit.path,
-                timestamp=hit.timestamp,
-                content_hash=content_digest(current.body),
-            )
-            if state is not None:
-                state.allowed_evidence[ref.key] = ref
-            results.append(
-                {
-                    "id": hit.id,
-                    "path": hit.path,
-                    "timestamp": hit.timestamp,
-                    "content": current.body,
-                    "rank": hit.rank,
-                    "evidence_token": ref.key,
-                }
-            )
+                if state is not None:
+                    state.expose_evidence(ref)
+                results.append(
+                    {
+                        "id": hit.id,
+                        "path": hit.path,
+                        "timestamp": hit.timestamp,
+                        "content": hit.content,
+                        "rank": hit.rank,
+                        "evidence_token": ref.key,
+                    }
+                )
+                if len(results) >= top_k:
+                    break
+            if len(hits) < _POLICY_SEARCH_RECALL_LIMIT:
+                break
     return {
         "query": query,
         "results": results,
@@ -205,16 +213,24 @@ def tool_propose_memory_candidate(
         return {"error": "event-daily is reducer-owned and cannot receive candidates"}
     if not evidence_tokens:
         return {"error": "at least one evidence token is required"}
+    if state.evidence_conflicts:
+        return {"error": "evidence changed during this classifier run; retry from fresh context"}
     evidence: list[EvidenceRef] = []
     for token in evidence_tokens:
         ref = state.allowed_evidence.get(str(token))
         if ref is None:
             return {"error": f"unknown or unobserved evidence token: {token}"}
         evidence.append(ref)
+    # ``evidence_tokens`` remain useful citations, but cannot be trusted as
+    # an information-flow declaration from the model.  Persist every source
+    # exposed before this proposal so a later policy change on *any* input
+    # hides and blocks approval of the derived candidate.
+    evidence = sorted(
+        state.allowed_evidence.values(),
+        key=lambda ref: (ref.kind, ref.path, ref.id, ref.content_hash),
+    )
     try:
-        candidate = MemoryService(
-            conn, soft_limit_tokens=soft_limit_tokens
-        ).propose_candidate(
+        candidate = MemoryService(conn, soft_limit_tokens=soft_limit_tokens).propose_candidate(
             kind=kind,
             target_path=path,
             content=content,
@@ -251,7 +267,10 @@ def tool_append(
 ) -> dict[str, Any]:
     try:
         entry_id = entries_mod.append_entry(
-            conn, name=path, content=content, tags=tags,
+            conn,
+            name=path,
+            content=content,
+            tags=tags,
             soft_limit_tokens=soft_limit_tokens,
         )
     except (FileNotFoundError, ValueError) as exc:
@@ -306,10 +325,12 @@ def tool_flag_compact(
 ) -> dict[str, Any]:
     entries_mod.require_autocommit(conn)
     p = files_mod.memory_path(path)
-    with files_mod.store_write_lock(), files_mod.file_lock(p):
-        if candidate_store.is_tombstoned(
-            conn, kind="memory_file", artifact_id=p.name
-        ):
+    with (
+        files_mod.review_operation_lock(),
+        files_mod.store_write_lock(),
+        files_mod.file_lock(p),
+    ):
+        if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=p.name):
             return {"error": f"file not found: {path}"}
         if not p.exists():
             return {"error": f"file not found: {path}"}
@@ -358,7 +379,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_memory",
-            "description": "BM25 full-text search across all memory. Use to dedup before appending.",
+            "description": "BM25 search across currently authorized memory. Use to dedup before appending.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -384,7 +405,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "content": {"type": "string", "description": "1–3 sentence self-contained fact"},
+                    "content": {
+                        "type": "string",
+                        "description": "1–3 sentence self-contained fact",
+                    },
                     "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
                 },
                 "required": ["path", "content", "tags"],
@@ -403,7 +427,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "path": {"type": "string"},
-                    "description": {"type": "string", "description": "One-line description; required"},
+                    "description": {
+                        "type": "string",
+                        "description": "One-line description; required",
+                    },
                     "tags": {"type": "array", "items": {"type": "string"}},
                 },
                 "required": ["path", "description", "tags"],
@@ -451,7 +478,10 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "description": "One-line summary of what you wrote."},
+                    "summary": {
+                        "type": "string",
+                        "description": "One-line summary of what you wrote.",
+                    },
                 },
                 "required": ["summary"],
             },
@@ -502,9 +532,7 @@ CLASSIFIER_TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     TOOL_SCHEMAS[-1],
 ]
-CLASSIFIER_TOOL_NAMES = {
-    tool["function"]["name"] for tool in CLASSIFIER_TOOL_SCHEMAS
-}
+CLASSIFIER_TOOL_NAMES = {tool["function"]["name"] for tool in CLASSIFIER_TOOL_SCHEMAS}
 
 
 def dispatch_classifier(
@@ -512,16 +540,22 @@ def dispatch_classifier(
     args: dict[str, Any],
     *,
     conn: sqlite3.Connection,
+    cfg: Config,
     soft_limit_tokens: int,
     state: CommitState,
 ) -> dict[str, Any]:
     if name == "read_memory":
         return tool_read_memory(
-            conn, path=args["path"], tail_n=args.get("tail_n", 10), state=state
+            conn,
+            cfg,
+            path=args["path"],
+            tail_n=args.get("tail_n", 10),
+            state=state,
         )
     if name == "search_memory":
         return tool_search_memory(
             conn,
+            cfg,
             query=args["query"],
             top_k=args.get("top_k", 5),
             include_superseded=args.get("include_superseded", False),
@@ -550,16 +584,22 @@ def dispatch(
     args: dict[str, Any],
     *,
     conn: sqlite3.Connection,
+    cfg: Config,
     soft_limit_tokens: int,
     state: CommitState,
 ) -> dict[str, Any]:
     if name == "read_memory":
         return tool_read_memory(
-            conn, path=args["path"], tail_n=args.get("tail_n", 10), state=state
+            conn,
+            cfg,
+            path=args["path"],
+            tail_n=args.get("tail_n", 10),
+            state=state,
         )
     if name == "search_memory":
         return tool_search_memory(
             conn,
+            cfg,
             query=args["query"],
             top_k=args.get("top_k", 5),
             include_superseded=args.get("include_superseded", False),

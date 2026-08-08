@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+
+from ..provenance.models import EvidenceRef
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS memory_candidates (
     id TEXT PRIMARY KEY,
     idempotency_key TEXT UNIQUE NOT NULL,
     proposal_digest TEXT NOT NULL DEFAULT '',
+    projection_digest TEXT NOT NULL DEFAULT '',
     producer_run_key TEXT NOT NULL DEFAULT '',
     proposal_slot INTEGER NOT NULL DEFAULT 0,
     kind TEXT NOT NULL,
@@ -36,6 +41,10 @@ CREATE INDEX IF NOT EXISTS idx_memory_candidates_inbox
 CREATE INDEX IF NOT EXISTS idx_memory_candidates_conflict
     ON memory_candidates(target_path, conflict_key, status);
 
+CREATE TABLE IF NOT EXISTS memory_candidate_schema_migrations (
+    name TEXT PRIMARY KEY
+);
+
 -- Content-free crash-recovery intents. Rebuild paths must skip tombstoned
 -- memory entries until the authorized purge finishes.
 CREATE TABLE IF NOT EXISTS purge_tombstones (
@@ -51,12 +60,15 @@ CREATE TABLE IF NOT EXISTS purge_tombstones (
 
 VALID_STATUSES = {"pending", "conflict", "applying", "accepted", "rejected"}
 
+_PROJECTION_MIGRATION = "projection-provenance-v1"
+
 
 @dataclass(frozen=True, slots=True)
 class MemoryCandidate:
     id: str
     idempotency_key: str
     proposal_digest: str
+    projection_digest: str
     producer_run_key: str
     proposal_slot: int
     kind: str
@@ -103,20 +115,248 @@ class MemoryCandidate:
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA)
-    columns = {row["name"] for row in conn.execute("PRAGMA table_info(memory_candidates)")}
-    for name, declaration in (
-        ("proposal_digest", "TEXT NOT NULL DEFAULT ''"),
-        ("producer_run_key", "TEXT NOT NULL DEFAULT ''"),
-        ("proposal_slot", "INTEGER NOT NULL DEFAULT 0"),
-    ):
-        if name not in columns:
-            conn.execute(f"ALTER TABLE memory_candidates ADD COLUMN {name} {declaration}")
-    conn.execute(
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Keep schema discovery, DDL, the one-time trust backfill, and its
+        # completion marker under one writer lock.  The marker is deliberately
+        # separate from column existence: a killed older migration may have
+        # durable columns but no completed backfill.
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(memory_candidates)")}
+        for name, declaration in (
+            ("proposal_digest", "TEXT NOT NULL DEFAULT ''"),
+            ("projection_digest", "TEXT NOT NULL DEFAULT ''"),
+            ("producer_run_key", "TEXT NOT NULL DEFAULT ''"),
+            ("proposal_slot", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if name not in columns:
+                conn.execute(f"ALTER TABLE memory_candidates ADD COLUMN {name} {declaration}")
+
+        migration_done = conn.execute(
+            "SELECT 1 FROM memory_candidate_schema_migrations WHERE name=?",
+            (_PROJECTION_MIGRATION,),
+        ).fetchone()
+        if migration_done is None:
+            _backfill_projection_migration(conn)
+            conn.execute(
+                "INSERT INTO memory_candidate_schema_migrations(name) VALUES (?)",
+                (_PROJECTION_MIGRATION,),
+            )
+
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_candidates_run_slot
+            ON memory_candidates(producer_run_key, proposal_slot)
+            WHERE producer_run_key <> ''
+            """
+        )
+        conn.execute("COMMIT")
+    except BaseException:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def _backfill_projection_migration(conn: sqlite3.Connection) -> None:
+    """Bind valid legacy rows once; later startup never repairs blank digests."""
+    rows = conn.execute(
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_memory_candidates_run_slot
-        ON memory_candidates(producer_run_key, proposal_slot)
-        WHERE producer_run_key <> ''
+        SELECT id, kind, operation, target_path, content, content_hash,
+               tags_json, confidence, conflict_key
+          FROM memory_candidates
+         ORDER BY id
         """
+    ).fetchall()
+    for row in rows:
+        values = _legacy_projection_values(row)
+        if values is None:
+            # A malformed legacy row cannot safely become a trusted
+            # projection. Leave both digests blank so all readers quarantine
+            # it instead of normalizing attacker-controlled SQLite values.
+            continue
+        current_projection_digest = projection_digest(**values)
+        sources = _legacy_candidate_sources(conn, row["id"])
+        current_proposal_digest = (
+            proposal_digest(
+                kind=values["kind"],
+                target_path=values["target_path"],
+                content_hash=values["content_hash"],
+                tags=values["tags"],
+                evidence=sources,
+            )
+            if sources and all(source.content_hash for source in sources)
+            else ""
+        )
+        conn.execute(
+            """
+            UPDATE memory_candidates
+               SET proposal_digest=?, projection_digest=?
+             WHERE id=?
+            """,
+            (current_proposal_digest, current_projection_digest, row["id"]),
+        )
+
+
+def _legacy_projection_values(row: sqlite3.Row) -> dict[str, object] | None:
+    string_fields = (
+        "id",
+        "kind",
+        "operation",
+        "target_path",
+        "content",
+        "content_hash",
+        "tags_json",
+        "conflict_key",
+    )
+    if any(not isinstance(row[name], str) for name in string_fields):
+        return None
+    if not all(row[name] for name in ("id", "kind", "operation", "target_path")):
+        return None
+    if hashlib.sha256(row["content"].encode()).hexdigest() != row["content_hash"]:
+        return None
+    try:
+        tags = json.loads(row["tags_json"])
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+        return None
+    confidence = row["confidence"]
+    if confidence is not None:
+        if type(confidence) not in (int, float):
+            return None
+        confidence = float(confidence)
+        if not math.isfinite(confidence) or not 0 <= confidence <= 1:
+            return None
+    return {
+        "kind": row["kind"],
+        "operation": row["operation"],
+        "target_path": row["target_path"],
+        "content": row["content"],
+        "content_hash": row["content_hash"],
+        "tags": tags,
+        "confidence": confidence,
+        "conflict_key": row["conflict_key"],
+    }
+
+
+def _legacy_candidate_sources(
+    conn: sqlite3.Connection,
+    candidate_id: str,
+) -> list[EvidenceRef]:
+    try:
+        rows = conn.execute(
+            """
+            SELECT source_kind, source_id, source_path,
+                   source_timestamp, source_hash
+              FROM provenance_edges
+             WHERE subject_kind='memory_candidate'
+               AND subject_id=? AND subject_path=''
+             ORDER BY ordinal, source_kind, source_path, source_id
+            """,
+            (candidate_id,),
+        ).fetchall()
+        return [
+            EvidenceRef(
+                kind=row["source_kind"],
+                id=row["source_id"],
+                path=row["source_path"],
+                timestamp=row["source_timestamp"],
+                content_hash=row["source_hash"],
+            )
+            for row in rows
+        ]
+    except (sqlite3.DatabaseError, TypeError, ValueError):
+        # A missing/legacy provenance table or one malformed edge must never
+        # create a partially bound proposal digest.
+        return []
+
+
+def projection_digest(
+    *,
+    kind: str,
+    operation: str,
+    target_path: str,
+    content: str,
+    content_hash: str,
+    tags: list[str],
+    confidence: float | None,
+    conflict_key: str,
+) -> str:
+    payload = {
+        "kind": kind,
+        "operation": operation,
+        "target_path": target_path,
+        "content": content,
+        "content_hash": content_hash,
+        "tags": tags,
+        "confidence": confidence,
+        "conflict_key": conflict_key,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def projection_is_current(candidate: MemoryCandidate) -> bool:
+    return bool(
+        candidate.content_hash == hashlib.sha256(candidate.content.encode()).hexdigest()
+        and candidate.projection_digest
+        == projection_digest(
+            kind=candidate.kind,
+            operation=candidate.operation,
+            target_path=candidate.target_path,
+            content=candidate.content,
+            content_hash=candidate.content_hash,
+            tags=candidate.tags,
+            confidence=candidate.confidence,
+            conflict_key=candidate.conflict_key,
+        )
+    )
+
+
+def proposal_digest(
+    *,
+    kind: str,
+    target_path: str,
+    content_hash: str,
+    tags: list[str],
+    evidence: list[EvidenceRef],
+) -> str:
+    """Bind a candidate proposal to the exact source revisions it saw."""
+    source_keys = sorted(
+        f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}" for ref in evidence
+    )
+    payload = "\0".join(
+        [
+            "memory-candidate-v1",
+            kind,
+            target_path,
+            content_hash,
+            *sorted(tags),
+            *source_keys,
+        ]
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def proposal_is_current(
+    candidate: MemoryCandidate,
+    evidence: list[EvidenceRef],
+) -> bool:
+    """Reject a source-edge swap even when every replacement is current."""
+    return bool(
+        candidate.proposal_digest
+        and candidate.proposal_digest
+        == proposal_digest(
+            kind=candidate.kind,
+            target_path=candidate.target_path,
+            content_hash=candidate.content_hash,
+            tags=candidate.tags,
+            evidence=evidence,
+        )
     )
 
 
@@ -141,20 +381,31 @@ def insert(
     if status not in VALID_STATUSES:
         raise ValueError(f"invalid candidate status: {status}")
     now = datetime.now().astimezone().isoformat()
+    current_projection_digest = projection_digest(
+        kind=kind,
+        operation=operation,
+        target_path=target_path,
+        content=content,
+        content_hash=content_hash,
+        tags=tags,
+        confidence=confidence,
+        conflict_key=conflict_key,
+    )
     before = conn.total_changes
     conn.execute(
         """
         INSERT OR IGNORE INTO memory_candidates(
-            id, idempotency_key, proposal_digest, producer_run_key,
+            id, idempotency_key, proposal_digest, projection_digest, producer_run_key,
             proposal_slot, kind, operation, target_path, content,
             content_hash, tags_json, confidence, conflict_key, status,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             candidate_id,
             idempotency_key,
             proposal_digest,
+            current_projection_digest,
             producer_run_key,
             proposal_slot,
             kind,
@@ -173,6 +424,8 @@ def insert(
     row = get_by_idempotency_key(conn, idempotency_key)
     if row is None:
         raise RuntimeError("candidate insert did not produce a row")
+    if not projection_is_current(row):
+        raise ValueError("candidate semantic projection is missing or changed")
     return row, conn.total_changes > before
 
 
@@ -290,13 +543,28 @@ def update_content(
     content_hash: str,
     tags: list[str],
     conflict_key: str,
+    proposal_digest: str,
     status: str,
 ) -> MemoryCandidate:
     now = datetime.now().astimezone().isoformat()
+    current = get(conn, candidate_id)
+    if current is None or not projection_is_current(current):
+        raise CandidateConflict("candidate semantic projection changed")
+    next_projection_digest = projection_digest(
+        kind=current.kind,
+        operation=current.operation,
+        target_path=current.target_path,
+        content=content,
+        content_hash=content_hash,
+        tags=tags,
+        confidence=current.confidence,
+        conflict_key=conflict_key,
+    )
     result = conn.execute(
         """
         UPDATE memory_candidates
-           SET content=?, content_hash=?, tags_json=?, conflict_key=?,
+           SET content=?, content_hash=?, tags_json=?, conflict_key=?, proposal_digest=?,
+               projection_digest=?,
                status=?, version=version+1, updated_at=?, last_error=''
          WHERE id=? AND version=? AND status IN ('pending', 'conflict')
         """,
@@ -305,6 +573,8 @@ def update_content(
             content_hash,
             json.dumps(tags, ensure_ascii=False),
             conflict_key,
+            proposal_digest,
+            next_projection_digest,
             status,
             now,
             candidate_id,
@@ -496,6 +766,7 @@ def _to_candidate(row: sqlite3.Row) -> MemoryCandidate:
         id=row["id"],
         idempotency_key=row["idempotency_key"],
         proposal_digest=row["proposal_digest"] or "",
+        projection_digest=row["projection_digest"] or "",
         producer_run_key=row["producer_run_key"] or "",
         proposal_slot=int(row["proposal_slot"] or 0),
         kind=row["kind"],

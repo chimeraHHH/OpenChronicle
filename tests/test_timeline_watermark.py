@@ -7,6 +7,8 @@ from pathlib import Path
 from openchronicle import cli
 from openchronicle import config as config_mod
 from openchronicle.capture import scheduler as capture_scheduler
+from openchronicle.provenance import store as provenance_store
+from openchronicle.provenance.models import EvidenceRef, observation_digest
 from openchronicle.session import store as session_store
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
@@ -15,9 +17,7 @@ from openchronicle.timeline import tick as timeline_tick
 _TZ = timezone(timedelta(hours=8))
 
 
-def test_empty_windows_advance_durable_timeline_watermark(
-    ac_root: Path, monkeypatch
-) -> None:
+def test_empty_windows_advance_durable_timeline_watermark(ac_root: Path, monkeypatch) -> None:
     now = datetime(2026, 4, 21, 10, 5, tzinfo=_TZ)
     cfg = config_mod.Config()
     cfg.timeline.window_minutes = 1
@@ -71,6 +71,101 @@ def test_clean_timeline_resets_blocks_and_producer_watermark(ac_root: Path) -> N
     with fts.cursor() as conn:
         assert timeline_store.get_latest_end(conn) is None
         assert timeline_store.get_processed_through(conn) is None
+
+
+def test_clean_after_existing_window_read_cannot_revive_watermark(
+    ac_root: Path,
+    monkeypatch,
+) -> None:
+    start = datetime(2026, 4, 21, 10, 0, tzinfo=_TZ)
+    end = start + timedelta(minutes=1)
+    capture_path = capture_scheduler._write_capture(
+        _capture_dict((start + timedelta(seconds=10)).isoformat(), "retry after clean")
+    )
+    capture = json.loads(capture_path.read_text(encoding="utf-8"))
+    with fts.cursor() as conn:
+        timeline_store.initialize_processed_range(conn, start)
+        block = timeline_store.TimelineBlock(
+            start_time=start,
+            end_time=end,
+            entries=["old block"],
+            apps_used=["Editor"],
+            capture_count=1,
+        )
+        timeline_store.insert(conn, block)
+        provenance_store.replace_sources(
+            conn,
+            subject=EvidenceRef(kind="timeline_block", id=block.id),
+            sources=[
+                EvidenceRef(
+                    kind="observation",
+                    id=str(capture["observation_id"]),
+                    path=capture_path.name,
+                    timestamp=str(capture["timestamp"]),
+                    content_hash=observation_digest(capture),
+                )
+            ],
+        )
+
+    cfg = config_mod.Config()
+    cfg.capture.deny_unknown_windows = False
+    cfg.timeline.window_minutes = 1
+    cfg.timeline.cold_lookback_minutes = 1
+    monkeypatch.setattr(timeline_tick, "_now", lambda: end)
+    real_window_state = timeline_store.window_state
+    cleaned = False
+
+    def inspect_then_clean(conn, window_start, window_end):
+        nonlocal cleaned
+        state = real_window_state(conn, window_start, window_end)
+        if state == "current" and not cleaned:
+            assert cli._clean_timeline() == 1
+            cleaned = True
+        return state
+
+    monkeypatch.setattr(
+        timeline_tick.aggregator.store,
+        "window_state",
+        inspect_then_clean,
+    )
+    assert timeline_tick._run_once(cfg) == 0
+    assert cleaned
+    with fts.cursor() as conn:
+        assert timeline_store.get_processed_range(conn) is None
+        assert conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0] == 0
+
+    monkeypatch.setattr(
+        timeline_tick.aggregator.store,
+        "window_state",
+        real_window_state,
+    )
+    monkeypatch.setattr(
+        timeline_tick.aggregator.llm_mod,
+        "call_llm",
+        lambda *_args, **_kwargs: type(
+            "Response",
+            (),
+            {
+                "choices": [
+                    type(
+                        "Choice",
+                        (),
+                        {
+                            "message": type(
+                                "Message",
+                                (),
+                                {"content": '{"entries":["fresh block"]}'},
+                            )()
+                        },
+                    )()
+                ]
+            },
+        )(),
+    )
+    assert timeline_tick._run_once(cfg) == 1
+    with fts.cursor() as conn:
+        assert timeline_store.get_processed_range(conn) == (start, end)
+        assert conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0] == 1
 
 
 def _capture_dict(timestamp: str, marker: str = "old crash evidence") -> dict:
@@ -266,9 +361,7 @@ def test_window_size_change_buckets_capture_from_existing_cursor(
         )
     ]
     with fts.cursor() as conn:
-        assert timeline_store.get_processed_through(conn) == (
-            old_upper + timedelta(minutes=5)
-        )
+        assert timeline_store.get_processed_through(conn) == (old_upper + timedelta(minutes=5))
 
 
 def test_invalid_temp_and_future_capture_names_do_not_expand_recovery(

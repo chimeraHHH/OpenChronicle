@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import sqlite3
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +16,7 @@ from typer.testing import CliRunner
 
 from openchronicle import cli, paths
 from openchronicle import config as config_mod
+from openchronicle.capture import scheduler as capture_scheduler
 from openchronicle.daily_wrap import store as daily_wrap_store
 from openchronicle.daily_wrap import worker as daily_wrap_worker
 from openchronicle.daily_wrap.service import (
@@ -21,7 +24,13 @@ from openchronicle.daily_wrap.service import (
     DailyWrapService,
 )
 from openchronicle.provenance import store as provenance_store
-from openchronicle.provenance.models import EvidenceRef, observation_digest
+from openchronicle.provenance.models import (
+    EvidenceRef,
+    daily_wrap_sources_digest,
+    observation_digest,
+    timeline_block_digest,
+)
+from openchronicle.services import context as context_mod
 from openchronicle.services.context import ContextService
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
@@ -58,12 +67,205 @@ def test_daily_wrap_store_migrates_published_digest(tmp_path: Path) -> None:
     )
     try:
         daily_wrap_store.ensure_schema(conn)
-        columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(daily_wrap_jobs)")
-        }
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(daily_wrap_jobs)")}
         assert "published_input_digest" in columns
     finally:
         conn.close()
+
+
+def test_daily_wrap_store_migrates_revision_source_digest_once(tmp_path: Path) -> None:
+    conn = sqlite3.connect(tmp_path / "legacy-wrap-revision.db", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    daily_wrap_store.ensure_schema(conn)
+    conn.execute("DROP TABLE daily_wrap_revisions")
+    conn.execute(
+        "DELETE FROM daily_wrap_schema_migrations WHERE name=?",
+        (daily_wrap_store._REVISION_BINDING_MIGRATION,),
+    )
+    conn.execute(
+        """
+        CREATE TABLE daily_wrap_revisions (
+            wrap_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            local_date TEXT NOT NULL DEFAULT '',
+            timezone TEXT NOT NULL DEFAULT '',
+            scope TEXT NOT NULL DEFAULT '',
+            window_start_utc TEXT NOT NULL DEFAULT '',
+            window_end_utc TEXT NOT NULL DEFAULT '',
+            workflow_version INTEGER NOT NULL DEFAULT 0,
+            input_digest TEXT NOT NULL,
+            coverage_status TEXT NOT NULL,
+            output_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(wrap_id, revision)
+        )
+        """
+    )
+    provenance_store.ensure_schema(conn)
+    wrap_id = "daily-wrap-legacy-source-binding"
+    conn.execute(
+        """
+        INSERT INTO daily_wrap_revisions(
+            wrap_id, revision, local_date, timezone, scope,
+            window_start_utc, window_end_utc, workflow_version,
+            input_digest, coverage_status, output_json, created_at
+        ) VALUES (?, 1, '2026-08-08', 'UTC', 'default',
+                  '2026-08-08T00:00:00+00:00',
+                  '2026-08-09T00:00:00+00:00',
+                  1, 'legacy-input', 'ready', '{}',
+                  '2026-08-09T00:05:00+00:00')
+        """,
+        (wrap_id,),
+    )
+    source = EvidenceRef(
+        kind="observation",
+        id="legacy-source",
+        path="legacy-source.json",
+        timestamp="2026-08-08T10:00:00+00:00",
+        content_hash="a" * 64,
+    )
+    provenance_store.replace_sources(
+        conn,
+        subject=EvidenceRef(
+            kind="daily_wrap_revision",
+            id=f"{wrap_id}:r1",
+            path=wrap_id,
+        ),
+        sources=[source],
+    )
+    try:
+        daily_wrap_store.ensure_schema(conn)
+        row = conn.execute(
+            """
+            SELECT source_digest FROM daily_wrap_revisions
+             WHERE wrap_id=? AND revision=1
+            """,
+            (wrap_id,),
+        ).fetchone()
+        assert row is not None
+        assert row["source_digest"] == daily_wrap_sources_digest([source])
+
+        conn.execute(
+            """
+            UPDATE daily_wrap_revisions SET source_digest=''
+             WHERE wrap_id=? AND revision=1
+            """,
+            (wrap_id,),
+        )
+        daily_wrap_store.ensure_schema(conn)
+        assert (
+            conn.execute(
+                """
+                SELECT source_digest FROM daily_wrap_revisions
+                 WHERE wrap_id=? AND revision=1
+                """,
+                (wrap_id,),
+            ).fetchone()["source_digest"]
+            == ""
+        )
+    finally:
+        conn.close()
+
+
+def test_daily_wrap_revision_migration_is_transactional_and_resumable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = tmp_path / "interrupted-wrap-revision.db"
+    conn = sqlite3.connect(db_path, isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    daily_wrap_store.ensure_schema(conn)
+    conn.execute("DROP TABLE daily_wrap_revisions")
+    conn.execute(
+        "DELETE FROM daily_wrap_schema_migrations WHERE name=?",
+        (daily_wrap_store._REVISION_BINDING_MIGRATION,),
+    )
+    conn.execute(
+        """
+        CREATE TABLE daily_wrap_revisions (
+            wrap_id TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            input_digest TEXT NOT NULL,
+            coverage_status TEXT NOT NULL,
+            output_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY(wrap_id, revision)
+        )
+        """
+    )
+    real_backfill = daily_wrap_store._backfill_revision_binding_migration
+
+    def interrupted_backfill(transaction: sqlite3.Connection) -> None:
+        real_backfill(transaction)
+        raise RuntimeError("simulated Daily Wrap migration interruption")
+
+    try:
+        monkeypatch.setattr(
+            daily_wrap_store,
+            "_backfill_revision_binding_migration",
+            interrupted_backfill,
+        )
+        with pytest.raises(RuntimeError, match="migration interruption"):
+            daily_wrap_store.ensure_schema(conn)
+
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(daily_wrap_revisions)")}
+        assert "source_digest" not in columns
+        assert conn.execute("SELECT COUNT(*) FROM daily_wrap_schema_migrations").fetchone()[0] == 0
+
+        monkeypatch.setattr(
+            daily_wrap_store,
+            "_backfill_revision_binding_migration",
+            real_backfill,
+        )
+        daily_wrap_store.ensure_schema(conn)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(daily_wrap_revisions)")}
+        assert {
+            "local_date",
+            "timezone",
+            "scope",
+            "window_start_utc",
+            "window_end_utc",
+            "workflow_version",
+            "source_digest",
+        } <= columns
+        assert conn.execute("SELECT COUNT(*) FROM daily_wrap_schema_migrations").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_daily_wrap_revision_migration_is_concurrent(tmp_path: Path) -> None:
+    db_path = tmp_path / "concurrent-wrap-revision.db"
+    seed = sqlite3.connect(db_path, isolation_level=None)
+    seed.row_factory = sqlite3.Row
+    daily_wrap_store.ensure_schema(seed)
+    seed.execute(
+        "DELETE FROM daily_wrap_schema_migrations WHERE name=?",
+        (daily_wrap_store._REVISION_BINDING_MIGRATION,),
+    )
+    seed.close()
+    barrier = threading.Barrier(2)
+
+    def migrate() -> None:
+        worker = sqlite3.connect(db_path, isolation_level=None, timeout=10)
+        worker.row_factory = sqlite3.Row
+        try:
+            barrier.wait(timeout=5)
+            daily_wrap_store.ensure_schema(worker)
+        finally:
+            worker.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(migrate) for _ in range(2)]
+        for future in futures:
+            future.result(timeout=15)
+
+    verify = sqlite3.connect(db_path, isolation_level=None)
+    try:
+        assert (
+            verify.execute("SELECT COUNT(*) FROM daily_wrap_schema_migrations").fetchone()[0] == 1
+        )
+    finally:
+        verify.close()
 
 
 def test_cli_daily_wrap_uses_configured_timezone(
@@ -72,22 +274,91 @@ def test_cli_daily_wrap_uses_configured_timezone(
     cfg = config_mod.Config()
     cfg.daily_wrap.timezone = "Asia/Shanghai"
     observed: dict[str, object] = {}
+    published = SimpleNamespace(
+        id="wrap-cli-timezone",
+        to_dict=lambda: {"timezone": "Asia/Shanghai"},
+    )
 
     def fake_run(self, local_day, timezone, **kwargs):  # noqa: ARG001
         observed.update(local_day=local_day, timezone=timezone)
-        return SimpleNamespace(to_dict=lambda: {"timezone": timezone})
+        return published
 
     monkeypatch.setattr(cli, "_init", lambda: cfg)
     monkeypatch.setattr(DailyWrapService, "run", fake_run)
-    result = CliRunner().invoke(
-        cli.app, ["daily-wrap", "run", "--date", "2026-04-21"]
-    )
+    monkeypatch.setattr(DailyWrapService, "get", lambda *_a, **_kw: published)
+    monkeypatch.setattr(ContextService, "daily_wrap_allowed", lambda *_a, **_kw: True)
+    result = CliRunner().invoke(cli.app, ["daily-wrap", "run", "--date", "2026-04-21"])
 
     assert result.exit_code == 0, result.output
     assert observed == {
         "local_day": date(2026, 4, 21),
         "timezone": "Asia/Shanghai",
     }
+
+
+def test_cli_daily_wrap_provider_latency_does_not_block_capture_persistence(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    provider_entered = threading.Event()
+    release_provider = threading.Event()
+    published = SimpleNamespace(
+        id="wrap-cli-liveness",
+        to_dict=lambda: {
+            "id": "wrap-cli-liveness",
+            "status": "succeeded",
+            "revision": 1,
+        },
+    )
+
+    def blocked_run(self, local_day, timezone, **kwargs):  # noqa: ARG001
+        provider_entered.set()
+        if not release_provider.wait(timeout=5):
+            raise AssertionError("test did not release Daily Wrap provider")
+        return published
+
+    monkeypatch.setattr(cli, "_init", lambda: cfg)
+    monkeypatch.setattr(DailyWrapService, "run", blocked_run)
+    monkeypatch.setattr(DailyWrapService, "get", lambda *_a, **_kw: published)
+    monkeypatch.setattr(ContextService, "daily_wrap_allowed", lambda *_a, **_kw: True)
+    later_capture = {
+        "timestamp": datetime(2026, 4, 21, 12, 0, tzinfo=UTC).isoformat(),
+        "schema_version": 4,
+        "observation_id": "obs_c11da117e5",
+        "trigger": {"event_type": "manual"},
+        "window_meta": {
+            "app_name": "Editor",
+            "bundle_id": "com.example.editor",
+            "title": "CLI Daily Wrap capture liveness",
+            "pid": 501,
+            "window_id": 502,
+        },
+        "privacy": {"decision": "allowed", "policy_version": 2},
+        "focused_element": {
+            "role": "AXTextArea",
+            "value": "CAPTURE_DURING_CLI_WRAP_PROVIDER",
+        },
+        "visible_text": "CAPTURE_DURING_CLI_WRAP_PROVIDER",
+        "url": "",
+    }
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            command = pool.submit(
+                CliRunner().invoke,
+                cli.app,
+                ["daily-wrap", "run", "--date", "2026-04-21", "--timezone", "UTC"],
+            )
+            assert provider_entered.wait(timeout=5)
+            written = pool.submit(capture_scheduler._write_capture, later_capture).result(timeout=1)
+            assert written.exists()
+            release_provider.set()
+            result = command.result(timeout=5)
+    finally:
+        release_provider.set()
+
+    assert result.exit_code == 0, result.output
 
 
 def _response(payload: dict) -> SimpleNamespace:
@@ -103,9 +374,7 @@ def _payload(*, category: str, token: str, text: str = "Grounded item") -> dict:
         "blocked": [],
         "needs_review": [],
     }
-    payload[category] = [
-        {"text": text, "supporting_text": text, "evidence": [token]}
-    ]
+    payload[category] = [{"text": text, "supporting_text": text, "evidence": [token]}]
     return payload
 
 
@@ -126,6 +395,8 @@ def _seed_block(
     start: datetime,
     text: str,
     app: str = "Cursor",
+    url: str = "",
+    url_metadata_only: bool = False,
 ) -> timeline_store.TimelineBlock:
     block = timeline_store.TimelineBlock(
         start_time=start,
@@ -135,19 +406,61 @@ def _seed_block(
         capture_count=1,
     )
     timeline_store.insert(conn, block)
+    observation_id = "obs_" + hashlib.blake2s(block.id.encode(), digest_size=16).hexdigest()
     capture = {
-        "observation_id": f"obs-{block.id}",
+        "schema_version": 4,
+        "observation_id": observation_id,
         "timestamp": start.isoformat(),
         "window_meta": {
             "app_name": app,
             "bundle_id": f"test.{app.casefold()}",
             "title": "test",
+            "pid": 101,
+            "window_id": 202,
+            "bounds": {"x": 10, "y": 20, "width": 900, "height": 700},
         },
-        "trigger": {"event_type": "test"},
-        "focused_element": {},
+        "trigger": {
+            "event_type": "manual",
+            "app_name": app,
+            "bundle_id": f"test.{app.casefold()}",
+            "window_title": "test",
+            "pid": 101,
+            "window_id": 202,
+        },
+        "privacy": {"decision": "allowed", "policy_version": 2},
+        "focused_element": {"role": "AXTextArea", "value": text},
         "visible_text": text,
-        "url": "",
+        "url": url,
     }
+    if url_metadata_only:
+        capture = {
+            "observation_id": observation_id,
+            "timestamp": start.isoformat(),
+            "schema_version": 5,
+            "trigger": {
+                "event_type": "heartbeat",
+                "app_name": app,
+                "bundle_id": "com.apple.Safari",
+                "window_title": "",
+                "pid": 101,
+                "window_id": 202,
+            },
+            "window_meta": {
+                "app_name": app,
+                "bundle_id": "com.apple.Safari",
+                "title": "",
+                "pid": 101,
+                "window_id": 202,
+                "bounds": {"x": 10, "y": 20, "width": 900, "height": 700},
+            },
+            "privacy": {
+                "decision": "allowed",
+                "policy_version": 3,
+                "content_mode": "url_metadata_only",
+            },
+            "url": url,
+            "visible_text": "",
+        }
     capture_path = paths.capture_buffer_dir() / f"{block.id}.json"
     capture_path.write_text(json.dumps(capture), encoding="utf-8")
     provenance_store.replace_sources(
@@ -234,7 +547,7 @@ def test_late_input_creates_new_revision_on_same_canonical_row(ac_root: Path) ->
         )
 
     with fts.cursor() as conn:
-        _seed_block(
+        first_block = _seed_block(
             conn,
             start=datetime(2026, 4, 21, 10, 0, tzinfo=UTC),
             text="Edited the implementation.",
@@ -242,7 +555,7 @@ def test_late_input_creates_new_revision_on_same_canonical_row(ac_root: Path) ->
         _cover_day(conn, day)
         service = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm)
         first = service.run(day, "UTC")
-        _seed_block(
+        second_block = _seed_block(
             conn,
             start=datetime(2026, 4, 21, 11, 0, tzinfo=UTC),
             text="Reviewed the tests.",
@@ -251,9 +564,32 @@ def test_late_input_creates_new_revision_on_same_canonical_row(ac_root: Path) ->
         assert second.id == first.id
         assert second.revision == 2
         assert second.input_digest != first.input_digest
-        assert conn.execute(
-            "SELECT COUNT(*) FROM daily_wrap_revisions WHERE wrap_id=?", (first.id,)
-        ).fetchone()[0] == 2
+        item = second.output["progressed"][0]
+        assert [ref["id"] for ref in item["evidence"]] == [first_block.id]
+        expected_source_ids = {first_block.id, second_block.id}
+        assert {
+            ref.id
+            for ref in provenance_store.direct_sources(
+                conn, EvidenceRef(kind="daily_wrap", id=second.id)
+            )
+        } == expected_source_ids
+        assert {
+            ref.id
+            for ref in provenance_store.direct_sources(
+                conn,
+                EvidenceRef(
+                    kind="daily_wrap_item",
+                    id=item["id"],
+                    path=second.id,
+                ),
+            )
+        } == expected_source_ids
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM daily_wrap_revisions WHERE wrap_id=?", (first.id,)
+            ).fetchone()[0]
+            == 2
+        )
 
 
 @pytest.mark.parametrize(
@@ -285,9 +621,7 @@ def test_strong_claim_without_explicit_signal_is_rejected(
             text=source_text,
         )
         _cover_day(conn, day)
-        row = DailyWrapService(
-            conn, config_mod.Config(), llm_caller=fake_llm
-        ).run(day, "UTC")
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(day, "UTC")
         assert row.output[category] == []
         assert row.coverage_status == "partial"
         assert any(
@@ -325,9 +659,7 @@ def test_narrow_explicit_strong_signals_are_accepted(
             text=source_text,
         )
         _cover_day(conn, day)
-        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(
-            day, "UTC"
-        )
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(day, "UTC")
         assert len(row.output[category]) == 1
 
 
@@ -421,9 +753,7 @@ def test_negated_or_resolved_strong_signal_is_rejected(
             text=source_text,
         )
         _cover_day(conn, day)
-        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(
-            day, "UTC"
-        )
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(day, "UTC")
         assert row.output[category] == []
         assert row.coverage_status == "partial"
 
@@ -439,9 +769,7 @@ def test_negated_or_resolved_strong_signal_is_rejected(
         "Completed: open-sourced the library.",
     ],
 )
-def test_completed_label_accepts_descriptive_values(
-    ac_root: Path, source_text: str
-) -> None:
+def test_completed_label_accepts_descriptive_values(ac_root: Path, source_text: str) -> None:
     day = date(2026, 4, 21)
 
     def fake_llm(cfg, stage, *, messages, tools=None, json_mode=False):
@@ -460,9 +788,7 @@ def test_completed_label_accepts_descriptive_values(
             text=source_text,
         )
         _cover_day(conn, day)
-        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(
-            day, "UTC"
-        )
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(day, "UTC")
         assert len(row.output["completed"]) == 1
 
 
@@ -485,9 +811,7 @@ def test_model_paraphrase_is_rejected_in_favor_of_exact_support(ac_root: Path) -
             text="Completed the release.",
         )
         _cover_day(conn, day)
-        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(
-            day, "UTC"
-        )
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(day, "UTC")
         assert row.output["completed"] == []
         assert row.coverage_status == "partial"
 
@@ -511,9 +835,7 @@ def test_unknown_evidence_is_dropped_not_persisted(ac_root: Path) -> None:
             text="Edited implementation.",
         )
         _cover_day(conn, day)
-        row = DailyWrapService(
-            conn, config_mod.Config(), llm_caller=fake_llm
-        ).run(day, "UTC")
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm).run(day, "UTC")
         assert row.output["progressed"] == []
         assert "deadbeef" not in json.dumps(row.output)
 
@@ -575,6 +897,51 @@ def test_input_change_during_provider_call_discards_stale_output(ac_root: Path) 
         assert row.output is None
 
 
+def test_input_change_in_pre_complete_gap_discards_stale_output(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The final semantic check runs inside complete, not before its call."""
+    day = date(2026, 4, 21)
+    with fts.cursor() as conn:
+        _seed_block(
+            conn,
+            start=datetime(2026, 4, 21, 10, 0, tzinfo=UTC),
+            text="Edited implementation.",
+        )
+        _cover_day(conn, day)
+
+        def fake_llm(cfg, stage, *, messages, tools=None, json_mode=False):
+            return _response(
+                _payload(
+                    category="progressed",
+                    token=_first_token(messages),
+                    text=_first_record_text(messages),
+                )
+            )
+
+        real_complete = daily_wrap_store.complete
+
+        def inject_late_source(*args, **kwargs):
+            _seed_block(
+                conn,
+                start=datetime(2026, 4, 21, 11, 0, tzinfo=UTC),
+                text="Input landed at the former pre-complete gap.",
+            )
+            return real_complete(*args, **kwargs)
+
+        monkeypatch.setattr(daily_wrap_store, "complete", inject_late_source)
+        service = DailyWrapService(conn, config_mod.Config(), llm_caller=fake_llm)
+        with pytest.raises(DailyWrapInputChanged):
+            service.run(day, "UTC")
+
+        row = service.get(day, "UTC")
+        assert row is not None
+        assert row.status == "failed"
+        assert row.revision == 0
+        assert row.output is None
+        assert conn.execute("SELECT COUNT(*) FROM daily_wrap_revisions").fetchone()[0] == 0
+
+
 def test_failed_refresh_preserves_last_known_good_output(ac_root: Path) -> None:
     day = date(2026, 4, 21)
 
@@ -594,9 +961,7 @@ def test_failed_refresh_preserves_last_known_good_output(ac_root: Path) -> None:
             text="Edited the implementation.",
         )
         _cover_day(conn, day)
-        first = DailyWrapService(conn, config_mod.Config(), llm_caller=first_llm).run(
-            day, "UTC"
-        )
+        first = DailyWrapService(conn, config_mod.Config(), llm_caller=first_llm).run(day, "UTC")
         _seed_block(
             conn,
             start=datetime(2026, 4, 21, 11, 0, tzinfo=UTC),
@@ -641,6 +1006,186 @@ def test_excluded_app_sentinel_never_reaches_remote_payload(ac_root: Path) -> No
         assert called is False
         assert "SECRET_SENTINEL" not in json.dumps(row.output)
         assert row.coverage_status == "partial"
+
+
+def test_url_policy_changes_context_digest_and_is_restrictive() -> None:
+    baseline = config_mod.Config()
+    baseline.capture.deny_unknown_windows = False
+    changed = config_mod.Config()
+    changed.capture.deny_unknown_windows = False
+    changed.capture.excluded_url_patterns = ["private.example"]
+
+    assert context_mod._policy_digest(baseline) != context_mod._policy_digest(changed)
+    assert context_mod._policy_is_restrictive(baseline) is False
+    assert context_mod._policy_is_restrictive(changed) is True
+
+
+def test_current_url_policy_rechecks_schema5_observation_provenance(ac_root: Path) -> None:
+    cfg = config_mod.Config()
+    cfg.capture.excluded_url_patterns = ["private.example"]
+    with fts.cursor() as conn:
+        allowed = _seed_block(
+            conn,
+            start=datetime(2026, 4, 21, 10, 0, tzinfo=UTC),
+            text="Allowed URL metadata",
+            url="https://public.example/work",
+            url_metadata_only=True,
+        )
+        excluded = _seed_block(
+            conn,
+            start=datetime(2026, 4, 21, 11, 0, tzinfo=UTC),
+            text="SECRET_DERIVED_FROM_EXCLUDED_URL",
+            url="https://private.example/secret",
+            url_metadata_only=True,
+        )
+        service = ContextService(conn, cfg)
+
+        assert service.evidence_allowed(EvidenceRef(kind="timeline_block", id=allowed.id))
+        assert not service.evidence_allowed(EvidenceRef(kind="timeline_block", id=excluded.id))
+
+
+def test_active_url_policy_rejects_legacy_observation_provenance(ac_root: Path) -> None:
+    cfg = config_mod.Config()
+    cfg.capture.allowed_url_patterns = ["public.example"]
+    with fts.cursor() as conn:
+        legacy = _seed_block(
+            conn,
+            start=datetime(2026, 4, 21, 10, 0, tzinfo=UTC),
+            text="LEGACY_UNPROJECTED_CONTENT",
+            url="https://public.example/work",
+        )
+
+        assert not ContextService(conn, cfg).evidence_allowed(
+            EvidenceRef(kind="timeline_block", id=legacy.id)
+        )
+
+
+def test_restrictive_policy_rejects_empty_hash_and_dangling_provenance_branches(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.capture.excluded_app_names = ["SecretApp"]
+    with fts.cursor() as conn:
+        block = _seed_block(
+            conn,
+            start=datetime(2026, 4, 21, 10, 0, tzinfo=UTC),
+            text="Allowed observation",
+        )
+        subject = EvidenceRef(kind="timeline_block", id=block.id)
+        allowed_source = provenance_store.direct_sources(conn, subject)[0]
+        service = ContextService(conn, cfg)
+
+        assert not service.evidence_allowed(
+            subject,
+            embedded_sources=[
+                EvidenceRef(
+                    kind="observation",
+                    id=allowed_source.id,
+                    path=allowed_source.path,
+                )
+            ],
+        )
+        assert not service.evidence_allowed(
+            subject,
+            embedded_sources=[
+                allowed_source,
+                EvidenceRef(
+                    kind="timeline_block",
+                    id="missing-block",
+                    content_hash="0" * 64,
+                ),
+            ],
+        )
+
+
+def test_restrictive_policy_rejects_cycle_even_with_an_allowed_observation(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.capture.excluded_app_names = ["SecretApp"]
+    with fts.cursor() as conn:
+        first = _seed_block(
+            conn,
+            start=datetime(2026, 4, 21, 10, 0, tzinfo=UTC),
+            text="First allowed observation",
+        )
+        second = _seed_block(
+            conn,
+            start=datetime(2026, 4, 21, 11, 0, tzinfo=UTC),
+            text="Second allowed observation",
+        )
+        first_ref = EvidenceRef(
+            kind="timeline_block",
+            id=first.id,
+            content_hash=timeline_block_digest(
+                start=first.start_time.isoformat(),
+                end=first.end_time.isoformat(),
+                entries=first.entries,
+                apps=first.apps_used,
+            ),
+        )
+        second_ref = EvidenceRef(
+            kind="timeline_block",
+            id=second.id,
+            content_hash=timeline_block_digest(
+                start=second.start_time.isoformat(),
+                end=second.end_time.isoformat(),
+                entries=second.entries,
+                apps=second.apps_used,
+            ),
+        )
+        allowed_source = provenance_store.direct_sources(conn, first_ref)[0]
+        provenance_store.replace_sources(
+            conn,
+            subject=first_ref,
+            sources=[allowed_source, second_ref],
+        )
+        provenance_store.replace_sources(
+            conn,
+            subject=second_ref,
+            sources=[first_ref],
+        )
+
+        assert not ContextService(conn, cfg).evidence_allowed(
+            EvidenceRef(kind="daily_wrap", id="synthetic"),
+            embedded_sources=[first_ref],
+        )
+
+
+def test_active_url_policy_rejects_mislabeled_content_bearing_projection(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.capture.allowed_url_patterns = ["public.example"]
+    with fts.cursor() as conn:
+        block = _seed_block(
+            conn,
+            start=datetime(2026, 4, 21, 10, 0, tzinfo=UTC),
+            text="URL metadata",
+            url="https://public.example/work",
+            url_metadata_only=True,
+        )
+        subject = EvidenceRef(kind="timeline_block", id=block.id)
+        source = provenance_store.direct_sources(conn, subject)[0]
+        capture_path = paths.capture_buffer_dir() / source.path
+        capture = json.loads(capture_path.read_text(encoding="utf-8"))
+        capture["visible_text"] = "MISLABELED_PRIVATE_BODY"
+        capture_path.write_text(json.dumps(capture), encoding="utf-8")
+        provenance_store.replace_sources(
+            conn,
+            subject=subject,
+            sources=[
+                EvidenceRef(
+                    kind="observation",
+                    id=source.id,
+                    path=source.path,
+                    timestamp=source.timestamp,
+                    content_hash=observation_digest(capture),
+                )
+            ],
+        )
+
+        assert not ContextService(conn, cfg).evidence_allowed(subject)
 
 
 @pytest.mark.parametrize(
@@ -722,9 +1267,7 @@ def test_visible_prompt_injection_is_not_persisted_as_a_wrap_item(
             text=injected,
         )
         _cover_day(conn, day)
-        row = DailyWrapService(
-            conn, config_mod.Config(), llm_caller=inspect_llm
-        ).run(day, "UTC")
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=inspect_llm).run(day, "UTC")
         assert row.output["progressed"] == []
         assert injected not in json.dumps(row.output)
         assert row.coverage_status == "partial"
@@ -751,9 +1294,9 @@ def test_default_policy_omits_unverifiable_legacy_block_from_remote(
         )
         timeline_store.insert(conn, block)
         _cover_day(conn, day)
-        row = DailyWrapService(
-            conn, config_mod.Config(), llm_caller=should_not_call
-        ).run(day, "UTC")
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=should_not_call).run(
+            day, "UTC"
+        )
         assert called is False
         assert "SECRET_UNVERIFIABLE" not in json.dumps(row.output)
         assert row.coverage_status == "partial"
@@ -767,15 +1310,10 @@ def test_day_context_enforces_total_remote_payload_budget(ac_root: Path) -> None
         start = datetime(2026, 4, 21, 0, 0, tzinfo=UTC)
         for index in range(600):
             block_start = start + timedelta(minutes=index)
-            timeline_store.insert(
+            _seed_block(
                 conn,
-                timeline_store.TimelineBlock(
-                    start_time=block_start,
-                    end_time=block_start + timedelta(minutes=1),
-                    entries=[f"record-{index}-" + ("x" * 1500)],
-                    apps_used=["Cursor"],
-                    capture_count=1,
-                ),
+                start=block_start,
+                text=f"record-{index}-" + ("x" * 1500),
             )
         _cover_day(conn, day)
         context = ContextService(conn, cfg).for_day(day, "UTC")
@@ -786,10 +1324,7 @@ def test_day_context_enforces_total_remote_payload_budget(ac_root: Path) -> None
         )
         assert len(context.records) <= 400
         assert len(serialized) <= 205_000
-        assert any(
-            gap.startswith("remote_payload_truncated:")
-            for gap in context.coverage_gaps
-        )
+        assert any(gap.startswith("remote_payload_truncated:") for gap in context.coverage_gaps)
 
 
 def test_final_remote_payload_bounds_and_aggregates_coverage_gaps(
@@ -818,9 +1353,7 @@ def test_final_remote_payload_bounds_and_aggregates_coverage_gaps(
         )
         invalid_rows = []
         for index in range(600):
-            invalid_start = datetime(2026, 4, 21, 11, 0, tzinfo=UTC) + timedelta(
-                seconds=index
-            )
+            invalid_start = datetime(2026, 4, 21, 11, 0, tzinfo=UTC) + timedelta(seconds=index)
             invalid_rows.append(
                 (
                     f"invalid-{'x' * 400}-{index}",
@@ -839,9 +1372,7 @@ def test_final_remote_payload_bounds_and_aggregates_coverage_gaps(
             invalid_rows,
         )
         _cover_day(conn, day)
-        row = DailyWrapService(
-            conn, config_mod.Config(), llm_caller=inspect_llm
-        ).run(day, "UTC")
+        row = DailyWrapService(conn, config_mod.Config(), llm_caller=inspect_llm).run(day, "UTC")
         assert len(row.output["progressed"]) == 1
         assert len(row.output["coverage_gaps"]) < 10
 
@@ -863,12 +1394,12 @@ def test_scheduler_uses_absolute_dst_sleep_and_startup_catchup(ac_root: Path) ->
     zone = ZoneInfo(timezone)
     spring_now = datetime(2026, 3, 8, 0, 5, tzinfo=zone)
     fall_now = datetime(2026, 11, 1, 0, 5, tzinfo=zone)
-    assert daily_wrap_worker._seconds_until_next(
-        cfg, timezone, now=spring_now
-    ) == pytest.approx(23 * 3600)
-    assert daily_wrap_worker._seconds_until_next(
-        cfg, timezone, now=fall_now
-    ) == pytest.approx(25 * 3600)
+    assert daily_wrap_worker._seconds_until_next(cfg, timezone, now=spring_now) == pytest.approx(
+        23 * 3600
+    )
+    assert daily_wrap_worker._seconds_until_next(cfg, timezone, now=fall_now) == pytest.approx(
+        25 * 3600
+    )
     assert daily_wrap_worker._startup_catchup_day(
         cfg,
         timezone,
@@ -894,7 +1425,8 @@ def test_daily_wrap_scheduler_is_opt_in_and_validates_config(ac_root: Path) -> N
 
 @pytest.mark.asyncio
 async def test_scheduler_stops_failed_retries_after_grace(
-    ac_root: Path, monkeypatch,
+    ac_root: Path,
+    monkeypatch,
 ) -> None:
     cfg = config_mod.Config()
     cfg.daily_wrap.late_data_grace_hours = 0
@@ -917,7 +1449,8 @@ async def test_scheduler_stops_failed_retries_after_grace(
 
 @pytest.mark.asyncio
 async def test_scheduler_starts_next_day_while_prior_grace_monitor_is_live(
-    ac_root: Path, monkeypatch,
+    ac_root: Path,
+    monkeypatch,
 ) -> None:
     cfg = config_mod.Config()
     cfg.daily_wrap.timezone = "UTC"
@@ -937,14 +1470,10 @@ async def test_scheduler_starts_next_day_while_prior_grace_monitor_is_live(
         "_startup_catchup_day",
         lambda *args, **kwargs: catchup_day,
     )
-    monkeypatch.setattr(
-        daily_wrap_worker, "_seconds_until_next", lambda *args, **kwargs: 0.0
-    )
+    monkeypatch.setattr(daily_wrap_worker, "_seconds_until_next", lambda *args, **kwargs: 0.0)
     monkeypatch.setattr(daily_wrap_worker, "_monitor_day", blocking_monitor)
 
-    task = daily_wrap_worker.asyncio.create_task(
-        daily_wrap_worker.run_forever(cfg)
-    )
+    task = daily_wrap_worker.asyncio.create_task(daily_wrap_worker.run_forever(cfg))
     try:
         await daily_wrap_worker.asyncio.wait_for(second_started.wait(), timeout=1)
     finally:
@@ -971,9 +1500,7 @@ async def test_scheduler_cancellation_does_not_join_sync_provider_thread(
         return "wrap-id"
 
     monkeypatch.setattr(daily_wrap_worker, "run_for_day", blocking_run)
-    task = asyncio.create_task(
-        daily_wrap_worker._run_for_day_async(cfg, date(2026, 4, 21), "UTC")
-    )
+    task = asyncio.create_task(daily_wrap_worker._run_for_day_async(cfg, date(2026, 4, 21), "UTC"))
     while not started.is_set():
         await asyncio.sleep(0)
     task.cancel()
@@ -1022,9 +1549,7 @@ async def test_scheduler_cancel_before_claim_cannot_create_a_late_lease(
     monkeypatch.setattr(daily_wrap_store, "claim", recording_claim)
 
     target_day = date(2026, 4, 21)
-    task = asyncio.create_task(
-        daily_wrap_worker._run_for_day_async(cfg, target_day, "UTC")
-    )
+    task = asyncio.create_task(daily_wrap_worker._run_for_day_async(cfg, target_day, "UTC"))
     while not entered_context.is_set():
         await asyncio.sleep(0)
     task.cancel()

@@ -91,6 +91,7 @@ def test_clean_captures_unlink_failure_stays_hidden_from_read_and_rebuild(
     from pathlib import Path
 
     from openchronicle.capture import scheduler
+    from openchronicle.config import Config
     from openchronicle.mcp import captures as mcp_captures
     from openchronicle.memory_candidates import store as candidate_store
     from openchronicle.store import fts
@@ -134,8 +135,12 @@ def test_clean_captures_unlink_failure_stays_hidden_from_read_and_rebuild(
             conn, kind="capture_file", artifact_id=capture_path.name
         )
     cli.rebuild_captures_index()
-    assert mcp_captures.search_captures(query="CAPTURE_UNLINK_PRIVATE_MARKER") == []
-    assert mcp_captures.read_recent_capture() is None
+    cfg = Config()
+    cfg.capture.deny_unknown_windows = False
+    assert mcp_captures.search_captures(
+        cfg=cfg, query="CAPTURE_UNLINK_PRIVATE_MARKER"
+    ) == []
+    assert mcp_captures.read_recent_capture(cfg=cfg) is None
 
 
 def test_capture_read_and_cleanup_are_linearized(
@@ -145,13 +150,14 @@ def test_capture_read_and_cleanup_are_linearized(
     from pathlib import Path
 
     from openchronicle.capture import scheduler
+    from openchronicle.config import Config
     from openchronicle.mcp import captures as mcp_captures
     from openchronicle.memory_candidates import store as candidate_store
     from openchronicle.store import fts
 
     capture = {
         "timestamp": "2026-04-25T22:01:00+08:00",
-        "window_meta": {"app_name": "Notes", "title": "Race"},
+        "window_meta": {"app_name": "Notes", "bundle_id": "", "title": "Race"},
         "visible_text": "CAPTURE_READ_CLEAN_RACE_SECRET",
     }
     capture_path = scheduler._write_capture(capture)
@@ -160,6 +166,8 @@ def test_capture_read_and_cleanup_are_linearized(
     cleanup_done = threading.Event()
     read_results: list[dict | None] = []
     cleanup_errors: list[BaseException] = []
+    cfg = Config()
+    cfg.capture.deny_unknown_windows = False
     real_load = mcp_captures._load_capture
     real_unlink = Path.unlink
 
@@ -175,7 +183,7 @@ def test_capture_read_and_cleanup_are_linearized(
         real_unlink(path, *args, **kwargs)
 
     def reader() -> None:
-        read_results.append(mcp_captures.read_recent_capture())
+        read_results.append(mcp_captures.read_recent_capture(cfg=cfg))
 
     def cleaner() -> None:
         try:
@@ -212,7 +220,7 @@ def test_capture_read_and_cleanup_are_linearized(
         assert candidate_store.is_tombstoned(
             conn, kind="capture_file", artifact_id=capture_path.name
         )
-    assert mcp_captures.read_recent_capture() is None
+    assert mcp_captures.read_recent_capture(cfg=cfg) is None
 
 
 def test_clean_captures_clears_stale_rows_when_buffer_is_empty(ac_root) -> None:

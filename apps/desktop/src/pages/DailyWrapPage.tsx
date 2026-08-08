@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { DesktopApi } from "../api";
 import type { DailyWrap, DailyWrapSummary, SourceSubject, WrapCategory } from "../contracts";
-import { displayError, formatDateTime, titleCase } from "../format";
+import { displayError, titleCase } from "../format";
 import { StatusBadge } from "../components/StatusBadge";
 import { UntrustedText } from "../components/UntrustedText";
 
@@ -21,8 +21,6 @@ const categories: Array<{ id: WrapCategory; label: string }> = [
 ];
 
 function wrapTone(wrap: DailyWrap | DailyWrapSummary) {
-  if (wrap.status === "failed") return "danger" as const;
-  if (wrap.status === "running") return "info" as const;
   if (wrap.coverage_status === "partial") return "warning" as const;
   return "positive" as const;
 }
@@ -88,7 +86,7 @@ export function DailyWrapPage({ api, summaries, onOpenSource }: DailyWrapPagePro
                 <span className="collection-list__topline">
                   <strong><bdi>{summary.local_date}</bdi></strong>
                   <StatusBadge tone={wrapTone(summary)}>
-                    {summary.status === "succeeded" ? titleCase(summary.coverage_status) : titleCase(summary.status)}
+                    {titleCase(summary.coverage_status)}
                   </StatusBadge>
                 </span>
                 <span><bdi>{summary.timezone}</bdi></span>
@@ -109,26 +107,12 @@ export function DailyWrapPage({ api, summaries, onOpenSource }: DailyWrapPagePro
               <div>
                 <p className="eyebrow"><bdi>{wrap.timezone}</bdi></p>
                 <h2><bdi>{wrap.local_date}</bdi></h2>
-                <p>Revision {wrap.revision} · updated <bdi>{formatDateTime(wrap.updated_at)}</bdi></p>
+                <p>Published revision {wrap.revision}</p>
               </div>
               <StatusBadge tone={wrapTone(wrap)}>
-                {wrap.status === "succeeded" ? titleCase(wrap.coverage_status) : titleCase(wrap.status)}
+                {titleCase(wrap.coverage_status)}
               </StatusBadge>
             </header>
-
-            {wrap.status === "failed" && wrap.output ? (
-              <section className="danger-panel" aria-labelledby="stale-wrap-title">
-                <h3 id="stale-wrap-title">Showing the last successful revision</h3>
-                <p>The latest refresh failed. The evidence excerpts below are not up to date.</p>
-                {wrap.last_error ? <UntrustedText as="p" className="technical-label">{wrap.last_error}</UntrustedText> : null}
-              </section>
-            ) : null}
-            {wrap.status === "running" && wrap.output ? (
-              <section className="trust-note" aria-labelledby="running-wrap-title">
-                <h3 id="running-wrap-title">Showing the last published revision</h3>
-                <p>A new revision is still in progress and is not included below.</p>
-              </section>
-            ) : null}
             {wrap.coverage_status === "partial" || wrap.output?.status === "partial" ? (
               <section className="warning-panel" aria-labelledby="partial-wrap-title">
                 <h3 id="partial-wrap-title">Partial coverage</h3>
@@ -143,19 +127,6 @@ export function DailyWrapPage({ api, summaries, onOpenSource }: DailyWrapPagePro
                 ) : null}
               </section>
             ) : null}
-            {wrap.status === "running" ? (
-              <div className="empty-state">
-                <h3>Generation is in progress</h3>
-                <p>No new result is shown until the local service publishes a complete revision.</p>
-              </div>
-            ) : null}
-            {wrap.status === "failed" && !wrap.output ? (
-              <div className="empty-state empty-state--error">
-                <h3>No successful wrap is available</h3>
-                <p>The provider failed or returned invalid evidence. No fallback summary was invented.</p>
-              </div>
-            ) : null}
-
             {wrap.output ? (
               <>
                 <section className="wrap-summary" aria-label="Daily Wrap summary">

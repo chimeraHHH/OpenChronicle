@@ -1,5 +1,10 @@
 export type PageId = "overview" | "review" | "daily-wrap" | "timeline" | "privacy";
 
+// Rust owns the sidecar envelope, while these types own the corresponding
+// WebView result projection. Version 2 removes mutable Daily Wrap scheduler
+// fields from that public projection.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 2 as const;
+
 export type CandidateStatus =
   | "pending"
   | "conflict"
@@ -103,15 +108,10 @@ export interface DailyWrap {
   local_date: string;
   timezone: string;
   scope: string;
-  status: "running" | "succeeded" | "failed";
+  status: "succeeded";
   coverage_status: "ready" | "partial";
-  attempt_count: number;
   revision: number;
-  updated_at: string;
-  completed_at?: string | null;
-  last_error?: string;
   output?: DailyWrapOutput | null;
-  input_digest?: string;
   published_input_digest?: string;
 }
 
@@ -120,10 +120,9 @@ export interface DailyWrapSummary {
   local_date: string;
   timezone: string;
   scope: string;
-  status: "running" | "succeeded" | "failed";
+  status: "succeeded";
   coverage_status: "ready" | "partial";
   revision: number;
-  updated_at: string;
   has_output: boolean;
   item_counts?: Partial<Record<WrapCategory, number>>;
 }

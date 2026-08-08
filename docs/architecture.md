@@ -9,9 +9,15 @@ flowchart LR
     subgraph capture [Capture Layer]
         direction TB
         S0["<b>S0</b> event_dispatcher<br/>dedup · debounce · min-gap"]
+        PF["Privacy + exact-window fence<br/>app · bundle · title · PID · CGWindowID · bounds"]
+        AX["mac-ax-helper<br/>exact focused AX window"]
         S1["<b>S1</b> s1_parser<br/>focused_element · visible_text · url"]
+        URL["Known-browser URL policy<br/>stable-ID address · full-tree deny"]
+        META["URL metadata projection<br/>schema v5 · no AX/content/pixels"]
+        NORMAL["Normal schema v4 path<br/>optional exact-window screenshot"]
         BUF[(capture-buffer/*.json)]
-        S0 --> S1 --> BUF
+        S0 --> PF --> AX --> S1 --> URL --> META --> BUF
+        S1 -. URL policy off .-> NORMAL --> BUF
     end
 
     subgraph compress [Compression Layer]
@@ -69,7 +75,10 @@ A typical 5-minute flush window, showing how one AX event propagates through to 
 sequenceDiagram
     participant W as mac-ax-watcher
     participant S0 as S0 dispatcher
+    participant P as Privacy / WindowMeta
+    participant AX as mac-ax-helper
     participant S1 as S1 parser
+    participant CG as CoreGraphics screenshot
     participant BUF as capture-buffer
     participant SM as Session mgr
     participant TL as Timeline tick
@@ -81,8 +90,22 @@ sequenceDiagram
 
     W->>S0: AX event
     S0->>S0: debounce / dedup / min-gap
-    S0->>S1: schedule capture runner (threaded)
-    S1->>BUF: write enriched {iso}.json
+    S0->>P: schedule capture runner (threaded)
+    P->>P: validate policy + exact focused<br/>PID / CGWindowID / bounds
+    P->>P: URL rules: reject unsupported bundle before AX
+    P->>AX: focused-window-only AX capture
+    AX-->>P: one frontmost app/window<br/>identity + completeness receipt
+    P->>S1: enrich AX in memory
+    S1->>P: focused element / visible text / URL
+    P->>P: URL rules: stable-ID address + full-tree deny<br/>repeat complete snapshot and compare evidence
+    P->>P: URL rules: project to URL/identity metadata only
+    Note over P,AX: Two reads mitigate navigation races;<br/>they are not an atomic browser transaction
+    opt screenshots enabled and URL policy disabled
+        P->>CG: exact CGWindowID + expected identity
+        CG-->>P: verified JPEG + final identity
+        P->>P: final focused-window identity check
+    end
+    P->>BUF: private normal v4/v2 or URL-metadata v5/v3 JSON
     Note right of BUF: content-fingerprint dedup<br/>drops consecutive duplicates
     BUF->>SM: pre_capture_hook → on_event<br/>(post-write · skipped on content-dedup)
 
@@ -125,7 +148,7 @@ Defined in `src/openchronicle/daemon.py`.
 
 | Task | Purpose |
 |---|---|
-| `capture` | Consumes `mac-ax-watcher` events, debounces, writes enriched JSON captures (incl. S1 fields) to `~/.openchronicle/capture-buffer/`. Heartbeat catches quiet periods. Also calls `SessionManager.on_event` on every capture so the session cutter sees the same signal. |
+| `capture` | Consumes bounded, identity-only watcher events and requires one exact focused-window identity across native metadata and AX collection. App/window policy runs before AX. Active URL policy rejects unsupported bundles before AX; a known browser adapter then requires one explicit HTTP(S) address from an exact stable identifier, a complete-tree receipt, a full-tree deny scan, and matching evidence from two snapshots. Successful URL observations are schema-v5/policy-v3 `url_metadata_only`: URL and identity only, with raw AX/focused content/pixels omitted and text/titles cleared. The two reads reduce but cannot atomically eliminate browser navigation races. With URL policy off, optional pixels target only the verified `CGWindowID`. Any required-stage failure drops the observation; only a successful private JSON reaches `SessionManager.on_event`. Heartbeat catches quiet periods. |
 | `timeline` | Every 60s scans closed wall-clock windows (default 1 min), runs the `timeline` LLM stage for populated windows, and records the inspected interval `[processed_from, processed_through)` (bucket-end proof `(processed_from, processed_through]`) across populated and proven-empty windows. A cold start backfills retained captures/pending sessions in bounded pages. Cleans buffer files only behind the valid upper bound. |
 | `session` | Every `session.tick_seconds` (default 30), calls `SessionManager.check_cuts()` so idle-gap and timeout cuts fire even when the dispatcher is quiet. |
 | `flush` | Every `session.flush_minutes` (default 5, clamped to 5-min floor), runs the reducer incrementally over the active session's newly closed timeline blocks (~5 of them at defaults) and appends `[flush]`-tagged partial entries to today's event-daily. |
@@ -135,7 +158,7 @@ Defined in `src/openchronicle/daemon.py`.
 | `daily-wrap` | Opt-in worker (disabled by default). After the configured post-midnight time, synthesizes the previous IANA-local day, retries/rechecks within the late-data grace window, and revises one canonical grounded wrap. Provider calls run on cancellable dedicated daemon threads; shutdown revokes the matching lease without waiting for a stuck provider. |
 | `mcp` | Hosts the Reader MCP server inside the daemon. Exponential backoff on crash. |
 
-The session cutter itself does not have a dedicated task — it runs inline on every persisted, non-duplicate watcher or heartbeat capture via the `pre_capture_hook` wired in `daemon.py`. Session-end callbacks spawn the reducer on a daemon thread; if the final timeline bucket is still pending, the durable row stays queued for `pending-reducer`. A successful terminal write persists its exact entry identity and an owed-classification bit before any callback. The callback accelerates outbox recovery but is not required for correctness. `flush_end` proves reducer materialization; `classified_end` records only finalized, contiguous classifier coverage.
+The session cutter itself does not have a dedicated task — it runs inline on every persisted, non-duplicate watcher or heartbeat capture via the `pre_capture_hook` wired in `daemon.py`. Ordinary session-end callbacks spawn the reducer on a daemon thread; graceful shutdown persists the same `ended` row but deliberately leaves dispatch to the next lease holder. If the final timeline bucket is still pending, the durable row stays queued for `pending-reducer`. A successful terminal write persists its exact entry identity and an owed-classification bit before any callback. The callback accelerates outbox recovery but is not required for correctness. `flush_end` proves reducer materialization; `classified_end` records only finalized, contiguous classifier coverage.
 
 The daemon also holds a private singleton file lease for its entire lifetime.
 CLI `status`/`stop` trust `.pid` only while that lease is held, so a PID reused
@@ -146,6 +169,65 @@ memory purge tombstones. This recovery is independent of Daily Wrap enablement.
 `--capture-only` is a strict no-model ingestion/debug mode: it disables the
 timeline, reducer/flush, classifier, and MCP paths. Capture, session bookkeeping,
 and the daily safety-net still run so session rows land on disk.
+
+## Capture privacy and pixel boundary
+
+`window_meta.py` does not infer a window from app order, title alone, or a
+display crop. The native helper joins AX's focused window to the ordered
+CoreGraphics list and returns one versioned `WindowMeta`: app name, bundle ID,
+title, PID, `CGWindowID`, and bounded global geometry. Ambiguity, missing
+fields, invalid geometry, permission denial, and focus changes all fail closed.
+The AX helper carries that identity through focused-window-only traversal and
+Python accepts only one frontmost app and one focused window with the same
+identity.
+
+S1 runs only in memory until URL policy is resolved. URL configuration is
+validated before native collection, and an active policy accepts only known
+browser bundle/family adapters; unknown browsers and ordinary apps are denied
+before AX. A family adapter must find exactly one explicit HTTP(S) value in a
+browser-chrome control by exact stable AX identifier. Normal S1 extraction may
+fall back to an exact label, but policy cannot. A separate bounded full-tree
+scan evaluates every URL-like value as an additional deny surface; page content
+can deny but never grant address evidence. Scheme-less evidence is checked
+under both HTTP and HTTPS interpretations, remains `null` in S1, and is rejected
+as durable URL evidence.
+
+The helper must return a versioned receipt proving an unpruned focused-window
+tree at the effective depth. A second complete AX snapshot must retain the same
+exact window identity and address/full-scan evidence, including provenance and
+AX source paths. This reduces ordinary navigation races but does not provide an
+atomic browser transaction. On success the raw snapshots remain ephemeral:
+schema v5 / policy v3 `url_metadata_only` persistence retains app, bundle, PID,
+`CGWindowID`, bounds, and the approved explicit URL; it omits AX/focused content
+and pixels and clears titles and visible text. Secure AX values are redacted in
+Swift and again at the Python boundary before this projection. The retained URL
+is evidence of an editable address-control value, not a browser navigation
+receipt; a stable typed-but-unsubmitted URL can therefore describe a different
+document from the page that was loaded.
+
+Screenshots are opt-in. The helper preflights Screen Recording permission
+without opening a consent prompt and asks CoreGraphics for an image of an array
+containing exactly the expected `CGWindowID`. It verifies identity before
+capture, after capture, and after JPEG encoding; Python validates dimensions,
+image bytes, and returned identity, and the scheduler performs another
+frontmost-window check. There is no monitor/full-screen capture, coordinate
+crop, or `mss` fallback. If this optional stage is enabled and any check fails,
+the AX result is discarded with the rest of the observation. Any active URL
+policy disables the pixel stage entirely because AX address reads and CGWindow
+pixels have no atomic cross-framework fence.
+
+## Privacy egress linearization
+
+Every public privacy-sensitive read (MCP, desktop bridge, CLI, snapshot)
+re-authorizes canonical data under a shared review-operation → capture-store
+fence through response serialization. Provider paths retain the review fence
+through network I/O, but take capture only for short input/publication checks;
+this lets ordinary capture writes continue during a slow provider. Explicit
+capture cleanup takes review → capture and therefore still linearizes wholly
+before or after provider egress. Authorization never relies on a stale FTS hit
+alone: current Markdown/capture content, tombstones, provenance projection,
+current policy, and a live trust root are checked again. Missing ancestry is
+quarantined even under an otherwise unrestricted capture policy.
 
 ## Classifier delivery transaction boundary
 
@@ -158,7 +240,7 @@ stateDiagram-v2
     pending --> running: claim fresh lease token
     running --> running: renew before/after provider call
     running --> failed: unreceipted error + backoff
-    failed --> running: due retry, same job/run key
+    failed --> running: due retry, same job/window; snapshot key reused or rebased
     running --> running: expired lease reclaimed with new token
     running --> committed: typed commit-or-skip receipt
     committed --> succeeded: atomic bookmark finalization
@@ -179,11 +261,14 @@ cursor must already cover any reducer flush prefix. Only then may the job carry
 a successful no-op.
 
 The lease token is a mutation fence, not just a liveness hint. Candidate
-proposal and receipt transactions require the matching, unexpired token. The
-first evidence snapshot is bound by a digest over the file, window, evidence
+proposal and receipt transactions require the matching, unexpired token. Each
+evidence snapshot is bound by a digest over the file, window, evidence
 identities, and content hashes; proposal and commit transactions revalidate
 that digest, provenance/source liveness, and pending-purge state. A changed
-source or stale worker fails closed.
+source during an attempt or a stale worker fails closed. After an uncommitted
+failed attempt, valid late evidence may atomically rebind the same job/window
+to a new digest-derived run key; pending proposals from the old turn are marked
+conflict so the retry cannot replay them as current output.
 
 Reducer output has an earlier generation fence as well: explicit cleanup bumps
 the reducer content generation under the review-operation lock. A reducer that
@@ -208,6 +293,11 @@ Three rules (ported verbatim from Einsia-Partner), all enforced in `session/mana
 3. **Timeout.** A session older than `session.max_session_hours` (default 2) is force-cut regardless.
 
 Force-end is also called on graceful daemon shutdown and on the 23:55 safety net.
+Shutdown synchronously persists the row as `ended`, suppresses new reducer
+thread dispatch after worker teardown, and joins reducers dispatched by prior
+natural cuts before releasing the singleton lease; the next lease holder's
+pending-reducer path completes the newly ended shutdown row. The 23:55 path
+retains normal immediate reducer dispatch.
 After a hard crash, startup recovery closes orphaned active rows at a safe
 inferred boundary, preferring persisted timeline evidence without crossing the
 restart, the next session, or the configured maximum duration.
@@ -269,8 +359,8 @@ src/openchronicle/
 │   ├── ax_capture.py         # One-shot mac-ax-helper invocation
 │   ├── ax_models.py          # ax_tree_to_markdown, prune helpers
 │   ├── s1_parser.py          # Enriches captures with focused_element / visible_text / url
-│   ├── screenshot.py         # mss + PIL → base64 JPEG
-│   ├── window_meta.py        # foreground app / title / bundle_id
+│   ├── screenshot.py         # Exact-CGWindowID helper + validated base64 JPEG
+│   ├── window_meta.py        # Exact app/title/bundle/PID/CGWindowID/bounds identity
 │   └── scheduler.py          # Capture loop + buffer cleanup
 ├── timeline/
 │   ├── store.py              # timeline_blocks schema + CRUD
@@ -317,6 +407,12 @@ apps/desktop/
 ## Why this shape
 
 - **Compression first, review before durable memory.** S1 → Timeline → S2 is a deterministic funnel with bounded prompt size at each step. The classifier can only stage evidence-linked candidates; a trusted local approval revalidates source hashes before materializing Markdown.
+- **Fail closed before durable observation.** App/window rules precede AX;
+  active URL rules reject unsupported bundles before collection and project a
+  successful known-browser result to URL/identity metadata only. Exact identity
+  fences both AX and optional non-URL-policy CoreGraphics collection. A failed
+  required stage produces no JSON, FTS row, session hook, or downstream model
+  input.
 - **Session as the natural unit.** A "session" — a bounded chunk of focused work — is what humans remember. Cutting on idle / app-switch / timeout produces event-daily entries with accurate time ranges, which solves the v1 problem of long sessions being under-reported after the first append.
 - **Durable classifier delivery.** The 30-minute cadence requests only coverage proven by reducer `flush_end`; terminal reduction persists an exact-entry intent. A lease-fenced SQLite outbox binds deterministic jobs and evidence snapshots, receipts the explicit tool commit before atomically advancing `classified_end`, and recovers lost callbacks or post-commit crashes. Provider calls may repeat before a receipt, but stale workers cannot publish and stable proposal identities make local replay safe.
 - **Daily event files.** `event-YYYY-MM-DD.md` sorts alphabetically by day. Weekly files from v1 are left untouched — they stay searchable via FTS.

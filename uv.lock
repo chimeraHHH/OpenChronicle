@@ -1004,15 +1004,6 @@ wheels = [
 ]
 
 [[package]]
-name = "mss"
-version = "10.1.0"
-source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
-sdist = { url = "https://mirrors.aliyun.com/pypi/packages/40/ca/49b67437a8c46d9732c9c274d7b1fc0c181cfe290d699a0c5e94701dfe79/mss-10.1.0.tar.gz", hash = "sha256:7182baf7ee16ca569e2804028b6ab9bcbf6be5c46fc2880840f33b513b9cb4f8" }
-wheels = [
-    { url = "https://mirrors.aliyun.com/pypi/packages/23/28/1e3e5cd1d677cca68b26166f704f72e35b1e8b6d5076d8ebeebc4e40a649/mss-10.1.0-py3-none-any.whl", hash = "sha256:9179c110cadfef5dc6dc4a041a0cd161c74c379218648e6640b48c6b5cfe8918" },
-]
-
-[[package]]
 name = "multidict"
 version = "6.7.1"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -1156,7 +1147,6 @@ dependencies = [
     { name = "httpx", extra = ["socks"] },
     { name = "litellm" },
     { name = "mcp" },
-    { name = "mss" },
     { name = "pillow" },
     { name = "python-frontmatter" },
     { name = "rich" },
@@ -1175,7 +1165,6 @@ requires-dist = [
     { name = "httpx", extras = ["socks"], specifier = ">=0.27" },
     { name = "litellm", specifier = ">=1.52" },
     { name = "mcp", specifier = ">=1.0" },
-    { name = "mss", specifier = ">=9.0" },
     { name = "pillow", specifier = ">=10.0" },
     { name = "python-frontmatter", specifier = ">=1.1" },
     { name = "rich", specifier = ">=13.7" },

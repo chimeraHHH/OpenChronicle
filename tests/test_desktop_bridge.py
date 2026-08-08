@@ -5,15 +5,20 @@ import os
 import stat
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from openchronicle import config as config_mod
-from openchronicle import paths
+from openchronicle import desktop_bridge, paths
 from openchronicle.daily_wrap import store as daily_wrap_store
-from openchronicle.desktop_bridge import MAX_REQUEST_BYTES, handle_request_bytes
+from openchronicle.desktop_bridge import (
+    MAX_REQUEST_BYTES,
+    PROTOCOL_VERSION,
+    handle_request_bytes,
+)
 from openchronicle.memory_candidates import store as candidate_store
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import (
@@ -33,7 +38,7 @@ from openchronicle.timeline import store as timeline_store
 
 def _request(operation: str, params: dict[str, object] | None = None) -> tuple[dict, int]:
     payload = json.dumps(
-        {"version": 1, "operation": operation, "params": params or {}},
+        {"version": PROTOCOL_VERSION, "operation": operation, "params": params or {}},
         separators=(",", ":"),
     ).encode()
     return handle_request_bytes(payload)
@@ -44,7 +49,7 @@ def _sidecar_request(
 ) -> tuple[dict, subprocess.CompletedProcess[str]]:
     executable = Path(sys.executable).with_name("openchronicle-desktop-bridge")
     request = json.dumps(
-        {"version": 1, "operation": operation, "params": params or {}},
+        {"version": PROTOCOL_VERSION, "operation": operation, "params": params or {}},
         separators=(",", ":"),
     )
     completed = subprocess.run(
@@ -62,7 +67,7 @@ def _assert_error(payload: bytes, code: str) -> None:
     response, exit_code = handle_request_bytes(payload)
     assert exit_code != 0
     assert response == {
-        "version": 1,
+        "version": PROTOCOL_VERSION,
         "ok": False,
         "error": {"code": code, "message": response["error"]["message"]},
     }
@@ -79,6 +84,7 @@ def _ensure_source(conn, *, entry_id: str = "source-entry") -> EvidenceRef:
         content=body,
         tags=["source"],
         entry_id=entry_id,
+        origin=files_store.MANUAL_ENTRY_ORIGIN,
     )
     return EvidenceRef(
         kind="memory_entry",
@@ -115,13 +121,13 @@ def _propose(
         (b"{", "INVALID_JSON"),
         (json.dumps([]).encode(), "INVALID_REQUEST"),
         (
-            json.dumps({"version": 2, "operation": "snapshot", "params": {}}).encode(),
+            json.dumps({"version": 1, "operation": "snapshot", "params": {}}).encode(),
             "INVALID_REQUEST",
         ),
         (
             json.dumps(
                 {
-                    "version": 1,
+                    "version": PROTOCOL_VERSION,
                     "operation": "snapshot",
                     "params": {},
                     "extra": True,
@@ -130,7 +136,13 @@ def _propose(
             "INVALID_REQUEST",
         ),
         (
-            json.dumps({"version": 1, "operation": "does.not.exist", "params": {}}).encode(),
+            json.dumps(
+                {
+                    "version": PROTOCOL_VERSION,
+                    "operation": "does.not.exist",
+                    "params": {},
+                }
+            ).encode(),
             "UNKNOWN_OPERATION",
         ),
     ],
@@ -146,7 +158,13 @@ def test_protocol_rejects_oversized_and_unknown_operation_fields(ac_root: Path) 
 
 
 def test_module_protocol_writes_one_json_response_and_no_stderr(ac_root: Path) -> None:
-    request = json.dumps({"version": 1, "operation": "snapshot", "params": {"timeline_limit": 0}})
+    request = json.dumps(
+        {
+            "version": PROTOCOL_VERSION,
+            "operation": "snapshot",
+            "params": {"timeline_limit": 0},
+        }
+    )
     completed = subprocess.run(
         [sys.executable, "-m", "openchronicle.desktop_bridge"],
         input=request,
@@ -159,8 +177,43 @@ def test_module_protocol_writes_one_json_response_and_no_stderr(ac_root: Path) -
     assert completed.stderr == ""
     assert len(completed.stdout.splitlines()) == 1
     response = json.loads(completed.stdout)
-    assert response["version"] == 1
+    assert response["version"] == PROTOCOL_VERSION
     assert response["ok"] is True
+
+
+@pytest.mark.parametrize("fail_on_release", [False, True])
+def test_privacy_lock_failures_use_the_sanitized_one_line_error_boundary(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_on_release: bool,
+) -> None:
+    secret = "private lock backend detail"
+
+    @contextmanager
+    def broken_lock():
+        if not fail_on_release:
+            raise RuntimeError(secret)
+        yield
+        raise RuntimeError(secret)
+
+    monkeypatch.setattr(desktop_bridge, "privacy_egress_lock", broken_lock)
+    response, exit_code = _request(
+        "snapshot",
+        {"timeline_limit": 0, "candidate_limit": 0, "wrap_limit": 0},
+    )
+
+    encoded = json.dumps(response, separators=(",", ":")) + "\n"
+    assert exit_code == 1
+    assert response == {
+        "version": PROTOCOL_VERSION,
+        "ok": False,
+        "error": {
+            "code": "INTERNAL_ERROR",
+            "message": "The local operation failed.",
+        },
+    }
+    assert secret not in encoded
+    assert len(encoded.splitlines()) == 1
 
 
 def test_installed_sidecar_resolves_provenance_without_null_optional_fields(
@@ -410,7 +463,9 @@ def test_conflict_candidate_cannot_bypass_review_ui_and_write_memory(ac_root: Pa
 def test_forget_preview_digest_fences_stale_dependency_closure(ac_root: Path) -> None:
     with fts.cursor() as conn:
         root = _propose(conn, content="Root reviewed memory.")
-        accepted = MemoryService(conn).approve_candidate(root.id, expected_version=root.version)
+        accepted = MemoryService(conn, cfg=config_mod.Config()).approve_candidate(
+            root.id, expected_version=root.version
+        )
         assert accepted.applied_entry_id
 
     preview_response, exit_code = _request(
@@ -488,7 +543,9 @@ def test_forget_commit_retry_replays_same_authorized_tombstone(
 ) -> None:
     with fts.cursor() as conn:
         root = _propose(conn, content="Crash-replay private memory.")
-        accepted = MemoryService(conn).approve_candidate(root.id, expected_version=root.version)
+        accepted = MemoryService(conn, cfg=config_mod.Config()).approve_candidate(
+            root.id, expected_version=root.version
+        )
         preview = MemoryService(conn).preview_purge_candidate(
             root.id, expected_version=accepted.version
         )
@@ -541,6 +598,7 @@ def test_forget_preview_reports_unverifiable_purge_closure(ac_root: Path) -> Non
             name=path.name,
             content="Unrelated retained text.",
             tags=["test"],
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
         )
         post = files_store.read_file(path)
         raw = path.read_text(encoding="utf-8")
@@ -722,6 +780,9 @@ def test_snapshot_candidate_order_is_actionable_then_newest_history(ac_root: Pat
 def test_wrap_get_and_provenance_trace_are_bounded_fixed_results(ac_root: Path) -> None:
     with fts.cursor() as conn:
         candidate = _propose(conn, content="Trace this candidate.")
+        wrap_sources = provenance_store.direct_sources(
+            conn, EvidenceRef(kind="memory_candidate", id=candidate.id)
+        )
         claim = daily_wrap_store.claim(
             conn,
             local_date="2026-08-08",
@@ -753,9 +814,13 @@ def test_wrap_get_and_provenance_trace_are_bounded_fixed_results(ac_root: Path) 
             wrap_id=claim.row.id,
             lease_token="lease",
             input_digest="digest",
+            window_start_utc="2026-08-08T00:00:00+00:00",
+            window_end_utc="2026-08-09T00:00:00+00:00",
+            workflow_version=1,
             coverage_status="ready",
             output=output,
-            sources=[],
+            sources=wrap_sources,
+            validate_input_current=lambda: None,
         )
 
     wrap, exit_code = _request(
@@ -764,7 +829,32 @@ def test_wrap_get_and_provenance_trace_are_bounded_fixed_results(ac_root: Path) 
     )
     assert exit_code == 0
     assert set(wrap["result"]) == {"wrap"}
-    assert wrap["result"]["wrap"]["output"]["summary"] == "A local summary."
+    public_wrap = wrap["result"]["wrap"]
+    assert public_wrap["output"]["summary"] == "A local summary."
+    assert set(public_wrap) == {
+        "id",
+        "local_date",
+        "timezone",
+        "scope",
+        "window_start_utc",
+        "window_end_utc",
+        "workflow_version",
+        "status",
+        "coverage_status",
+        "published_input_digest",
+        "output",
+        "revision",
+    }
+    assert {
+        "attempt_count",
+        "input_digest",
+        "lease_token",
+        "lease_expires_at",
+        "created_at",
+        "updated_at",
+        "completed_at",
+        "last_error",
+    }.isdisjoint(public_wrap)
 
     trace, exit_code = _request(
         "provenance.trace",

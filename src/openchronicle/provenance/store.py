@@ -96,9 +96,31 @@ def replace_sources(
         (subject.kind, subject.id, subject.path),
     )
     record_sources(conn, subject=subject, sources=sources)
+    if subject.kind == "timeline_block" and not subject.path:
+        # Timeline rows are a SQLite projection of model output. Bind that
+        # projection to the exact durable edge set when its provenance is
+        # first published. Later edge replacement deliberately cannot rewrite
+        # the binding: a mismatch quarantines the row instead of silently
+        # re-authorizing it through different evidence.
+        from ..timeline import store as timeline_store
+
+        timeline_store.bind_sources(
+            conn,
+            subject.id,
+            direct_sources(conn, subject),
+        )
 
 
 def direct_sources(conn: sqlite3.Connection, subject: EvidenceRef) -> list[EvidenceRef]:
+    sources = direct_sources_checked(conn, subject)
+    return sources if sources is not None else []
+
+
+def direct_sources_checked(
+    conn: sqlite3.Connection,
+    subject: EvidenceRef,
+) -> list[EvidenceRef] | None:
+    """Return a complete source set, distinguishing malformed rows from empty."""
     rows = conn.execute(
         """
         SELECT source_kind, source_id, source_path, source_timestamp, source_hash
@@ -108,16 +130,22 @@ def direct_sources(conn: sqlite3.Connection, subject: EvidenceRef) -> list[Evide
         """,
         (subject.kind, subject.id, subject.path),
     ).fetchall()
-    return [
-        EvidenceRef(
-            kind=row["source_kind"],
-            id=row["source_id"],
-            path=row["source_path"],
-            timestamp=row["source_timestamp"],
-            content_hash=row["source_hash"],
-        )
-        for row in rows
-    ]
+    try:
+        return [
+            EvidenceRef(
+                kind=row["source_kind"],
+                id=row["source_id"],
+                path=row["source_path"],
+                timestamp=row["source_timestamp"],
+                content_hash=row["source_hash"],
+            )
+            for row in rows
+        ]
+    except (TypeError, ValueError):
+        # One malformed edge invalidates the complete projected source set.
+        # Callers then quarantine provenance-bearing artifacts instead of
+        # crashing a public read or silently trusting the remaining subset.
+        return None
 
 
 def direct_dependents(conn: sqlite3.Connection, source: EvidenceRef) -> list[EvidenceRef]:
@@ -177,10 +205,9 @@ def availability(conn: sqlite3.Connection, ref: EvidenceRef) -> str:
         ).fetchone()
         return "available" if row else "expired"
     if ref.kind == "timeline_block":
-        row = conn.execute(
-            "SELECT 1 FROM timeline_blocks WHERE id=? LIMIT 1", (ref.id,)
-        ).fetchone()
-        return "available" if row else "missing"
+        from ..timeline import store as timeline_store
+
+        return "available" if timeline_store.get_by_id(conn, ref.id) else "missing"
     if ref.kind == "session":
         row = conn.execute("SELECT 1 FROM sessions WHERE id=? LIMIT 1", (ref.id,)).fetchone()
         return "available" if row else "missing"
@@ -204,13 +231,9 @@ def availability(conn: sqlite3.Connection, ref: EvidenceRef) -> str:
     if ref.kind == "daily_wrap":
         from ..memory_candidates import store as candidate_store
 
-        if candidate_store.is_tombstoned(
-            conn, kind="daily_wrap", artifact_id=ref.id
-        ):
+        if candidate_store.is_tombstoned(conn, kind="daily_wrap", artifact_id=ref.id):
             return "missing"
-        row = conn.execute(
-            "SELECT 1 FROM daily_wrap_jobs WHERE id=? LIMIT 1", (ref.id,)
-        ).fetchone()
+        row = conn.execute("SELECT 1 FROM daily_wrap_jobs WHERE id=? LIMIT 1", (ref.id,)).fetchone()
         return "available" if row else "missing"
     if ref.kind == "daily_wrap_item":
         row = conn.execute(
@@ -240,9 +263,7 @@ def current_content_hash(conn: sqlite3.Connection, ref: EvidenceRef) -> str | No
         if not ref.path or Path(ref.path).name != ref.path:
             return None
         try:
-            raw = json.loads(
-                (paths.capture_buffer_dir() / ref.path).read_text(encoding="utf-8")
-            )
+            raw = json.loads((paths.capture_buffer_dir() / ref.path).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
         return observation_digest(raw) if isinstance(raw, dict) else None

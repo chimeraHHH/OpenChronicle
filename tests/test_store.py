@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
+from openchronicle import paths
 from openchronicle.config import Config
 from openchronicle.store import entries as entries_mod
 from openchronicle.store import files as files_mod
@@ -16,7 +17,9 @@ from openchronicle.writer import tools as writer_tools
 
 class _LLMTextResponse:
     def __init__(self, content: str) -> None:
-        self.choices = [type("_Choice", (), {"message": type("_Msg", (), {"content": content})()})()]
+        self.choices = [
+            type("_Choice", (), {"message": type("_Msg", (), {"content": content})()})()
+        ]
 
 
 def test_make_id_uniqueness() -> None:
@@ -63,13 +66,18 @@ def test_supersede_filters_old_by_default(ac_root: Path) -> None:
             conn, name="tool-cursor.md", description="Cursor editor", tags=["tool"]
         )
         old = entries_mod.append_entry(
-            conn, name="tool-cursor.md",
-            content="User prefers VSCode as primary editor.", tags=["editor"],
+            conn,
+            name="tool-cursor.md",
+            content="User prefers VSCode as primary editor.",
+            tags=["editor"],
         )
         entries_mod.supersede_entry(
-            conn, name="tool-cursor.md", old_entry_id=old,
+            conn,
+            name="tool-cursor.md",
+            old_entry_id=old,
             new_content="User switched from VSCode to Cursor for AI integration.",
-            reason="editor switch", tags=["editor"],
+            reason="editor switch",
+            tags=["editor"],
         )
         # Default: no superseded
         hits_default = fts.search(conn, query="VSCode", top_k=5)
@@ -81,9 +89,7 @@ def test_supersede_filters_old_by_default(ac_root: Path) -> None:
 
 def test_invalid_prefix_rejected(ac_root: Path) -> None:
     with fts.cursor() as conn, pytest.raises(ValueError):
-        entries_mod.create_file(
-            conn, name="random-notes.md", description="desc", tags=[]
-        )
+        entries_mod.create_file(conn, name="random-notes.md", description="desc", tags=[])
 
 
 def test_rebuild_index_round_trip(ac_root: Path) -> None:
@@ -92,12 +98,16 @@ def test_rebuild_index_round_trip(ac_root: Path) -> None:
             conn, name="user-profile.md", description="identity", tags=["identity"]
         )
         entries_mod.append_entry(
-            conn, name="user-profile.md",
-            content="User is a data scientist.", tags=["identity"],
+            conn,
+            name="user-profile.md",
+            content="User is a data scientist.",
+            tags=["identity"],
         )
         entries_mod.append_entry(
-            conn, name="user-profile.md",
-            content="User writes a lot of Python.", tags=["identity", "skills"],
+            conn,
+            name="user-profile.md",
+            content="User writes a lot of Python.",
+            tags=["identity", "skills"],
         )
     with fts.cursor() as conn2:
         file_count, entry_count = entries_mod.rebuild_index(conn2)
@@ -110,9 +120,7 @@ def test_rebuild_index_round_trip(ac_root: Path) -> None:
 def test_rebuild_failure_rolls_back_existing_index(ac_root: Path, monkeypatch) -> None:
     name = "topic-rebuild-rollback.md"
     with fts.cursor() as conn:
-        entries_mod.create_file(
-            conn, name=name, description="rollback", tags=["topic"]
-        )
+        entries_mod.create_file(conn, name=name, description="rollback", tags=["topic"])
         entry_id = entries_mod.append_entry(
             conn, name=name, content="durable searchable marker", tags=["topic"]
         )
@@ -126,9 +134,9 @@ def test_rebuild_failure_rolls_back_existing_index(ac_root: Path, monkeypatch) -
             entries_mod.rebuild_index(conn)
 
         assert conn.in_transaction is False
-        assert conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE id=?", (entry_id,)
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute("SELECT COUNT(*) FROM entries WHERE id=?", (entry_id,)).fetchone()[0] == 1
+        )
         assert fts.get_file(conn, name) is not None
 
 
@@ -138,12 +146,8 @@ def test_memory_mutations_reject_existing_sqlite_transaction_before_lock(
     """Prevent the SQLite→global ordering that could deadlock another writer."""
     name = "topic-transaction-order.md"
     with fts.cursor() as conn:
-        entries_mod.create_file(
-            conn, name=name, description="transaction order", tags=["topic"]
-        )
-        entry_id = entries_mod.append_entry(
-            conn, name=name, content="original", tags=["topic"]
-        )
+        entries_mod.create_file(conn, name=name, description="transaction order", tags=["topic"])
+        entry_id = entries_mod.append_entry(conn, name=name, content="original", tags=["topic"])
         before = files_mod.memory_path(name).read_text()
 
         @contextmanager
@@ -160,9 +164,7 @@ def test_memory_mutations_reject_existing_sqlite_transaction_before_lock(
                 description="blocked",
                 tags=["topic"],
             ),
-            lambda: entries_mod.append_entry(
-                conn, name=name, content="blocked", tags=["topic"]
-            ),
+            lambda: entries_mod.append_entry(conn, name=name, content="blocked", tags=["topic"]),
             lambda: entries_mod.append_entry_once(
                 conn,
                 name=name,
@@ -201,12 +203,8 @@ def test_rebuild_serializes_with_concurrent_append(ac_root: Path, monkeypatch) -
     """A full FTS rebuild cannot interleave with a Markdown+FTS append."""
     name = "topic-rebuild-race.md"
     with fts.cursor() as conn:
-        entries_mod.create_file(
-            conn, name=name, description="rebuild race", tags=["topic"]
-        )
-        entries_mod.append_entry(
-            conn, name=name, content="entry before rebuild", tags=["topic"]
-        )
+        entries_mod.create_file(conn, name=name, description="rebuild race", tags=["topic"])
+        entries_mod.append_entry(conn, name=name, content="entry before rebuild", tags=["topic"])
 
     original_list = files_mod.list_memory_files
     rebuild_inside_global = threading.Event()
@@ -265,19 +263,17 @@ def test_rebuild_serializes_with_concurrent_append(ac_root: Path, monkeypatch) -
     parsed = files_mod.read_file(files_mod.memory_path(name))
     assert len(parsed.entries) == 2
     with fts.cursor() as conn:
-        indexed = conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE path=?", (name,)
-        ).fetchone()[0]
+        indexed = conn.execute("SELECT COUNT(*) FROM entries WHERE path=?", (name,)).fetchone()[0]
     assert indexed == 2
 
 
-def test_memory_mutations_acquire_global_before_path_lock(
-    ac_root: Path, monkeypatch
-) -> None:
+def test_memory_mutations_acquire_global_before_path_lock(ac_root: Path, monkeypatch) -> None:
     """Every Markdown/FTS mutation follows the one deadlock-safe lock order."""
     real_store_lock = files_mod.store_write_lock
+    real_review_lock = files_mod.review_operation_lock
     real_file_lock = files_mod.file_lock
     global_depth = 0
+    review_depth = 0
     events: list[str] = []
 
     @contextmanager
@@ -293,16 +289,34 @@ def test_memory_mutations_acquire_global_before_path_lock(
                 global_depth -= 1
 
     @contextmanager
+    def tracked_review_lock():
+        nonlocal review_depth
+        with real_review_lock():
+            review_depth += 1
+            events.append("review-enter")
+            try:
+                yield
+            finally:
+                events.append("review-exit")
+                review_depth -= 1
+
+    @contextmanager
     def tracked_file_lock(path: Path):
-        assert global_depth > 0, f"path lock acquired without global lock: {path}"
-        events.append("path-enter")
+        is_capture_store = path == paths.root() / "capture-store"
+        if is_capture_store:
+            assert review_depth > 0, "capture-store lock acquired without review lock"
+            events.append("capture-enter")
+        else:
+            assert global_depth > 0, f"path lock acquired without global lock: {path}"
+            events.append("path-enter")
         with real_file_lock(path):
             try:
                 yield
             finally:
-                events.append("path-exit")
+                events.append("capture-exit" if is_capture_store else "path-exit")
 
     monkeypatch.setattr(files_mod, "store_write_lock", tracked_store_lock)
+    monkeypatch.setattr(files_mod, "review_operation_lock", tracked_review_lock)
     monkeypatch.setattr(files_mod, "file_lock", tracked_file_lock)
 
     def assert_locked(operation):
@@ -312,6 +326,8 @@ def test_memory_mutations_acquire_global_before_path_lock(
         assert "global-enter" in observed
         assert "path-enter" in observed
         assert observed.index("global-enter") < observed.index("path-enter")
+        if "capture-enter" in observed:
+            assert observed.index("review-enter") < observed.index("capture-enter")
         return result
 
     name = "topic-lock-order.md"
@@ -323,7 +339,11 @@ def test_memory_mutations_acquire_global_before_path_lock(
         )
         original_id = assert_locked(
             lambda: entries_mod.append_entry(
-                conn, name=name, content="original fact", tags=["topic"]
+                conn,
+                name=name,
+                content="original fact",
+                tags=["topic"],
+                origin=files_mod.MANUAL_ENTRY_ORIGIN,
             )
         )
         assert_locked(
@@ -346,8 +366,6 @@ def test_memory_mutations_acquire_global_before_path_lock(
 
 
 def test_index_md_rebuild_runs(ac_root: Path) -> None:
-    from openchronicle import paths
-
     with fts.cursor() as conn:
         entries_mod.create_file(
             conn, name="user-profile.md", description="identity", tags=["identity"]
@@ -416,11 +434,14 @@ def test_atomic_write_round_trip_through_append_entry(ac_root: Path) -> None:
     """End-to-end: append → read returns the new entry, file isn't corrupted."""
     with fts.cursor() as conn:
         entries_mod.create_file(
-            conn, name="topic-rust-async.md",
-            description="Rust async patterns", tags=["topic"],
+            conn,
+            name="topic-rust-async.md",
+            description="Rust async patterns",
+            tags=["topic"],
         )
         entries_mod.append_entry(
-            conn, name="topic-rust-async.md",
+            conn,
+            name="topic-rust-async.md",
             content="Tokio's `select!` polls all branches each iteration.",
             tags=["topic", "rust"],
         )
@@ -456,9 +477,7 @@ def test_concurrent_appends_lose_no_entries(ac_root: Path) -> None:
     name = "topic-load-test.md"
 
     with fts.cursor() as conn:
-        entries_mod.create_file(
-            conn, name=name, description="concurrent appends", tags=["topic"]
-        )
+        entries_mod.create_file(conn, name=name, description="concurrent appends", tags=["topic"])
 
     barrier = threading.Barrier(n)
     errors: list[BaseException] = []
@@ -468,7 +487,8 @@ def test_concurrent_appends_lose_no_entries(ac_root: Path) -> None:
             barrier.wait()
             with fts.cursor() as conn:
                 entries_mod.append_entry(
-                    conn, name=name,
+                    conn,
+                    name=name,
                     content=f"entry number {i:02d}",
                     tags=["topic"],
                 )
@@ -510,7 +530,10 @@ def test_concurrent_supersede_then_append_serializes(ac_root: Path) -> None:
     with fts.cursor() as conn:
         entries_mod.create_file(conn, name=name, description="Bob", tags=["person"])
         original = entries_mod.append_entry(
-            conn, name=name, content="Bob is at OpenAI as ML lead.", tags=["person"],
+            conn,
+            name=name,
+            content="Bob is at OpenAI as ML lead.",
+            tags=["person"],
         )
 
     barrier = threading.Barrier(2)
@@ -521,9 +544,12 @@ def test_concurrent_supersede_then_append_serializes(ac_root: Path) -> None:
             barrier.wait()
             with fts.cursor() as conn:
                 entries_mod.supersede_entry(
-                    conn, name=name, old_entry_id=original,
+                    conn,
+                    name=name,
+                    old_entry_id=original,
                     new_content="Bob moved from OpenAI to Anthropic in 2026-04.",
-                    reason="role change", tags=["person"],
+                    reason="role change",
+                    tags=["person"],
                 )
         except BaseException as exc:  # noqa: BLE001
             errors.append(exc)
@@ -533,7 +559,8 @@ def test_concurrent_supersede_then_append_serializes(ac_root: Path) -> None:
             barrier.wait()
             with fts.cursor() as conn:
                 entries_mod.append_entry(
-                    conn, name=name,
+                    conn,
+                    name=name,
                     content="Bob's preferred IDE is Cursor.",
                     tags=["person", "preference"],
                 )
@@ -571,6 +598,7 @@ def test_compact_accepts_when_file_unchanged(ac_root: Path) -> None:
                 "EpsilonMemory ZetaCapture EtaClassifier ThetaReducer."
             ),
             tags=["topic"],
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
         )
         path = files_mod.memory_path(name)
         files_mod.update_frontmatter(path, {"needs_compact": True})
@@ -599,6 +627,7 @@ def test_compact_skips_if_file_changes_during_llm_rewrite(ac_root: Path) -> None
                 "EpsilonMemory ZetaCapture EtaClassifier ThetaReducer."
             ),
             tags=["topic"],
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
         )
         path = files_mod.memory_path(name)
         files_mod.update_frontmatter(path, {"needs_compact": True})
@@ -612,6 +641,7 @@ def test_compact_skips_if_file_changes_during_llm_rewrite(ac_root: Path) -> None
                     name=name,
                     content="ConcurrentAppendToken must survive compaction.",
                     tags=["topic"],
+                    origin=files_mod.MANUAL_ENTRY_ORIGIN,
                 )
             return _LLMTextResponse(stale_rewrite)
 

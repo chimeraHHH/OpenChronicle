@@ -16,6 +16,7 @@ from typing import Any
 
 from ..config import Config
 from ..memory_candidates import store as candidate_store
+from ..privacy.egress import model_egress_lock
 from ..prompts import load as load_prompt
 from ..provenance.models import EvidenceRef
 from ..services.context import ContextRecord, ContextService, DayContext
@@ -253,27 +254,73 @@ class DailyWrapService:
                 lease_token=lease_token,
                 lease_seconds=lease_seconds,
             )
-        if not claim.claimed:
-            return claim.row
+            refresh_attempts = 0
+            while not claim.claimed:
+                if (
+                    claim.row.published_input_digest == input_digest
+                    and self.context_service.daily_wrap_allowed(
+                        claim.row.id,
+                        expected_row=claim.row,
+                    )
+                ):
+                    return claim.row
+                if refresh_attempts >= 3:
+                    raise store.DailyWrapBusy(
+                        f"daily wrap {local_date.isoformat()} ({timezone}) changed during refresh"
+                    )
+                refresh_attempts += 1
+                # A matching digest is not sufficient: the mutable job row
+                # must still be exact-bound to its immutable revision and
+                # source closure. Reclaim it inside the same cancellation
+                # handshake and regenerate it.
+                claim = store.claim(
+                    self.conn,
+                    local_date=local_date.isoformat(),
+                    timezone=timezone,
+                    scope=scope,
+                    window_start_utc=context.window_start_utc.isoformat(),
+                    window_end_utc=context.window_end_utc.isoformat(),
+                    workflow_version=WORKFLOW_VERSION,
+                    coverage_status=context.coverage_status,
+                    input_digest=input_digest,
+                    lease_token=lease_token,
+                    lease_seconds=lease_seconds,
+                    force_refresh=True,
+                    expected_revision=claim.row.revision,
+                    expected_updated_at=claim.row.updated_at,
+                    expected_published_input_digest=claim.row.published_input_digest,
+                )
 
         try:
             _raise_if_cancelled(cancelled)
-            output, cited_sources, coverage_status = self._generate(context)
+            with model_egress_lock():
+                egress_context = self.context_service.for_day(local_date, timezone)
+                if egress_context.input_digest(workflow_version=WORKFLOW_VERSION) != input_digest:
+                    raise DailyWrapInputChanged("daily wrap input changed before provider egress")
+                output, cited_sources, coverage_status = self._generate(egress_context)
             _raise_if_cancelled(cancelled)
-            latest_context = self.context_service.for_day(local_date, timezone)
-            if latest_context.input_digest(workflow_version=WORKFLOW_VERSION) != input_digest:
-                raise DailyWrapInputChanged(
-                    "daily wrap input changed during generation; stale output discarded"
-                )
-            _raise_if_cancelled(cancelled)
+
+            def _validate_input_current() -> None:
+                """Run inside ``store.complete``'s write transaction."""
+                _raise_if_cancelled(cancelled)
+                latest_context = self.context_service.for_day(local_date, timezone)
+                if latest_context.input_digest(workflow_version=WORKFLOW_VERSION) != input_digest:
+                    raise DailyWrapInputChanged(
+                        "daily wrap input changed during generation; stale output discarded"
+                    )
+
             return store.complete(
                 self.conn,
                 wrap_id=claim.row.id,
                 lease_token=lease_token,
                 input_digest=input_digest,
+                window_start_utc=context.window_start_utc.isoformat(),
+                window_end_utc=context.window_end_utc.isoformat(),
+                workflow_version=WORKFLOW_VERSION,
                 coverage_status=coverage_status,
                 output=output,
                 sources=cited_sources,
+                validate_input_current=_validate_input_current,
             )
         except BaseException as exc:
             store.fail(
@@ -294,9 +341,7 @@ class DailyWrapService:
             timezone=timezone,
             scope=scope,
         )
-        if row and candidate_store.is_tombstoned(
-            self.conn, kind="daily_wrap", artifact_id=row.id
-        ):
+        if row and candidate_store.is_tombstoned(self.conn, kind="daily_wrap", artifact_id=row.id):
             return None
         return row
 
@@ -304,14 +349,10 @@ class DailyWrapService:
         return [
             row
             for row in store.list_wraps(self.conn, limit=limit)
-            if not candidate_store.is_tombstoned(
-                self.conn, kind="daily_wrap", artifact_id=row.id
-            )
+            if not candidate_store.is_tombstoned(self.conn, kind="daily_wrap", artifact_id=row.id)
         ]
 
-    def _generate(
-        self, context: DayContext
-    ) -> tuple[dict[str, Any], list[EvidenceRef], str]:
+    def _generate(self, context: DayContext) -> tuple[dict[str, Any], list[EvidenceRef], str]:
         if not context.records:
             output = self._empty_output(context)
             return output, [], context.coverage_status
@@ -357,9 +398,7 @@ class DailyWrapService:
         self, context: DayContext, raw: dict[str, Any]
     ) -> tuple[dict[str, Any], list[EvidenceRef], str]:
         records_by_token = {record.evidence.key: record for record in context.records}
-        result_items: dict[str, list[dict[str, Any]]] = {
-            category: [] for category in _CATEGORIES
-        }
+        result_items: dict[str, list[dict[str, Any]]] = {category: [] for category in _CATEGORIES}
         cited: dict[tuple[str, str, str], EvidenceRef] = {}
         rejected = 0
         for category in _CATEGORIES:
@@ -396,15 +435,17 @@ class DailyWrapService:
             "local_date": context.local_date.isoformat(),
             "timezone": context.timezone,
             "status": coverage_status,
-            "summary": (
-                f"{grounded_count} grounded item(s) from "
-                f"{len(cited)} cited source(s)."
-            ),
+            "summary": (f"{grounded_count} grounded item(s) from {len(cited)} cited source(s)."),
             **result_items,
             "coverage_gaps": sorted(set(gaps)),
             "generated_at": datetime.now().astimezone().isoformat(),
         }
-        return output, list(cited.values()), coverage_status
+        # Citations remain the model-facing support subset, but are not a
+        # trustworthy information-flow declaration. The output was generated
+        # after seeing every record in the payload, so persist the complete
+        # exposed evidence closure for authorization and later policy changes.
+        exposed = [record.evidence for record in context.records]
+        return output, exposed, coverage_status
 
     def _validate_item(
         self,
@@ -497,9 +538,7 @@ def _has_explicit_signal(category: str, supporting_text: str) -> bool:
         return False
     if category == "open" and _NEGATED_OPEN.search(supporting_text):
         return False
-    return not (
-        category == "blocked" and _RESOLVED_BLOCKER.search(supporting_text)
-    )
+    return not (category == "blocked" and _RESOLVED_BLOCKER.search(supporting_text))
 
 
 class DailyWrapCancelled(RuntimeError):
@@ -524,9 +563,7 @@ def _looks_like_prompt_control(text: str) -> bool:
 def _normalize_untrusted_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", text.translate(_SEMANTIC_SYMBOLS))
     return "".join(
-        char
-        for char in normalized
-        if unicodedata.category(char) not in {"Cf", "Mn", "Me"}
+        char for char in normalized if unicodedata.category(char) not in {"Cf", "Mn", "Me"}
     ).casefold()
 
 

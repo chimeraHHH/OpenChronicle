@@ -92,10 +92,11 @@ before it can append/repair an entry or advance `flush_end`/terminal intent.
 
 ## Wiring
 
-`session/tick.py::build_manager` returns a `SessionManager` with two callbacks wired:
+`session/tick.py::build_manager` returns a `SessionManager` with three callbacks wired:
 
 - **`on_session_start`** — persists an `active` row immediately. A crash mid-session leaves a recoverable trace.
-- **`on_session_end`** — marks the row `ended`, then spawns `reduce_session_async`. Terminal-reduce success stores the final entry ID/path or a typed zero-block proof, plus `classifier_terminal_pending=1`, before its `on_done` callback asks the durable delivery worker to run. Recovery does not depend on that callback.
+- **`on_session_persist`** — synchronously marks the row `ended` for every close path.
+- **`on_session_end`** — normally spawns `reduce_session_async` and returns its thread handle to the manager. Terminal-reduce success stores the final entry ID/path or a typed zero-block proof, plus `classifier_terminal_pending=1`, before its `on_done` callback asks the durable delivery worker to run. Graceful daemon shutdown suppresses new dispatch after persistence and joins every reducer dispatched by an earlier natural cut before releasing the singleton lease; the next boot's pending reducer handles the newly ended shutdown row. Recovery does not depend on the callback.
 
 Five daemon tasks back this up:
 
@@ -131,8 +132,11 @@ commit-or-skip receipt before it advances `classified_end`. Expired workers are
 fenced from proposal and commit transactions; a new worker may reclaim the job.
 If restart finds `committed`, it finalizes the bookmark without calling the
 model again. If it finds an unreceipted `running` lease after expiry or a due
-`failed` row, it retries with the same deterministic delivery/run identity and
-must reproduce the bound evidence digest. See
+`failed` row, it retries the same deterministic job/window. An unchanged
+evidence snapshot reuses its digest-derived run identity. If valid late
+evidence changed after the failed, uncommitted turn, the job atomically rebinds
+to a new digest/run identity and marks old pending proposals as conflicts;
+mid-flight changes still fail closed. See
 [writer.md](writer.md#durable-delivery-state-machine) for the full contract.
 
 ## CLI

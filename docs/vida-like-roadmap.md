@@ -71,18 +71,44 @@ credential access are outside the first pilot.
 
 ### Stage 0 — trustworthy observation and runtime
 
-- Preserve complete, deep-copied watcher event snapshots.
+- Preserve deep-copied watcher snapshots for debounce, then project them to
+  exact identity-only triggers before persistence or session hooks.
 - Give every observation a unique, round-trippable ID and timestamp.
 - Persist private captures atomically with restrictive permissions.
 - Recover active sessions left by crashes.
 - Put finite timeout and retry bounds on every model call.
 - Supervise daemon workers instead of treating an early exit as clean shutdown.
-- Add capture allow/exclude policy before AX, screenshot, persistence, or model use.
+- Add a fail-closed capture privacy pipeline: validate configuration first,
+  apply app/bundle/title policy before AX, and, when URL rules are active,
+  reject unsupported bundles before AX. A known browser family must expose one
+  explicit address under an exact stable identifier; a bounded full-tree scan
+  is an additional deny surface before persistence or model use.
+- Bind AX and opt-in screenshots to one exact focused-window identity (app,
+  bundle, title, PID, `CGWindowID`, and bounds), with no display fallback.
 - Default screenshots off and add retention/redaction controls.
 
 Exit criteria include zero excluded-data leakage across every sink, no capture
 overwrite under same-time bursts, no stranded sessions after kill/restart, no
 duplicate reduction, and a seven-day soak without data corruption.
+
+Live AX privacy and exact-window capture are tracked in
+[#3](https://github.com/chimeraHHH/OpenChronicle/issues/3). The current working
+branch implements normal schema-v4/policy-v2 observations and schema-v5/
+policy-v3 `url_metadata_only` observations, literal browser URL allow/exclude
+rules, secure-field helper redaction, exact `WindowMeta` fencing around AX, and
+CoreGraphics capture of one verified `CGWindowID` with no full-screen/`mss`
+fallback. URL policy is deliberately narrower: it accepts only known browser
+family adapters with one explicit stable-ID address, requires verified complete
+trees and matching evidence from two ephemeral snapshots, uses the full tree
+only as an additional deny surface, and persists no raw AX/focused/page/title
+content or pixels. The double read mitigates navigation races but is not atomic.
+The branch also includes an opt-in, redaction-safe live macOS AX/privacy
+protocol. This is implementation status only, not a completion or merge claim:
+#3 remains open until automated/remote review is green and the interactive
+macOS acceptance run is recorded. The live protocol includes an in-memory
+exact-window pixel probe with public/sibling color canaries, but the current
+machine was locked (`loginwindow`) during its latest run; a full unlocked pass
+is still required before issue closure.
 
 Classifier delivery is tracked separately in
 [#4](https://github.com/chimeraHHH/OpenChronicle/issues/4). The current branch
@@ -196,7 +222,9 @@ action needs a verified postcondition.
 1. CI and reproducible baseline.
 2. Runtime/session/model-call reliability, including #4 fault-test acceptance.
 3. Observation identity, event fidelity, atomic private persistence.
-4. Capture policy, redaction, and retention.
+4. Capture policy, redaction, exact-window identity, and retention. **#3 is in
+   progress; implementation and an AX/privacy audit protocol exist, but live
+   pixel validation, remote review, and merge remain.**
 5. Provenance spine and memory candidates. **Implemented on the Stage 1 branch.**
 6. Daily Wrap vertical slice. **Implemented on the Stage 1 branch.**
 7. Native review inbox, permissions shell, and source drawer. **Source slice

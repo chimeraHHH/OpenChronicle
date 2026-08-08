@@ -57,7 +57,10 @@ def _run_once(cfg: Config) -> int:
 
 
 def _run_once_locked(cfg: Config) -> int:
-    window_minutes = max(1, int(cfg.timeline.window_minutes))
+    window_minutes = min(
+        int(store.MAX_BLOCK_DURATION.total_seconds() // 60),
+        max(1, int(cfg.timeline.window_minutes)),
+    )
     lookback_minutes = max(0, int(cfg.timeline.cold_lookback_minutes))
     now = _now()
     current_floor = store.floor_to_window(now, window_minutes)
@@ -116,38 +119,54 @@ def _run_once_locked(cfg: Config) -> int:
         # explicit maintenance command nevertheless reset state between the
         # planning and materialization phases.
         current_range = store.get_processed_range(conn)
-        if (
-            current_range is None
-            or _instant(current_range[1]) != _instant(cursor)
-        ):
+        if current_range is None or _instant(current_range[1]) != _instant(cursor):
             logger.warning("timeline state changed during snapshot; retrying next tick")
             return 0
+        generation = fts.content_generation(conn, "timeline")
 
         produced = 0
         inspected = 0
-        while (
-            cursor + step <= current_floor
-            and inspected < _MAX_BACKFILL_WINDOWS_PER_TICK
-        ):
+        while cursor + step <= current_floor and inspected < _MAX_BACKFILL_WINDOWS_PER_TICK:
             window_start = cursor
             window_end = cursor + step
-            block = aggregator.produce_block_for_window(
-                cfg,
-                conn,
-                start=window_start,
-                end=window_end,
-                parsed_captures=capture_windows.get(window_start, []),
-            )
+            try:
+                block = aggregator.produce_block_for_window(
+                    cfg,
+                    conn,
+                    start=window_start,
+                    end=window_end,
+                    parsed_captures=capture_windows.get(window_start, []),
+                )
+            except aggregator.TimelineInputChanged:
+                # Explicit clean resets both blocks and producer state. Never
+                # recreate/advance its watermark from the invalidated tick;
+                # the next producer pass must resnapshot the retained input.
+                logger.info("timeline input changed; retrying from fresh state")
+                return 0
             if block is not None:
                 produced += 1
-            # Advance for both populated and empty windows. A crash after a
-            # block insert but before this write is safe: has_window() makes
-            # the next pass idempotent, then the watermark catches up.
-            store.advance_processed_through(
-                conn,
-                window_end,
-                window_start=window_start,
-            )
+            # Advance for both populated and empty windows, but bind every
+            # early-return producer outcome to the same cleanup generation.
+            # This also covers an existing/empty window that clean deletes
+            # after the producer's first query. Holding review through the
+            # state write makes clean-before vs tick-before unambiguous.
+            with store_files.review_operation_lock():
+                current_range = store.get_processed_range(conn)
+                if (
+                    fts.content_generation(conn, "timeline") != generation
+                    or current_range is None
+                    or _instant(current_range[1]) != _instant(window_start)
+                ):
+                    logger.info("timeline state generation changed; retrying from fresh state")
+                    return 0
+                # A crash after block insert but before this write is safe:
+                # has_window() makes the next pass idempotent, then the
+                # watermark catches up.
+                store.advance_processed_through(
+                    conn,
+                    window_end,
+                    window_start=window_start,
+                )
             cursor = window_end
             inspected += 1
         return produced
@@ -157,7 +176,8 @@ async def run_forever(cfg: Config) -> None:
     """Daemon task: every minute, materialise any closed windows."""
     logger.info(
         "timeline loop started (window=%d min, tick=%d s)",
-        cfg.timeline.window_minutes, _TICK_INTERVAL_SECONDS,
+        cfg.timeline.window_minutes,
+        _TICK_INTERVAL_SECONDS,
     )
     while True:
         try:
@@ -179,7 +199,9 @@ async def run_forever(cfg: Config) -> None:
                 if any(stats.values()):
                     logger.info(
                         "timeline: buffer hygiene deleted=%d stripped=%d evicted=%d",
-                        stats["deleted"], stats["stripped"], stats["evicted"],
+                        stats["deleted"],
+                        stats["stripped"],
+                        stats["evicted"],
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("timeline: buffer cleanup failed: %s", exc)

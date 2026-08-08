@@ -2,58 +2,69 @@ from __future__ import annotations
 
 import threading
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from openchronicle import cli
+from openchronicle.config import Config
 from openchronicle.daily_wrap import store as daily_wrap_store
 from openchronicle.mcp import server as mcp_server
 from openchronicle.memory_candidates import store as candidate_store
-from openchronicle.provenance.models import EvidenceRef, timeline_block_digest
+from openchronicle.provenance import store as provenance_store
+from openchronicle.provenance.models import (
+    EvidenceRef,
+    timeline_block_digest,
+)
 from openchronicle.services.memory import MemoryService
 from openchronicle.store import entries as entries_mod
 from openchronicle.store import files as files_mod
 from openchronicle.store import fts
+from openchronicle.timeline import store as timeline_store
 
 
 def _seed_timeline_source(conn, block_id: str) -> EvidenceRef:
     start = "2026-04-21T10:00:00+00:00"
     end = "2026-04-21T10:01:00+00:00"
-    conn.execute(
-        """
-        INSERT INTO timeline_blocks(
-            id, start_time, end_time, timezone, entries, apps_used,
-            capture_count, created_at
-        ) VALUES (?, ?, ?, 'UTC', '[]', '[]', 0, ?)
-        """,
-        (block_id, start, end, end),
+    block = timeline_store.TimelineBlock(
+        id=block_id,
+        start_time=datetime.fromisoformat(start),
+        end_time=datetime.fromisoformat(end),
+        timezone="UTC",
+        created_at=datetime.fromisoformat(end),
+    )
+    timeline_store.insert(conn, block)
+    provenance_store.replace_sources(
+        conn,
+        subject=EvidenceRef(kind="timeline_block", id=block_id),
+        sources=[
+            EvidenceRef(
+                kind="observation",
+                id=f"source-{block_id}",
+                path=f"source-{block_id}.json",
+                timestamp=datetime(2026, 4, 21, 10, tzinfo=UTC).isoformat(),
+                content_hash=f"digest-{block_id}",
+            )
+        ],
     )
     return EvidenceRef(
         kind="timeline_block",
         id=block_id,
-        content_hash=timeline_block_digest(
-            start=start, end=end, entries=[], apps=[]
-        ),
+        content_hash=timeline_block_digest(start=start, end=end, entries=[], apps=[]),
     )
 
 
-def test_clean_memory_serializes_with_concurrent_create(
-    ac_root: Path, monkeypatch
-) -> None:
+def test_clean_memory_serializes_with_concurrent_create(ac_root: Path, monkeypatch) -> None:
     """Clean completes as one store mutation before a waiting writer proceeds."""
     before_name = "topic-before-clean.md"
     after_name = "topic-after-clean.md"
     with fts.cursor() as conn:
-        entries_mod.create_file(
-            conn, name=before_name, description="before clean", tags=["topic"]
-        )
-        entries_mod.append_entry(
-            conn, name=before_name, content="removed by clean", tags=["topic"]
-        )
+        entries_mod.create_file(conn, name=before_name, description="before clean", tags=["topic"])
+        entries_mod.append_entry(conn, name=before_name, content="removed by clean", tags=["topic"])
 
-    real_store_lock = files_mod.store_write_lock
+    real_review_lock = files_mod.review_operation_lock
     clean_inside_lock = threading.Event()
     create_lock_attempted = threading.Event()
     release_clean = threading.Event()
@@ -62,18 +73,18 @@ def test_clean_memory_serializes_with_concurrent_create(
     errors: list[BaseException] = []
 
     @contextmanager
-    def paused_store_lock():
+    def paused_review_lock():
         is_cleaner = threading.current_thread().name == "clean-memory"
         if not is_cleaner:
             create_lock_attempted.set()
-        with real_store_lock():
+        with real_review_lock():
             if is_cleaner:
                 clean_inside_lock.set()
                 if not release_clean.wait(timeout=5):
                     raise TimeoutError("test did not release memory cleanup")
             yield
 
-    monkeypatch.setattr(files_mod, "store_write_lock", paused_store_lock)
+    monkeypatch.setattr(files_mod, "review_operation_lock", paused_review_lock)
 
     def clean_worker() -> None:
         try:
@@ -126,9 +137,7 @@ def test_clean_memory_keeps_markdown_if_index_clear_cannot_start(
 ) -> None:
     name = "topic-private-clean.md"
     with fts.cursor() as conn:
-        entries_mod.create_file(
-            conn, name=name, description="private", tags=["topic"]
-        )
+        entries_mod.create_file(conn, name=name, description="private", tags=["topic"])
         entry_id = entries_mod.append_entry(
             conn, name=name, content="SEARCHABLE_PRIVATE_MARKER", tags=["topic"]
         )
@@ -147,9 +156,9 @@ def test_clean_memory_keeps_markdown_if_index_clear_cannot_start(
 
     assert path.exists()
     with fts.cursor() as conn:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM entries WHERE id=?", (entry_id,)
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute("SELECT COUNT(*) FROM entries WHERE id=?", (entry_id,)).fetchone()[0] == 1
+        )
 
 
 def test_clean_memory_unlink_failure_stays_hidden_from_read_and_rebuild(
@@ -158,9 +167,7 @@ def test_clean_memory_unlink_failure_stays_hidden_from_read_and_rebuild(
     name = "topic-private-unlink.md"
     marker = "MEMORY_UNLINK_PRIVATE_MARKER"
     with fts.cursor() as conn:
-        entries_mod.create_file(
-            conn, name=name, description="private", tags=["topic"]
-        )
+        entries_mod.create_file(conn, name=name, description="private", tags=["topic"])
         entries_mod.append_entry(conn, name=name, content=marker, tags=["topic"])
     path = files_mod.memory_path(name)
     real_unlink = Path.unlink
@@ -177,25 +184,19 @@ def test_clean_memory_unlink_failure_stays_hidden_from_read_and_rebuild(
     assert path.exists()
     with fts.cursor() as conn:
         assert conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 0
-        assert candidate_store.is_tombstoned(
-            conn, kind="memory_file", artifact_id=name
-        )
-        assert mcp_server._read_memory(conn, path=name) == {
+        assert candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=name)
+        assert mcp_server._read_memory(conn, cfg=Config(), path=name) == {
             "error": f"file not found: {name}"
         }
         entries_mod.rebuild_index(conn)
-        assert mcp_server._search(conn, query=marker)["results"] == []
+        assert mcp_server._search(conn, cfg=Config(), query=marker)["results"] == []
 
 
 def test_clean_memory_removes_crash_orphan_temp(ac_root: Path) -> None:
     name = "topic-orphan-temp.md"
     with fts.cursor() as conn:
-        entries_mod.create_file(
-            conn, name=name, description="private", tags=["topic"]
-        )
-        entries_mod.append_entry(
-            conn, name=name, content="PRIVATE_MEMORY_MARKER", tags=["topic"]
-        )
+        entries_mod.create_file(conn, name=name, description="private", tags=["topic"])
+        entries_mod.append_entry(conn, name=name, content="PRIVATE_MEMORY_MARKER", tags=["topic"])
     path = files_mod.memory_path(name)
     orphan = path.parent / f".{path.name}.deadbeef.tmp"
     orphan.write_text("SENSITIVE_CRASH_COPY", encoding="utf-8")
@@ -236,6 +237,9 @@ def test_clean_memory_clears_candidates_wraps_and_provenance(ac_root: Path) -> N
             wrap_id=claim.row.id,
             lease_token="clean-lease",
             input_digest="clean-digest",
+            window_start_utc="2026-04-21T00:00:00+00:00",
+            window_end_utc="2026-04-22T00:00:00+00:00",
+            workflow_version=1,
             coverage_status="partial",
             output={
                 "completed": [],
@@ -245,6 +249,7 @@ def test_clean_memory_clears_candidates_wraps_and_provenance(ac_root: Path) -> N
                 "needs_review": [],
             },
             sources=[source],
+            validate_input_current=lambda: None,
         )
         assert candidate.id
 
@@ -253,7 +258,17 @@ def test_clean_memory_clears_candidates_wraps_and_provenance(ac_root: Path) -> N
         assert conn.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM daily_wrap_revisions").fetchone()[0] == 0
-        assert conn.execute("SELECT COUNT(*) FROM provenance_edges").fetchone()[0] == 0
+        assert (
+            conn.execute(
+                """
+                SELECT COUNT(*) FROM provenance_edges
+                 WHERE subject_kind != 'timeline_block'
+                    OR source_kind != 'observation'
+                """
+            ).fetchone()[0]
+            == 0
+        )
+        assert conn.execute("SELECT COUNT(*) FROM provenance_edges").fetchone()[0] == 1
 
 
 def test_clean_timeline_invalidates_wraps_and_conflicts_pending_candidates(
@@ -285,6 +300,9 @@ def test_clean_timeline_invalidates_wraps_and_conflicts_pending_candidates(
             wrap_id=claim.row.id,
             lease_token="timeline-clean",
             input_digest="timeline-clean",
+            window_start_utc="2026-04-21T00:00:00+00:00",
+            window_end_utc="2026-04-22T00:00:00+00:00",
+            workflow_version=1,
             coverage_status="ready",
             output={
                 "completed": [],
@@ -294,6 +312,7 @@ def test_clean_timeline_invalidates_wraps_and_conflicts_pending_candidates(
                 "needs_review": [],
             },
             sources=[source],
+            validate_input_current=lambda: None,
         )
 
     result = CliRunner().invoke(cli.app, ["clean", "timeline", "--yes"])
@@ -309,9 +328,12 @@ def test_clean_timeline_invalidates_wraps_and_conflicts_pending_candidates(
         assert "explicitly deleted" in updated.last_error
         assert conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0] == 0
-        assert conn.execute(
-            """
+        assert (
+            conn.execute(
+                """
             SELECT COUNT(*) FROM provenance_edges
              WHERE subject_kind='timeline_block' OR source_kind='timeline_block'
             """
-        ).fetchone()[0] == 0
+            ).fetchone()[0]
+            == 0
+        )

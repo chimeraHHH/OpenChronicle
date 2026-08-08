@@ -24,6 +24,17 @@ class EvidenceRef:
     content_hash: str = ""
 
     def __post_init__(self) -> None:
+        if any(
+            not isinstance(value, str)
+            for value in (
+                self.kind,
+                self.id,
+                self.path,
+                self.timestamp,
+                self.content_hash,
+            )
+        ):
+            raise ValueError("evidence reference fields must be strings")
         if not self.kind.strip():
             raise ValueError("evidence kind is required")
         if not self.id.strip():
@@ -87,9 +98,79 @@ def observation_digest(data: dict[str, Any]) -> str:
     )
 
 
-def timeline_block_digest(
-    *, start: str, end: str, entries: list[Any], apps: list[Any]
+def timeline_block_digest(*, start: str, end: str, entries: list[Any], apps: list[Any]) -> str:
+    return canonical_digest({"start": start, "end": end, "entries": entries, "apps": apps})
+
+
+def timeline_block_projection_digest(
+    *,
+    block_id: str,
+    start: str,
+    end: str,
+    timezone: str,
+    entries: list[Any],
+    apps: list[Any],
+    capture_count: int,
+    created_at: str,
+    source_digest: str,
 ) -> str:
+    """Bind every persisted field in an immutable timeline-block row.
+
+    ``timeline_block_digest`` remains the compact evidence-content binding used
+    by historical provenance references.  This wider digest protects the
+    SQLite projection itself, including metadata that is returned by public
+    context surfaces but is not part of that historical evidence digest.
+    """
     return canonical_digest(
-        {"start": start, "end": end, "entries": entries, "apps": apps}
+        {
+            "schema": "timeline-block-projection-v1",
+            "id": block_id,
+            "start": start,
+            "end": end,
+            "timezone": timezone,
+            "entries": entries,
+            "apps": apps,
+            "capture_count": capture_count,
+            "created_at": created_at,
+            "source_digest": source_digest,
+        }
+    )
+
+
+def timeline_block_sources_digest(sources: list[EvidenceRef]) -> str:
+    """Bind a timeline block to its complete, order-independent source set."""
+    return _evidence_sources_digest("timeline-block-sources-v1", sources)
+
+
+def daily_wrap_sources_digest(sources: list[EvidenceRef]) -> str:
+    """Bind a Daily Wrap revision to its complete persisted source set."""
+    return _evidence_sources_digest("daily-wrap-sources-v1", sources)
+
+
+def _evidence_sources_digest(schema: str, sources: list[EvidenceRef]) -> str:
+    """Return an order-independent digest over fully bound evidence refs."""
+    normalized = sorted(
+        (
+            {
+                "kind": source.kind,
+                "id": source.id,
+                "path": source.path,
+                "timestamp": source.timestamp,
+                "content_hash": source.content_hash,
+            }
+            for source in sources
+        ),
+        key=lambda value: (
+            value["kind"],
+            value["path"],
+            value["id"],
+            value["timestamp"],
+            value["content_hash"],
+        ),
+    )
+    return canonical_digest(
+        {
+            "schema": schema,
+            "sources": normalized,
+        }
     )
