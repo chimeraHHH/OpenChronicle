@@ -25,6 +25,7 @@ from .provenance import store as provenance_store
 from .provenance.models import EvidenceRef
 from .reply_rescue import store as reply_rescue_store
 from .reply_rescue.service import ReplyRescueService
+from .reply_rescue.service import validate_config as validate_reply_rescue
 from .services.capture_control import PauseStateConflict, set_paused
 from .services.context import ContextService
 from .services.evidence import EvidenceResolver
@@ -158,6 +159,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "prompt_rescue.delete": _prompt_rescue_delete,
         "reply_rescue.get": _reply_rescue_get,
         "reply_rescue.queue": _reply_rescue_queue,
+        "reply_rescue.queue_selection": _reply_rescue_queue_selection,
         "reply_rescue.edit": _reply_rescue_edit,
         "reply_rescue.retry": _reply_rescue_retry,
         "reply_rescue.delete": _reply_rescue_delete,
@@ -340,6 +342,18 @@ def _reply_rescue_queue(params: dict[str, Any]) -> dict[str, Any]:
             style_instructions=style_instructions,
             commitments=commitments,
         )
+        return {"job": _reply_rescue_payload(job), "created": created}
+
+
+def _reply_rescue_queue_selection(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params)
+    cfg = config_mod.load()
+    validate_reply_rescue(cfg)
+    if not cfg.reply_rescue.enabled:
+        raise ValueError("reply rescue is disabled")
+    receipt = capture_selection(cfg)
+    with fts.cursor() as conn:
+        job, created = ReplyRescueService(conn, cfg).queue_selection(receipt)
         return {"job": _reply_rescue_payload(job), "created": created}
 
 
@@ -710,22 +724,27 @@ def _bounded_prompt_rescue_output(output: dict[str, Any] | None) -> dict[str, An
 def _reply_rescue_payload(job) -> dict[str, Any]:
     source = job.source if isinstance(job.source, dict) else {}
     output = job.output if isinstance(job.output, dict) else None
+    bounded_source = {
+        "schema_version": int(source.get("schema_version") or 0),
+        "identity_assurance": str(source.get("identity_assurance") or "")[:50],
+        "conversation_text": str(source.get("conversation_text") or "")[:50_000],
+        "participants": _bounded_output_strings(source.get("participants"), 50),
+        "intended_recipients": _bounded_output_strings(source.get("intended_recipients"), 50),
+        "reply_mode": str(source.get("reply_mode") or "")[:20],
+        "goal": str(source.get("goal") or "")[:1_000],
+        "tone": str(source.get("tone") or "")[:1_000],
+        "style_instructions": _bounded_output_strings(source.get("style_instructions"), 20),
+        "commitments": _bounded_output_strings(source.get("commitments"), 20),
+    }
+    if job.source_kind == "macos_selection":
+        bounded_source["selection_binding"] = _bounded_prompt_rescue_binding(
+            source.get("selection_binding")
+        )
     return {
         "id": str(job.id)[:128],
         "status": str(job.status)[:50],
         "source_kind": str(job.source_kind)[:50],
-        "source": {
-            "schema_version": int(source.get("schema_version") or 0),
-            "identity_assurance": str(source.get("identity_assurance") or "")[:50],
-            "conversation_text": str(source.get("conversation_text") or "")[:50_000],
-            "participants": _bounded_output_strings(source.get("participants"), 50),
-            "intended_recipients": _bounded_output_strings(source.get("intended_recipients"), 50),
-            "reply_mode": str(source.get("reply_mode") or "")[:20],
-            "goal": str(source.get("goal") or "")[:1_000],
-            "tone": str(source.get("tone") or "")[:1_000],
-            "style_instructions": _bounded_output_strings(source.get("style_instructions"), 20),
-            "commitments": _bounded_output_strings(source.get("commitments"), 20),
-        },
+        "source": bounded_source,
         "model_identity": str(job.model_identity)[:256],
         "provider_location": str(job.provider_location)[:50],
         "output": _bounded_reply_rescue_output(output),

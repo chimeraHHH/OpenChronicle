@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from openchronicle import config as config_mod
+from openchronicle.prompt_rescue.selection import SelectionReceipt
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef
 from openchronicle.reply_rescue import store
@@ -201,6 +202,55 @@ def test_reply_rescue_projection_and_source_tamper_fail_closed(ac_root: Path) ->
         assert store.get(conn, queued.id) is None
         assert service.get(queued.id) is None
         assert not provenance_store.is_current(conn, queued.input_ref)
+
+
+def test_reply_rescue_reuses_exact_selection_receipt_without_claiming_thread_identity(
+    ac_root: Path,
+) -> None:
+    cfg = _cfg()
+    receipt = SelectionReceipt(
+        selected_text="Ana: Can you confirm whether Tuesday still works?",
+        captured_at="2026-08-09T12:00:00Z",
+        app_name="Notes",
+        bundle_id="com.apple.Notes",
+        pid=123,
+        window_title="Conversation excerpt",
+        element_role="AXTextArea",
+        element_subrole="",
+        selection_location=7,
+        selection_length=48,
+    )
+    with fts.cursor() as conn:
+        service = ReplyRescueService(conn, cfg)
+        queued, created = service.queue_selection(receipt)
+        replay, replay_created = service.queue_selection(receipt)
+
+        assert created is True
+        assert replay_created is False
+        assert replay == queued
+        assert queued.source_kind == "macos_selection"
+        assert queued.source["schema_version"] == 2
+        assert queued.source["identity_assurance"] == "selected_excerpt_unverified"
+        assert queued.source["selection_binding"] == receipt.binding
+        assert queued.source["conversation_text"] == receipt.selected_text
+        assert queued.source["participants"] == []
+        assert queued.source["intended_recipients"] == []
+        assert queued.source["reply_mode"] == "unspecified"
+
+        invalid = SelectionReceipt(
+            selected_text=receipt.selected_text,
+            captured_at="not-a-time",
+            app_name=receipt.app_name,
+            bundle_id=receipt.bundle_id,
+            pid=receipt.pid,
+            window_title=receipt.window_title,
+            element_role=receipt.element_role,
+            element_subrole=receipt.element_subrole,
+            selection_location=receipt.selection_location,
+            selection_length=receipt.selection_length,
+        )
+        with pytest.raises(ReplyRescueValidationError, match="selection binding"):
+            service.queue_selection(invalid)
 
 
 def test_reply_rescue_config_source_and_output_limits_fail_closed(ac_root: Path) -> None:

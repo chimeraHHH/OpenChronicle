@@ -728,6 +728,77 @@ def test_reply_rescue_bridge_is_manual_review_only_and_cas_bound(
     assert missing["error"]["code"] == "NOT_FOUND"
 
 
+def test_reply_rescue_selection_bridge_preserves_weaker_identity_assurance(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.reply_rescue.enabled = True
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    receipt = SelectionReceipt(
+        selected_text="Ana: Can you confirm whether Tuesday still works?",
+        captured_at="2026-08-09T12:00:00Z",
+        app_name="Notes",
+        bundle_id="com.apple.Notes",
+        pid=123,
+        window_title="Conversation excerpt",
+        element_role="AXTextArea",
+        element_subrole="",
+        selection_location=7,
+        selection_length=48,
+    )
+    monkeypatch.setattr(desktop_bridge, "capture_selection", lambda _cfg: receipt)
+
+    queued, queue_code = _request("reply_rescue.queue_selection")
+
+    assert queue_code == 0
+    job = queued["result"]["job"]
+    assert job["source_kind"] == "macos_selection"
+    assert job["source"]["schema_version"] == 2
+    assert job["source"]["identity_assurance"] == "selected_excerpt_unverified"
+    assert job["source"]["selection_binding"] == receipt.binding
+    assert job["source"]["conversation_text"] == receipt.selected_text
+    assert job["source"]["intended_recipients"] == []
+    assert job["source"]["reply_mode"] == "unspecified"
+
+    snapshot, snapshot_code = _request(
+        "snapshot",
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 0,
+            "prompt_rescue_limit": 0,
+            "reply_rescue_limit": 10,
+        },
+    )
+    assert snapshot_code == 0
+    summary = snapshot["result"]["reply_rescue"]["jobs"][0]
+    assert summary["source_kind"] == "macos_selection"
+    assert summary["identity_assurance"] == "selected_excerpt_unverified"
+
+
+def test_reply_rescue_selection_does_not_capture_while_disabled(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    calls = 0
+
+    def capture(_cfg):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("selection must not be read")
+
+    monkeypatch.setattr(desktop_bridge, "capture_selection", capture)
+    rejected, rejected_code = _request("reply_rescue.queue_selection")
+
+    assert rejected_code == 2
+    assert rejected["error"]["code"] == "INVALID_PARAMS"
+    assert calls == 0
+
+
 def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(
     ac_root: Path,
     monkeypatch: pytest.MonkeyPatch,

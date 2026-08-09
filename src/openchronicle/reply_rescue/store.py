@@ -50,7 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_reply_rescue_recent
 VALID_STATUSES = {"queued", "leased", "ready", "failed"}
 VALID_ERRORS = {"", "provider_failed", "invalid_output", "input_changed", "cancelled"}
 VALID_SOURCE_KINDS = {"manual_conversation", "macos_selection"}
-SOURCE_FIELDS = {
+MANUAL_SOURCE_FIELDS = {
     "schema_version",
     "identity_assurance",
     "conversation_text",
@@ -61,6 +61,19 @@ SOURCE_FIELDS = {
     "tone",
     "style_instructions",
     "commitments",
+}
+SELECTION_SOURCE_FIELDS = MANUAL_SOURCE_FIELDS | {"selection_binding"}
+SELECTION_BINDING_FIELDS = {
+    "schema_version",
+    "captured_at",
+    "app_name",
+    "bundle_id",
+    "pid",
+    "window_title",
+    "element_role",
+    "element_subrole",
+    "selection_location",
+    "selection_length",
 }
 
 
@@ -673,16 +686,28 @@ def _validate_input(**values: Any) -> None:
 
 
 def _valid_source(source_kind: object, source: object) -> bool:
-    if source_kind != "manual_conversation" or not isinstance(source, dict):
-        # Exact-selection support is reserved in the table constraint but not
-        # admitted until its stronger source schema is implemented.
+    if not isinstance(source, dict):
         return False
-    if set(source) != SOURCE_FIELDS:
+    if source_kind == "manual_conversation":
+        expected_fields = MANUAL_SOURCE_FIELDS
+        expected_version = 1
+        expected_assurance = "manual_unverified"
+    elif source_kind == "macos_selection":
+        expected_fields = SELECTION_SOURCE_FIELDS
+        expected_version = 2
+        expected_assurance = "selected_excerpt_unverified"
+    else:
+        return False
+    if set(source) != expected_fields:
         return False
     if (
-        source.get("schema_version") != 1
-        or source.get("identity_assurance") != "manual_unverified"
+        source.get("schema_version") != expected_version
+        or source.get("identity_assurance") != expected_assurance
         or source.get("reply_mode") not in {"reply", "reply_all", "unspecified"}
+    ):
+        return False
+    if source_kind == "macos_selection" and not _valid_selection_binding(
+        source.get("selection_binding")
     ):
         return False
     for name in ("conversation_text", "goal", "tone"):
@@ -703,6 +728,47 @@ def _valid_source(source_kind: object, source: object) -> bool:
         ):
             return False
     return True
+
+
+def _valid_selection_binding(binding: object) -> bool:
+    if not isinstance(binding, dict) or set(binding) != SELECTION_BINDING_FIELDS:
+        return False
+    if binding.get("schema_version") != 1:
+        return False
+    strings = {
+        "captured_at": (100, True),
+        "app_name": (512, False),
+        "bundle_id": (512, True),
+        "window_title": (512, False),
+        "element_role": (128, True),
+        "element_subrole": (128, False),
+    }
+    for name, (maximum, nonempty) in strings.items():
+        value = binding.get(name)
+        if (
+            not isinstance(value, str)
+            or len(value) > maximum
+            or "\x00" in value
+            or (nonempty and not value.strip())
+        ):
+            return False
+    try:
+        captured = _aware(
+            datetime.fromisoformat(str(binding["captured_at"]).replace("Z", "+00:00"))
+        )
+    except ValueError:
+        return False
+    if captured.tzinfo is None:
+        return False
+    integer_bounds = {
+        "pid": (1, 2_147_483_647),
+        "selection_location": (0, 2_147_483_647),
+        "selection_length": (1, 2_147_483_647),
+    }
+    return all(
+        type(binding.get(name)) is int and minimum <= binding[name] <= maximum
+        for name, (minimum, maximum) in integer_bounds.items()
+    )
 
 
 def _json(value: object) -> str:

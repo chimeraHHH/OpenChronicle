@@ -7,12 +7,14 @@ import math
 import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
 from ..config import Config
 from ..privacy import policy as privacy_policy
 from ..privacy.egress import model_egress_lock
+from ..prompt_rescue.selection import SelectionReceipt
 from ..prompts import load as load_prompt
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, canonical_digest
@@ -31,7 +33,7 @@ _OUTPUT_FIELDS = {
     "warnings",
     "claims",
 }
-_SOURCE_FIELDS = {
+_MANUAL_SOURCE_FIELDS = {
     "schema_version",
     "identity_assurance",
     "conversation_text",
@@ -42,6 +44,19 @@ _SOURCE_FIELDS = {
     "tone",
     "style_instructions",
     "commitments",
+}
+_SELECTION_SOURCE_FIELDS = _MANUAL_SOURCE_FIELDS | {"selection_binding"}
+_SELECTION_BINDING_FIELDS = {
+    "schema_version",
+    "captured_at",
+    "app_name",
+    "bundle_id",
+    "pid",
+    "window_title",
+    "element_role",
+    "element_subrole",
+    "selection_location",
+    "selection_length",
 }
 
 
@@ -91,11 +106,46 @@ class ReplyRescueService:
             style_instructions=style_instructions,
             commitments=commitments,
         )
+        return self._queue_source(source_kind="manual_conversation", source=source)
+
+    def queue_selection(
+        self,
+        receipt: SelectionReceipt,
+        *,
+        participants: Sequence[str] = (),
+        intended_recipients: Sequence[str] = (),
+        reply_mode: str = "unspecified",
+        goal: str = "Prepare a cautious reply to this selected excerpt for review.",
+        tone: str = "",
+        style_instructions: Sequence[str] = (),
+        commitments: Sequence[str] = (),
+    ) -> tuple[store.ReplyRescueJob, bool]:
+        validate_config(self.cfg)
+        if not self.cfg.reply_rescue.enabled:
+            raise ValueError("reply rescue is disabled")
+        if not isinstance(receipt, SelectionReceipt):
+            raise ValueError("reply rescue selection receipt is invalid")
+        source = validate_selection_source(
+            self.cfg,
+            receipt=receipt,
+            participants=participants,
+            intended_recipients=intended_recipients,
+            reply_mode=reply_mode,
+            goal=goal,
+            tone=tone,
+            style_instructions=style_instructions,
+            commitments=commitments,
+        )
+        return self._queue_source(source_kind="macos_selection", source=source)
+
+    def _queue_source(
+        self, *, source_kind: str, source: dict[str, Any]
+    ) -> tuple[store.ReplyRescueJob, bool]:
         template = load_prompt("reply_rescue.md")
         provider = self.provider_summary()
         return store.create(
             self.conn,
-            source_kind="manual_conversation",
+            source_kind=source_kind,
             source=source,
             policy_digest=privacy_policy.stored_observation_policy_digest(self.cfg.capture),
             template_version=TEMPLATE_VERSION,
@@ -300,13 +350,65 @@ def validate_manual_source(
     return validate_source_object(cfg, source)
 
 
+def validate_selection_source(
+    cfg: Config,
+    *,
+    receipt: SelectionReceipt,
+    participants: Sequence[str],
+    intended_recipients: Sequence[str],
+    reply_mode: str,
+    goal: str,
+    tone: str,
+    style_instructions: Sequence[str],
+    commitments: Sequence[str],
+) -> dict[str, Any]:
+    declared_lists = {
+        "participants": participants,
+        "intended_recipients": intended_recipients,
+        "style_instructions": style_instructions,
+        "commitments": commitments,
+    }
+    if any(not isinstance(value, (list, tuple)) for value in declared_lists.values()):
+        raise ReplyRescueValidationError("reply rescue source is invalid")
+    source = {
+        "schema_version": 2,
+        "identity_assurance": "selected_excerpt_unverified",
+        "selection_binding": receipt.binding,
+        "conversation_text": receipt.selected_text,
+        "participants": list(participants),
+        "intended_recipients": list(intended_recipients),
+        "reply_mode": reply_mode,
+        "goal": goal,
+        "tone": tone,
+        "style_instructions": list(style_instructions),
+        "commitments": list(commitments),
+    }
+    return validate_source_object(cfg, source)
+
+
 def validate_source_object(cfg: Config, raw: object) -> dict[str, Any]:
-    if not isinstance(raw, dict) or set(raw) != _SOURCE_FIELDS:
+    if not isinstance(raw, dict):
+        raise ReplyRescueValidationError("reply rescue source schema is invalid")
+    is_manual = set(raw) == _MANUAL_SOURCE_FIELDS
+    is_selection = set(raw) == _SELECTION_SOURCE_FIELDS
+    if not is_manual and not is_selection:
         raise ReplyRescueValidationError("reply rescue source schema is invalid")
     conversation = raw.get("conversation_text")
     if (
-        raw.get("schema_version") != 1
-        or raw.get("identity_assurance") != "manual_unverified"
+        (
+            is_manual
+            and (
+                raw.get("schema_version") != 1
+                or raw.get("identity_assurance") != "manual_unverified"
+            )
+        )
+        or (
+            is_selection
+            and (
+                raw.get("schema_version") != 2
+                or raw.get("identity_assurance") != "selected_excerpt_unverified"
+            )
+        )
         or not isinstance(conversation, str)
         or not conversation.strip()
         or "\x00" in conversation
@@ -315,10 +417,12 @@ def validate_source_object(cfg: Config, raw: object) -> dict[str, Any]:
     ):
         raise ReplyRescueValidationError("reply rescue source is invalid")
     result: dict[str, Any] = {
-        "schema_version": 1,
-        "identity_assurance": "manual_unverified",
+        "schema_version": raw["schema_version"],
+        "identity_assurance": raw["identity_assurance"],
         "conversation_text": conversation,
     }
+    if is_selection:
+        result["selection_binding"] = _selection_binding(raw.get("selection_binding"))
     for name in ("goal", "tone"):
         value = raw.get(name)
         if not isinstance(value, str) or "\x00" in value or len(value) > 1_000:
@@ -345,6 +449,43 @@ def validate_source_object(cfg: Config, raw: object) -> dict[str, Any]:
     )
     if declared_chars > cfg.reply_rescue.max_input_chars:
         raise ReplyRescueValidationError("reply rescue input exceeds max_input_chars")
+    return result
+
+
+def _selection_binding(raw: object) -> dict[str, Any]:
+    if not isinstance(raw, dict) or set(raw) != _SELECTION_BINDING_FIELDS:
+        raise ReplyRescueValidationError("reply rescue selection binding is invalid")
+    if raw.get("schema_version") != 1:
+        raise ReplyRescueValidationError("reply rescue selection binding is invalid")
+    result: dict[str, Any] = {"schema_version": 1}
+    for name, maximum, nonempty in (
+        ("captured_at", 100, True),
+        ("app_name", 512, False),
+        ("bundle_id", 512, True),
+        ("window_title", 512, False),
+        ("element_role", 128, True),
+        ("element_subrole", 128, False),
+    ):
+        value = raw.get(name)
+        if (
+            not isinstance(value, str)
+            or len(value) > maximum
+            or "\x00" in value
+            or (nonempty and not value.strip())
+        ):
+            raise ReplyRescueValidationError("reply rescue selection binding is invalid")
+        result[name] = value
+    try:
+        parsed = datetime.fromisoformat(result["captured_at"].replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ReplyRescueValidationError("reply rescue selection binding is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ReplyRescueValidationError("reply rescue selection binding is invalid")
+    for name, minimum in (("pid", 1), ("selection_location", 0), ("selection_length", 1)):
+        value = raw.get(name)
+        if type(value) is not int or not minimum <= value <= 2_147_483_647:
+            raise ReplyRescueValidationError("reply rescue selection binding is invalid")
+        result[name] = value
     return result
 
 
