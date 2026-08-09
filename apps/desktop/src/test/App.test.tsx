@@ -28,7 +28,9 @@ import {
   candidateDetail,
   candidateSummary,
   forgetPreview,
+  jsonResumeExport,
   maliciousText,
+  openedJsonResumeReview,
   provenanceTrace,
   promptRescueJob,
   promptRescueSummary,
@@ -119,6 +121,25 @@ function commandResult(command: string) {
       action_capability: "none",
     };
   }
+  if (command === "open_resume_rescue_json") return openedJsonResumeReview();
+  if (command === "admit_resume_rescue_json") {
+    return { profile: resumeProfileVersion(), created: true };
+  }
+  if (command === "get_resume_rescue_json_export") {
+    return { export: jsonResumeExport() };
+  }
+  if (command === "export_resume_rescue_json") {
+    const exported = jsonResumeExport();
+    return {
+      schema_version: 1,
+      projection_id: exported.projection_binding.id,
+      document_digest: exported.document_digest,
+      file_name: "resume-projection-1.json",
+      byte_count: exported.json_text.length,
+      created: true,
+      action_capability: "none",
+    };
+  }
   if (command === "edit_candidate" || command === "approve_candidate" || command === "reject_candidate") {
     return bridgeCandidateMutation();
   }
@@ -170,6 +191,70 @@ describe("trusted console", () => {
         String(command).includes("submit"),
       ),
     ).toBe(false);
+  });
+
+  it("keeps JSON Resume candidates unchecked until review and shows losses before export", async () => {
+    const user = userEvent.setup();
+    const opened = openedJsonResumeReview();
+    const exported = jsonResumeExport();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Résumé Rescue/i }));
+    await user.click(screen.getByRole("button", { name: "Choose JSON Resume…" }));
+
+    expect((await screen.findAllByText("Engineer.")).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("/basics/summary")).toBeInTheDocument();
+    const candidate = screen.getByRole("checkbox", {
+      name: `Select ${opened.review.candidates[0]!.id}`,
+    });
+    expect(candidate).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "Admit selected facts" })).toBeDisabled();
+
+    await user.click(candidate);
+    await user.click(screen.getByRole("button", { name: "Admit selected facts" }));
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("admit_resume_rescue_json", {
+        request: {
+          source_text: opened.source_text,
+          expected_review_digest: opened.review.review_digest,
+          profile_id: resumeProfileVersion().id,
+          display_name: resumeProfileVersion().profile.display_name,
+          locale: resumeProfileVersion().profile.locale,
+          selections: [
+            {
+              candidate_id: opened.review.candidates[0]!.id,
+              fact_id: "json-summary-1",
+              section: "summary",
+              confidentiality: "private",
+              ownership_scope: "individual",
+            },
+          ],
+          expected_version: resumeProfileVersion().version,
+        },
+      }),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Review JSON export" }));
+    expect(
+      await screen.findByRole("heading", { name: "JSON Resume export review" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Not safely mapped")).toBeInTheDocument();
+    expect(
+      screen.getByText("Review the interoperability loss ledger before export."),
+    ).toBeInTheDocument();
+    expect(
+      tauri.invoke.mock.calls.some(([command]) => command === "export_resume_rescue_json"),
+    ).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: "Save new JSON file" }));
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("export_resume_rescue_json", {
+        request: {
+          projection_id: exported.projection_binding.id,
+          expected_document_digest: exported.document_digest,
+        },
+      }),
+    );
   });
 
   it("reviews and copies a manual reply without mailbox or send capability", async () => {

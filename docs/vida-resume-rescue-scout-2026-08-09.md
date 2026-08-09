@@ -114,6 +114,17 @@ and emits an explicit loss ledger plus an untrusted namespaced extension for
 exact OpenChronicle round trips. Other tools may ignore that extension, and the
 export says so.
 
+That boundary is now implemented through the desktop protocol. The native
+picker accepts a bounded regular UTF-8 `.json` file without disclosing its path
+to the WebView; every candidate starts unselected, exposes its exact source
+fields, and requires an explicit fact ID, section, confidentiality, and
+ownership decision. Admission reparses the original JSON and checks both the
+review digest and target-profile CAS. Export is projection-scoped, shows the
+loss ledger before enabling save, re-fetches the current document in Rust, and
+creates only a new private digest-matched file. The implementation does not
+claim lossless interoperability with tools that ignore the namespaced
+extension.
+
 ## Research update: provenance helps only inside its evidence boundary
 
 [Career-Aware Resume Tailoring via Multi-Source RAG with Provenance Tracking](https://arxiv.org/abs/2605.05257)
@@ -282,6 +293,7 @@ as proof of ATS or hiring success.
 4. Add deterministic HTML preview and render/parse/layout acceptance. The
    Chrome 151 macOS acceptance is complete; cross-platform packaging remains a
    separate export prerequisite.
-5. Add reviewed document extraction, then JSON Resume import/export mapping.
+5. Add JSON Resume import/export mapping, then reviewed PDF/DOCX extraction.
+   The JSON Resume desktop slice is complete; document extraction is next.
 6. Consider PDF/DOCX export after packaging evaluation. Application submission
    remains outside Stage 2.

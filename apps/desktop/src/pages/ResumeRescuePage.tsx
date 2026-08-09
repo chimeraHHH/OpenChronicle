@@ -4,6 +4,9 @@ import type { DesktopApi } from "../api";
 import { StatusBadge } from "../components/StatusBadge";
 import { UntrustedText } from "../components/UntrustedText";
 import type {
+  JsonResumeExport,
+  JsonResumeSelection,
+  OpenedJsonResumeReview,
   ResumeConfidentiality,
   ResumeFact,
   ResumeOpportunity,
@@ -31,6 +34,10 @@ const sectionOrder: ResumeSectionKind[] = [
 
 interface ResumeRescuePageProps {
   api: DesktopApi;
+}
+
+interface JsonCandidateDecision extends JsonResumeSelection {
+  selected: boolean;
 }
 
 function newProfileDraft(): ResumeProfile {
@@ -70,6 +77,13 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   const [requirementText, setRequirementText] = useState("");
   const [requirements, setRequirements] = useState<ResumeRequirementRequest[]>([]);
   const [preview, setPreview] = useState<ResumePreview | null>(null);
+  const [jsonImport, setJsonImport] = useState<OpenedJsonResumeReview | null>(null);
+  const [jsonDecisions, setJsonDecisions] = useState<JsonCandidateDecision[]>([]);
+  const [jsonUseNewProfile, setJsonUseNewProfile] = useState(false);
+  const [jsonTargetProfileId, setJsonTargetProfileId] = useState("");
+  const [jsonDisplayName, setJsonDisplayName] = useState("");
+  const [jsonLocale, setJsonLocale] = useState("");
+  const [jsonExport, setJsonExport] = useState<JsonResumeExport | null>(null);
 
   async function refresh() {
     const next = await api.getResumeRescueState();
@@ -122,6 +136,147 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   function clearMessages() {
     setError("");
     setNotice("");
+  }
+
+  async function openJsonResume() {
+    clearMessages();
+    setBusy("json-import-open");
+    try {
+      const opened = await api.openResumeJson();
+      const target = selectedProfile ?? state?.profiles[0];
+      setJsonImport(opened);
+      setJsonDecisions(
+        opened.review.candidates.map((candidate, index) => ({
+          selected: false,
+          candidate_id: candidate.id,
+          fact_id: `json-${candidate.suggested_section}-${index + 1}`,
+          section: candidate.suggested_section,
+          confidentiality: "private",
+          ownership_scope: "individual",
+        })),
+      );
+      setJsonUseNewProfile(!target);
+      setJsonTargetProfileId(target?.id ?? "");
+      setJsonDisplayName(target?.profile.display_name ?? opened.review.display_name_candidate);
+      setJsonLocale(target?.profile.locale ?? "");
+      setJsonExport(null);
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function updateJsonDecision(
+    candidateId: string,
+    changes: Partial<JsonCandidateDecision>,
+  ) {
+    setJsonDecisions((current) =>
+      current.map((decision) =>
+        decision.candidate_id === candidateId ? { ...decision, ...changes } : decision,
+      ),
+    );
+  }
+
+  function selectJsonTarget(value: string) {
+    if (value === "__new__") {
+      setJsonUseNewProfile(true);
+      setJsonTargetProfileId("");
+      setJsonDisplayName(jsonImport?.review.display_name_candidate ?? "");
+      setJsonLocale("");
+      return;
+    }
+    const profile = state?.profiles.find((item) => item.id === value);
+    setJsonUseNewProfile(false);
+    setJsonTargetProfileId(profile?.id ?? "");
+    setJsonDisplayName(profile?.profile.display_name ?? "");
+    setJsonLocale(profile?.profile.locale ?? "");
+  }
+
+  async function admitJsonResume() {
+    if (!jsonImport) return;
+    clearMessages();
+    const selections = jsonDecisions
+      .filter((decision) => decision.selected)
+      .map(({ selected: _selected, ...selection }) => selection);
+    const target = jsonUseNewProfile
+      ? undefined
+      : state?.profiles.find((profile) => profile.id === jsonTargetProfileId);
+    const profileId = (jsonUseNewProfile ? jsonTargetProfileId : target?.id)?.trim() ?? "";
+    const factIds = selections.map((selection) => selection.fact_id.trim());
+    if (
+      !selections.length ||
+      !profileId ||
+      !jsonDisplayName.trim() ||
+      factIds.some((id) => !id) ||
+      new Set(factIds).size !== factIds.length ||
+      factIds.some((id) => target?.profile.facts.some((fact) => fact.id === id))
+    ) {
+      setError(
+        "Select at least one candidate and use non-empty fact IDs that are unique in the target profile.",
+      );
+      return;
+    }
+    setBusy("json-import-admit");
+    try {
+      const result = await api.admitResumeJson(
+        jsonImport.source_text,
+        jsonImport.review.review_digest,
+        profileId,
+        jsonDisplayName.trim(),
+        jsonLocale.trim(),
+        selections.map((selection) => ({ ...selection, fact_id: selection.fact_id.trim() })),
+        target?.version,
+      );
+      setNotice(
+        `Admitted ${selections.length} reviewed JSON Resume fact${selections.length === 1 ? "" : "s"} into profile version ${result.profile.version}.`,
+      );
+      setJsonImport(null);
+      setJsonDecisions([]);
+      await refresh();
+      setSelectedProfileId(result.profile.id);
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function reviewJsonExport(projection: ResumeProjection) {
+    clearMessages();
+    setBusy(`json-export:${projection.id}`);
+    try {
+      setJsonExport(
+        await api.getResumeJsonExport(projection.id, projection.artifact_digest),
+      );
+      window.requestAnimationFrame(() =>
+        document.getElementById("resume-json-export-review")?.scrollIntoView({ block: "start" }),
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+      setJsonExport(null);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveJsonExport() {
+    if (!jsonExport) return;
+    clearMessages();
+    setBusy("json-export-save");
+    try {
+      const result = await api.exportResumeJson(
+        jsonExport.projection_binding.id,
+        jsonExport.document_digest,
+      );
+      setNotice(
+        `Created ${result.file_name} (${result.byte_count} bytes). No existing file was replaced.`,
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
   }
 
   function addFact() {
@@ -401,6 +556,232 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
       {error ? <div className="global-error" role="alert"><UntrustedText>{error}</UntrustedText></div> : null}
       {notice ? <div className="success-panel" role="status">{notice}</div> : null}
 
+      <section className="settings-section resume-rescue__json-import" aria-labelledby="json-resume-import-heading">
+        <div className="section-heading-row">
+          <div>
+            <p className="eyebrow">Reviewed interoperability</p>
+            <h2 id="json-resume-import-heading">Import JSON Resume</h2>
+            <p className="muted">
+              Choose a local <code>.json</code> file, compare every proposed fact with its exact
+              source fields, then explicitly admit only checked candidates.
+            </p>
+          </div>
+          <button
+            className="button button--secondary"
+            disabled={!state?.enabled || Boolean(busy)}
+            onClick={() => void openJsonResume()}
+            type="button"
+          >
+            {busy === "json-import-open" ? "Opening…" : "Choose JSON Resume…"}
+          </button>
+        </div>
+        {jsonImport ? (
+          <div className="resume-rescue__json-review">
+            <div className="info-panel">
+              <strong>{jsonImport.review.candidates.length} unreviewed candidates</strong>
+              <p>
+                Source bytes: {jsonImport.review.source.byte_count} · digest: {jsonImport.review.source.digest}
+              </p>
+              <p>No contact field, URL, reference, or unknown extension is admitted automatically.</p>
+            </div>
+            <div className="resume-rescue__json-target">
+              <label className="field">
+                <span>Target profile</span>
+                <select
+                  onChange={(event) => selectJsonTarget(event.currentTarget.value)}
+                  value={jsonUseNewProfile ? "__new__" : jsonTargetProfileId}
+                >
+                  {state?.profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.profile.display_name} · v{profile.version}
+                    </option>
+                  ))}
+                  <option value="__new__">Create a new reviewed profile</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Stable profile ID</span>
+                <input
+                  disabled={!jsonUseNewProfile}
+                  maxLength={128}
+                  onChange={(event) => setJsonTargetProfileId(event.currentTarget.value)}
+                  value={jsonTargetProfileId}
+                />
+              </label>
+              <label className="field">
+                <span>Display name</span>
+                <input
+                  disabled={!jsonUseNewProfile}
+                  maxLength={512}
+                  onChange={(event) => setJsonDisplayName(event.currentTarget.value)}
+                  value={jsonDisplayName}
+                />
+              </label>
+              <label className="field">
+                <span>Locale (optional)</span>
+                <input
+                  disabled={!jsonUseNewProfile}
+                  maxLength={64}
+                  onChange={(event) => setJsonLocale(event.currentTarget.value)}
+                  value={jsonLocale}
+                />
+              </label>
+            </div>
+            <div className="resume-rescue__json-candidates">
+              {jsonImport.review.candidates.map((candidate) => {
+                const decision = jsonDecisions.find(
+                  (item) => item.candidate_id === candidate.id,
+                );
+                if (!decision) return null;
+                return (
+                  <article className="resume-rescue__json-candidate" key={candidate.id}>
+                    <div className="section-heading-row">
+                      <label className="resume-rescue__check">
+                        <input
+                          aria-label={`Select ${candidate.id}`}
+                          checked={decision.selected}
+                          onChange={(event) =>
+                            updateJsonDecision(candidate.id, {
+                              selected: event.currentTarget.checked,
+                            })
+                          }
+                          type="checkbox"
+                        />
+                        <span>
+                          <strong><UntrustedText>{candidate.suggested_text}</UntrustedText></strong>
+                          <small>{candidate.suggested_section} · {candidate.mapping}</small>
+                        </span>
+                      </label>
+                      <StatusBadge tone={candidate.mapping === "exact_field" ? "positive" : "warning"}>
+                        {candidate.mapping === "exact_field" ? "Exact field" : "Compare fields"}
+                      </StatusBadge>
+                    </div>
+                    <details className="lineage-details" open={candidate.mapping !== "exact_field"}>
+                      <summary>Exact source fields</summary>
+                      <ul className="resume-rescue__json-source-fields">
+                        {candidate.source_fields.map((field) => (
+                          <li key={field.pointer}>
+                            <code>{field.pointer}</code>
+                            <UntrustedText>{field.value}</UntrustedText>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                    <div className="resume-rescue__json-decision">
+                      <label className="field">
+                        <span>Fact ID</span>
+                        <input
+                          disabled={!decision.selected}
+                          maxLength={128}
+                          onChange={(event) =>
+                            updateJsonDecision(candidate.id, {
+                              fact_id: event.currentTarget.value,
+                            })
+                          }
+                          value={decision.fact_id}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Section</span>
+                        <select
+                          disabled={!decision.selected}
+                          onChange={(event) =>
+                            updateJsonDecision(candidate.id, {
+                              section: event.currentTarget.value as ResumeSectionKind,
+                            })
+                          }
+                          value={decision.section}
+                        >
+                          {sectionOrder.map((section) => <option key={section} value={section}>{section}</option>)}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Confidentiality</span>
+                        <select
+                          disabled={!decision.selected}
+                          onChange={(event) =>
+                            updateJsonDecision(candidate.id, {
+                              confidentiality: event.currentTarget.value as ResumeConfidentiality,
+                            })
+                          }
+                          value={decision.confidentiality}
+                        >
+                          <option value="public">public</option>
+                          <option value="private">private</option>
+                          <option value="confidential">confidential</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Ownership</span>
+                        <select
+                          disabled={!decision.selected}
+                          onChange={(event) =>
+                            updateJsonDecision(candidate.id, {
+                              ownership_scope: event.currentTarget.value as ResumeOwnership,
+                            })
+                          }
+                          value={decision.ownership_scope}
+                        >
+                          <option value="individual">individual</option>
+                          <option value="shared">shared</option>
+                          <option value="organization">organization</option>
+                          <option value="unspecified">unspecified</option>
+                        </select>
+                      </label>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            <details className="lineage-details">
+              <summary>
+                Excluded and unmapped ledger ({jsonImport.review.omissions.length} omissions, {jsonImport.review.unknown_fields.length} unknown paths)
+              </summary>
+              <ul>
+                {jsonImport.review.omissions.map((item, index) => (
+                  <li key={`${item.pointer}-${index}`}>
+                    <code>{item.pointer}</code> · <UntrustedText>{item.reason}</UntrustedText> · {item.value_digest}
+                  </li>
+                ))}
+              </ul>
+              {jsonImport.review.unknown_fields.length ? (
+                <p>Unknown paths: {jsonImport.review.unknown_fields.join(", ")}</p>
+              ) : null}
+            </details>
+            <div className="warning-panel">
+              <h3>Required warnings</h3>
+              <ul>{jsonImport.review.warnings.map((warning, index) => <li key={`${index}-${warning}`}><UntrustedText>{warning}</UntrustedText></li>)}</ul>
+            </div>
+            <div className="button-row">
+              <button
+                className="button button--primary"
+                disabled={
+                  busy === "json-import-admit" ||
+                  !jsonDecisions.some((decision) => decision.selected)
+                }
+                onClick={() => void admitJsonResume()}
+                type="button"
+              >
+                {busy === "json-import-admit" ? "Admitting…" : "Admit selected facts"}
+              </button>
+              <button
+                className="button button--ghost"
+                onClick={() => { setJsonImport(null); setJsonDecisions([]); }}
+                type="button"
+              >
+                Cancel import
+              </button>
+              <span className="muted">No raw source file is copied into the profile store.</span>
+            </div>
+          </div>
+        ) : (
+          <p className="empty-callout">
+            The native picker accepts a regular UTF-8 JSON file up to 500 KB. Import starts with
+            every candidate unchecked.
+          </p>
+        )}
+      </section>
+
       <div className="resume-rescue__source-grid">
         <section className="settings-section" aria-labelledby="resume-profile-heading">
           <div className="section-heading-row">
@@ -457,8 +838,176 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
 
       <section aria-labelledby="resume-results-heading">
         <div className="section-heading-row"><div><p className="eyebrow">Immutable local results</p><h2 id="resume-results-heading">Projection review</h2></div><button className="button button--ghost" onClick={() => void refresh().catch((reason: unknown) => setError(displayError(reason)))} type="button">Refresh</button></div>
-        {state?.projections.length ? <div className="resume-rescue__projections">{state.projections.map((projection) => <article className="settings-section" key={projection.id}><div className="detail-header"><div><p className="eyebrow">{formatDateTime(projection.created_at)}</p><h3><UntrustedText>{projection.artifact.opportunity_binding.title}</UntrustedText> · <UntrustedText>{projection.artifact.opportunity_binding.employer}</UntrustedText></h3></div><StatusBadge tone="positive">Exact only</StatusBadge></div>{projection.artifact.sections.map((section) => <section key={section.kind}><h3>{section.kind}</h3><ul>{section.items.map((item) => <li key={item.fact_id}><UntrustedText>{item.text}</UntrustedText><div className="token-list"><span className="technical-label">{item.fact_id}</span><span className="technical-label">{item.confidentiality}</span><span className="technical-label">{item.ownership_scope}</span><span className="technical-label">{item.provenance.map((source) => source.kind).join(", ")}</span></div></li>)}</ul></section>)}<section><h3>Requirement evidence ledger</h3>{projection.artifact.requirement_coverage.map((coverage) => <div className="resume-rescue__coverage" key={coverage.id}><StatusBadge tone={coverage.status === "candidate_supported" ? "info" : "warning"}>{coverage.status === "candidate_supported" ? "Candidate support" : "Missing evidence"}</StatusBadge><p><UntrustedText>{coverage.text}</UntrustedText></p><small>{coverage.support_assurance} · {coverage.fact_ids.join(", ") || "no mapped facts"}</small></div>)}</section>{projection.artifact.warnings.length ? <div className="warning-panel"><h3>Required review warnings</h3><ul>{projection.artifact.warnings.map((warning, index) => <li key={`${projection.id}-warning-${index}`}><UntrustedText>{warning}</UntrustedText></li>)}</ul></div> : null}<div className="button-row"><button className="button button--primary" disabled={Boolean(busy)} onClick={() => void openPreview(projection)} type="button">{busy === `preview:${projection.id}` ? "Rendering…" : "Open document preview"}</button><span className="muted">Fixed template · no scripts or network</span></div><details className="lineage-details"><summary>Technical bindings</summary><ul className="metadata-list--technical"><li>Profile {projection.profile_id} v{projection.profile_version}: {projection.profile_digest}</li><li>Opportunity {projection.opportunity_id}: {projection.opportunity_digest}</li><li>Artifact: {projection.artifact_digest}</li><li>Action capability: {projection.artifact.action_capability}</li></ul></details></article>)}</div> : <p className="empty-callout">No current projection exists. Profile updates and opportunity supersessions deliberately hide stale results.</p>}
+        {state?.projections.length ? (
+          <div className="resume-rescue__projections">
+            {state.projections.map((projection) => (
+              <article className="settings-section" key={projection.id}>
+                <div className="detail-header">
+                  <div>
+                    <p className="eyebrow">{formatDateTime(projection.created_at)}</p>
+                    <h3>
+                      <UntrustedText>{projection.artifact.opportunity_binding.title}</UntrustedText>
+                      {" · "}
+                      <UntrustedText>{projection.artifact.opportunity_binding.employer}</UntrustedText>
+                    </h3>
+                  </div>
+                  <StatusBadge tone="positive">Exact only</StatusBadge>
+                </div>
+                {projection.artifact.sections.map((section) => (
+                  <section key={section.kind}>
+                    <h3>{section.kind}</h3>
+                    <ul>
+                      {section.items.map((item) => (
+                        <li key={item.fact_id}>
+                          <UntrustedText>{item.text}</UntrustedText>
+                          <div className="token-list">
+                            <span className="technical-label">{item.fact_id}</span>
+                            <span className="technical-label">{item.confidentiality}</span>
+                            <span className="technical-label">{item.ownership_scope}</span>
+                            <span className="technical-label">
+                              {item.provenance.map((source) => source.kind).join(", ")}
+                            </span>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </section>
+                ))}
+                <section>
+                  <h3>Requirement evidence ledger</h3>
+                  {projection.artifact.requirement_coverage.map((coverage) => (
+                    <div className="resume-rescue__coverage" key={coverage.id}>
+                      <StatusBadge tone={coverage.status === "candidate_supported" ? "info" : "warning"}>
+                        {coverage.status === "candidate_supported" ? "Candidate support" : "Missing evidence"}
+                      </StatusBadge>
+                      <p><UntrustedText>{coverage.text}</UntrustedText></p>
+                      <small>{coverage.support_assurance} · {coverage.fact_ids.join(", ") || "no mapped facts"}</small>
+                    </div>
+                  ))}
+                </section>
+                {projection.artifact.warnings.length ? (
+                  <div className="warning-panel">
+                    <h3>Required review warnings</h3>
+                    <ul>
+                      {projection.artifact.warnings.map((warning, index) => (
+                        <li key={`${projection.id}-warning-${index}`}>
+                          <UntrustedText>{warning}</UntrustedText>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                <div className="button-row">
+                  <button
+                    className="button button--primary"
+                    disabled={Boolean(busy)}
+                    onClick={() => void openPreview(projection)}
+                    type="button"
+                  >
+                    {busy === `preview:${projection.id}` ? "Rendering…" : "Open document preview"}
+                  </button>
+                  <button
+                    className="button button--secondary"
+                    disabled={Boolean(busy)}
+                    onClick={() => void reviewJsonExport(projection)}
+                    type="button"
+                  >
+                    {busy === `json-export:${projection.id}` ? "Preparing…" : "Review JSON export"}
+                  </button>
+                  <span className="muted">Fixed outputs · no upload or submission</span>
+                </div>
+                <details className="lineage-details">
+                  <summary>Technical bindings</summary>
+                  <ul className="metadata-list--technical">
+                    <li>Profile {projection.profile_id} v{projection.profile_version}: {projection.profile_digest}</li>
+                    <li>Opportunity {projection.opportunity_id}: {projection.opportunity_digest}</li>
+                    <li>Artifact: {projection.artifact_digest}</li>
+                    <li>Action capability: {projection.artifact.action_capability}</li>
+                  </ul>
+                </details>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-callout">
+            No current projection exists. Profile updates and opportunity supersessions deliberately hide stale results.
+          </p>
+        )}
       </section>
+
+      {jsonExport ? (
+        <section
+          className="settings-section resume-rescue__json-export"
+          id="resume-json-export-review"
+        >
+          <div className="section-heading-row">
+            <div>
+              <p className="eyebrow">Loss-explicit interoperability</p>
+              <h2>JSON Resume export review</h2>
+              <p className="muted">
+                Standard JSON Resume fields may omit selected facts. The OpenChronicle extension
+                preserves them, but other tools may ignore that extension.
+              </p>
+            </div>
+            <div className="button-row">
+              <button
+                className="button button--primary"
+                disabled={busy === "json-export-save"}
+                onClick={() => void saveJsonExport()}
+                type="button"
+              >
+                {busy === "json-export-save" ? "Saving…" : "Save new JSON file"}
+              </button>
+              <button
+                className="button button--ghost"
+                onClick={() => setJsonExport(null)}
+                type="button"
+              >
+                Close review
+              </button>
+            </div>
+          </div>
+          <div className="warning-panel">
+            <h3>Warnings to review before sharing</h3>
+            <ul>
+              {jsonExport.warnings.map((warning, index) => (
+                <li key={`${index}-${warning}`}><UntrustedText>{warning}</UntrustedText></li>
+              ))}
+            </ul>
+          </div>
+          <section>
+            <h3>Standard-schema loss ledger</h3>
+            {jsonExport.interoperability_losses.length ? (
+              <div className="resume-rescue__coverage">
+                {jsonExport.interoperability_losses.map((loss) => (
+                  <div className="resume-rescue__json-loss" key={loss.fact_id}>
+                    <StatusBadge tone="warning">Not safely mapped</StatusBadge>
+                    <div>
+                      <strong>{loss.fact_id}</strong>
+                      <p>{loss.section} · <UntrustedText>{loss.reason}</UntrustedText></p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="success-panel">Every selected fact has a standard-field mapping.</p>
+            )}
+          </section>
+          <details className="lineage-details">
+            <summary>Review exact JSON and immutable bindings</summary>
+            <ul className="metadata-list--technical">
+              <li>Projection: {jsonExport.projection_binding.id}</li>
+              <li>Artifact: {jsonExport.projection_binding.artifact_digest}</li>
+              <li>Profile {jsonExport.profile_binding.id} v{jsonExport.profile_binding.version}: {jsonExport.profile_binding.digest}</li>
+              <li>Document: {jsonExport.document_digest}</li>
+              <li>Action capability: {jsonExport.action_capability}</li>
+            </ul>
+            <pre className="resume-rescue__plain-text">
+              <UntrustedText>{jsonExport.json_text}</UntrustedText>
+            </pre>
+          </details>
+        </section>
+      ) : null}
 
       {preview ? (
         <section className="settings-section resume-rescue__document" id="resume-document-preview">

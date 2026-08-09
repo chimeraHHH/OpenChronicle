@@ -28,3 +28,13 @@ duplicate-key JSON, unknown fields, injection-shaped text, contact/reference
 omission, exact and composite admission, review tampering, projection-only
 export, standard loss reporting, privacy/ownership warnings, and untrusted
 OpenChronicle-extension round trips.
+
+The protocol-v10 desktop boundary is covered separately by Python bridge,
+Rust command, and WebView integration tests. The native side accepts only a
+bounded regular UTF-8 source, never returns its filesystem path to the WebView,
+and does not persist the raw import in the profile store. Candidates start
+unchecked and admission is fenced by a reparse, review digest, and profile CAS.
+The save command re-fetches the current projection export, verifies the exact
+document digest and closed response schema, and creates a new private `.json`
+file without overwrite authority. These checks establish the reviewed local
+workflow; they do not make an ecosystem-wide theme or round-trip claim.

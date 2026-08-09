@@ -905,6 +905,82 @@ select {
   unicode-bidi: plaintext;
 }
 
+.resume-rescue__json-import,
+.resume-rescue__json-export {
+  margin: 1.2rem 0;
+}
+
+.resume-rescue__json-review,
+.resume-rescue__json-candidates {
+  display: grid;
+  gap: 1rem;
+}
+
+.resume-rescue__json-review {
+  margin-top: 1rem;
+}
+
+.resume-rescue__json-review .info-panel p {
+  overflow-wrap: anywhere;
+}
+
+.resume-rescue__json-target,
+.resume-rescue__json-decision {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.resume-rescue__json-candidate {
+  padding: 1rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+}
+
+.resume-rescue__json-candidate > .section-heading-row {
+  align-items: flex-start;
+}
+
+.resume-rescue__json-candidate .resume-rescue__check {
+  flex: 1;
+  margin: 0;
+}
+
+.resume-rescue__json-source-fields {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.resume-rescue__json-source-fields li {
+  display: grid;
+  grid-template-columns: minmax(140px, 30%) minmax(0, 1fr);
+  gap: 0.8rem;
+  padding: 0.65rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+}
+
+.resume-rescue__json-source-fields code,
+.resume-rescue__json-source-fields bdi {
+  overflow-wrap: anywhere;
+}
+
+.resume-rescue__json-loss {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.8rem;
+  align-items: start;
+}
+
+.resume-rescue__json-loss p {
+  margin: 0.25rem 0 0;
+}
+
 .prompt-rescue__notes section {
   padding: 0.85rem;
   background: var(--surface-soft);
@@ -1183,7 +1259,11 @@ details summary {
   .prompt-rescue__comparison,
   .prompt-rescue__notes,
   .resume-rescue__source-grid,
-  .resume-rescue__selection-grid { grid-template-columns: 1fr; }
+  .resume-rescue__selection-grid,
+  .resume-rescue__json-target,
+  .resume-rescue__json-decision { grid-template-columns: 1fr; }
+
+  .resume-rescue__json-source-fields li { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: no-preference) {
