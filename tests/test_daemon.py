@@ -20,6 +20,7 @@ from openchronicle import config as config_mod
 from openchronicle.prompt_rescue import worker as prompt_rescue_worker
 from openchronicle.provenance.models import EvidenceRef, content_digest
 from openchronicle.reply_rescue import worker as reply_rescue_worker
+from openchronicle.resume_rescue import worker as resume_rescue_worker
 from openchronicle.services.memory import MemoryService
 from openchronicle.store import entries as entries_store
 from openchronicle.store import files as files_store
@@ -670,6 +671,45 @@ async def test_reply_rescue_worker_is_supervised_only_when_enabled(
         "daily-safety-net",
         "timeline",
         "reply-rescue",
+    }
+
+    run_task = asyncio.create_task(daemon._run(cfg, stop_event=stop))
+    while not expected.issubset(started):
+        await asyncio.sleep(0)
+    stop.set()
+    await run_task
+
+    assert started == expected
+    assert cancelled == expected
+
+
+@pytest.mark.asyncio
+async def test_resume_rewrite_worker_is_supervised_with_both_opt_ins(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: set[str] = set()
+    cancelled: set[str] = set()
+    _install_manager(monkeypatch)
+    _patch_standard_workers(monkeypatch, started=started, cancelled=cancelled)
+    monkeypatch.setattr(
+        resume_rescue_worker,
+        "run_forever",
+        _blocking_worker("resume-rewrite", started=started, cancelled=cancelled),
+    )
+
+    cfg = config_mod.Config()
+    cfg.reducer.enabled = False
+    cfg.resume_rescue.enabled = True
+    cfg.resume_rescue.rewrite_enabled = True
+    cfg.mcp.auto_start = False
+    stop = asyncio.Event()
+    expected = {
+        "capture",
+        "session",
+        "daily-safety-net",
+        "timeline",
+        "resume-rewrite",
     }
 
     run_task = asyncio.create_task(daemon._run(cfg, stop_event=stop))

@@ -917,6 +917,15 @@ async def _run(
                         name="reply-rescue",
                     )
                 )
+            if effective_cfg.resume_rescue.enabled and effective_cfg.resume_rescue.rewrite_enabled:
+                from .resume_rescue import worker as resume_rescue_worker
+
+                tasks.append(
+                    asyncio.create_task(
+                        resume_rescue_worker.run_forever(effective_cfg),
+                        name="resume-rewrite",
+                    )
+                )
             # Both loops intentionally return immediately when the reducer is
             # disabled. Do not supervise tasks that are configured not to run:
             # an early normal return is otherwise indistinguishable from a
