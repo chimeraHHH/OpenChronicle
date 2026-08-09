@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import zipfile
 from datetime import UTC, datetime
@@ -11,12 +12,14 @@ from docx.shared import Mm
 
 from openchronicle import config as config_mod
 from openchronicle.resume_rescue import ResumeRescueConflict, ResumeRescueService, extract_document
+from openchronicle.resume_rescue import service as resume_service_module
 from openchronicle.resume_rescue.native_export import (
     MAX_DOCX_BYTES,
     NativeResumeExportError,
+    ResumeNativeExport,
     render_docx_export,
 )
-from openchronicle.resume_rescue.render import build_document_tree
+from openchronicle.resume_rescue.render import ResumeDocumentTree, build_document_tree
 from openchronicle.store import fts
 
 
@@ -196,4 +199,46 @@ def test_docx_service_refetches_current_projection_and_binds_reviewed_preview(
             service.export_docx(
                 projection.id,
                 expected_preview_document_digest=preview.document_digest,
+            )
+
+
+def test_pdf_service_binds_current_projection_before_invoking_pinned_engine(
+    ac_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    profile, projection, preview = _sources(ac_root)
+    observed: dict[str, object] = {}
+
+    def fake_render(tree: object, *, preview_document_digest: str) -> ResumeNativeExport:
+        observed["tree"] = tree
+        observed["preview_document_digest"] = preview_document_digest
+        content = b"%PDF-1.7\nreviewed fixture\n%%EOF\n"
+        return ResumeNativeExport(
+            projection_id=projection.id,
+            artifact_digest=projection.artifact_digest,
+            preview_document_digest=preview_document_digest,
+            format="pdf",
+            media_type="application/pdf",
+            extension="pdf",
+            content=content,
+            content_digest=hashlib.sha256(content).hexdigest(),
+        )
+
+    monkeypatch.setattr(resume_service_module, "render_pdf_export", fake_render)
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, _cfg())
+        exported = service.export_pdf(
+            projection.id,
+            expected_preview_document_digest=preview.document_digest,
+        )
+        assert exported.format == "pdf"
+        assert exported.artifact_digest == projection.artifact_digest
+        assert observed["preview_document_digest"] == preview.document_digest
+        observed_tree = observed["tree"]
+        assert isinstance(observed_tree, ResumeDocumentTree)
+        assert observed_tree.display_name == profile.profile["display_name"]
+
+        with pytest.raises(ResumeRescueConflict, match="preview changed"):
+            service.export_pdf(
+                projection.id,
+                expected_preview_document_digest="f" * 64,
             )

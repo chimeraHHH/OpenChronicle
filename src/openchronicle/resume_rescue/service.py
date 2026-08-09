@@ -29,6 +29,7 @@ from .json_resume import (
 )
 from .models import build_exact_artifact
 from .native_export import ResumeNativeExport, render_docx_export
+from .pdf_export import render_pdf_export
 from .render import ResumePreview, build_document_tree, render_preview, render_preview_tree
 
 
@@ -327,6 +328,26 @@ class ResumeRescueService:
         if not hmac.compare_digest(preview.document_digest, expected_preview_document_digest):
             raise store.ResumeRescueConflict("resume rescue preview changed")
         return render_docx_export(tree, preview_document_digest=preview.document_digest)
+
+    def export_pdf(
+        self, projection_id: str, *, expected_preview_document_digest: str
+    ) -> ResumeNativeExport:
+        """Build a current PDF only through the exact audited development engine."""
+
+        self._require_enabled()
+        projection = self.get_projection(projection_id)
+        if projection is None:
+            raise store.ResumeRescueConflict("resume rescue projection changed")
+        profile = store.get_profile_version(
+            self.conn, projection.profile_id, projection.profile_version
+        )
+        if profile is None:
+            raise store.ResumeRescueConflict("resume rescue profile changed")
+        tree = build_document_tree(profile=profile, projection=projection)
+        preview = render_preview_tree(tree)
+        if not hmac.compare_digest(preview.document_digest, expected_preview_document_digest):
+            raise store.ResumeRescueConflict("resume rescue preview changed")
+        return render_pdf_export(tree, preview_document_digest=preview.document_digest)
 
     def _projection_current(self, projection: store.ResumeProjection) -> bool:
         profile = store.get_current_profile(self.conn, projection.profile_id)

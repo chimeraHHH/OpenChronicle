@@ -143,3 +143,42 @@ def test_browser_group_cleanup_kills_term_resistant_descendant(tmp_path: Path) -
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=5)
+
+
+def test_browser_group_cleanup_drains_residual_after_successful_leader_exit(
+    tmp_path: Path,
+) -> None:
+    child_pid_path = tmp_path / "residual.pid"
+    child_code = "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(30)"
+    leader_code = (
+        "import pathlib,subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c',sys.argv[2]],"
+        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid),encoding='utf-8')"
+    )
+    process = subprocess.Popen(
+        [sys.executable, "-c", leader_code, str(child_pid_path), child_code],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        assert process.wait(timeout=5) == 0
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+        assert child_pid in resume_render._owned_process_group_members(process.pid)
+
+        resume_render._terminate_owned_browser_group(process)
+
+        assert resume_render._owned_process_group_members(process.pid) == []
+        state = subprocess.run(
+            ["ps", "-o", "stat=", "-p", str(child_pid)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout.strip()
+        assert not state or state.startswith("Z")
+    finally:
+        for pid in resume_render._owned_process_group_members(process.pid):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(pid, signal.SIGKILL)
