@@ -328,6 +328,16 @@ export interface ResumePreview {
   action_capability: "none";
 }
 
+export interface ResumeHtmlExportResult {
+  schema_version: 1;
+  projection_id: string;
+  document_digest: string;
+  file_name: string;
+  byte_count: number;
+  created: true;
+  action_capability: "none";
+}
+
 export type SuggestionStatus =
   | "ready"
   | "viewed"

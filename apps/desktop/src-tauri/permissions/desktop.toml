@@ -36,4 +36,5 @@ permissions = [
   "allow-save-resume-rescue-opportunity",
   "allow-replace-resume-rescue-opportunity",
   "allow-compose-resume-rescue-exact",
+  "allow-export-resume-rescue-html",
 ]

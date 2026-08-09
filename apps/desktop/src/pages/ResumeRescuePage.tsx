@@ -343,6 +343,25 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
     }
   }
 
+  async function exportPreview() {
+    if (!preview) return;
+    clearMessages();
+    setBusy("export");
+    try {
+      const result = await api.exportResumeHtml(
+        preview.projection_id,
+        preview.document_digest,
+      );
+      setNotice(
+        `Created ${result.file_name} (${result.byte_count} bytes). No existing file was replaced.`,
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (!state && busy === "load") {
     return <main className="page" id="main-content" tabIndex={-1}><p role="status">Loading local Résumé Rescue sources…</p></main>;
   }
@@ -449,7 +468,10 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
               <h2>HTML preview</h2>
               <p className="muted">Template {preview.template_id} · renderer v{preview.renderer_version}</p>
             </div>
-            <button className="button button--ghost" onClick={() => setPreview(null)} type="button">Close preview</button>
+            <div className="button-row">
+              <button className="button button--primary" disabled={busy === "export"} onClick={() => void exportPreview()} type="button">{busy === "export" ? "Saving…" : "Save new HTML file"}</button>
+              <button className="button button--ghost" onClick={() => setPreview(null)} type="button">Close preview</button>
+            </div>
           </div>
           <iframe
             className="resume-rescue__iframe"

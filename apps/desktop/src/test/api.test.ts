@@ -250,6 +250,30 @@ describe("desktop bridge adapters", () => {
     });
 
     tauri.invoke.mockResolvedValueOnce({
+      schema_version: 1,
+      projection_id: projection.id,
+      document_digest: preview.document_digest,
+      file_name: "resume-projection-1.html",
+      byte_count: preview.html.length,
+      created: true,
+      action_capability: "none",
+    });
+    const exported = await desktopApi.exportResumeHtml(
+      projection.id,
+      preview.document_digest,
+    );
+    expect(exported).toMatchObject({
+      file_name: "resume-projection-1.html",
+      action_capability: "none",
+    });
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_html", {
+      request: {
+        projection_id: projection.id,
+        expected_document_digest: preview.document_digest,
+      },
+    });
+
+    tauri.invoke.mockResolvedValueOnce({
       preview: { ...resumePreview(), action_capability: "download" },
     });
     await expect(

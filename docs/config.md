@@ -435,6 +435,11 @@ access, or submission capability. The document preview is generated from the
 same current projection as a fixed A4 HTML tree plus a plain-text parser-order
 mirror and digest. It uses escaped facts, a no-network Content Security Policy,
 no links/forms/scripts/assets, and an empty-permission sandbox in the desktop.
+HTML export is an explicit native save action. The WebView never supplies file
+bytes or a path to a general filesystem API: Rust re-fetches the current
+projection by ID, compares the document digest, asks for a destination with the
+system dialog, requires `.html`, creates a mode-0600 file, and refuses to
+replace an existing path or follow an existing symlink.
 
 ## `[search]`
 

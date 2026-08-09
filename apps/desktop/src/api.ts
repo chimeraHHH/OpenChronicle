@@ -27,6 +27,7 @@ import type {
   ResumeConfidentiality,
   ResumeConflict,
   ResumeFact,
+  ResumeHtmlExportResult,
   ResumeOpportunity,
   ResumeOpportunitySource,
   ResumeOwnership,
@@ -1320,6 +1321,41 @@ export function normalizeResumePreview(value: unknown): ResumePreview {
   };
 }
 
+export function normalizeResumeHtmlExport(value: unknown): ResumeHtmlExportResult {
+  const raw = closedObject(
+    value,
+    [
+      "schema_version",
+      "projection_id",
+      "document_digest",
+      "file_name",
+      "byte_count",
+      "created",
+      "action_capability",
+    ],
+    "Résumé Rescue HTML export result",
+  );
+  const byteCount = numberValue(raw.byte_count, "Résumé Rescue export byte count");
+  if (
+    numberValue(raw.schema_version, "Résumé Rescue export schema") !== 1 ||
+    booleanValue(raw.created, "Résumé Rescue export created state") !== true ||
+    stringValue(raw.action_capability, "Résumé Rescue export action") !== "none" ||
+    !Number.isSafeInteger(byteCount) ||
+    byteCount < 1
+  ) {
+    return protocolError("Résumé Rescue HTML export contract");
+  }
+  return {
+    schema_version: 1,
+    projection_id: stringValue(raw.projection_id, "Résumé Rescue export projection id"),
+    document_digest: resumeDigest(raw.document_digest, "Résumé Rescue export digest"),
+    file_name: stringValue(raw.file_name, "Résumé Rescue export file name"),
+    byte_count: byteCount,
+    created: true,
+    action_capability: "none",
+  };
+}
+
 function privacySnapshot(raw: JsonRecord, dailyWrap: JsonRecord): PrivacySnapshot {
   return {
     allowed_bundle_ids: stringArray(raw.allowed_bundle_ids, "allowed bundle IDs"),
@@ -2073,6 +2109,24 @@ export const desktopApi = {
       }
       return preview;
     }),
+  exportResumeHtml: (projectionId: string, expectedDocumentDigest: string) =>
+    request(
+      "export_resume_rescue_html",
+      {
+        projection_id: projectionId,
+        expected_document_digest: expectedDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumeHtmlExport(value);
+        if (
+          result.projection_id !== projectionId ||
+          result.document_digest !== expectedDocumentDigest
+        ) {
+          return protocolError("Résumé Rescue HTML export response identity");
+        }
+        return result;
+      },
+    ),
   traceProvenance: (subject: EvidenceRef, maxDepth = 4) =>
     request(
       "trace_provenance",

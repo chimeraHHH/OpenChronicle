@@ -2423,6 +2423,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "tauri-plugin-global-shortcut",
+ "tempfile",
 ]
 
 [[package]]

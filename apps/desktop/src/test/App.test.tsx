@@ -108,6 +108,17 @@ function commandResult(command: string) {
     return { projection: resumeProjection(), created: true };
   }
   if (command === "get_resume_rescue_preview") return { preview: resumePreview() };
+  if (command === "export_resume_rescue_html") {
+    return {
+      schema_version: 1,
+      projection_id: resumePreview().projection_id,
+      document_digest: resumePreview().document_digest,
+      file_name: "resume-projection-1.html",
+      byte_count: resumePreview().html.length,
+      created: true,
+      action_capability: "none",
+    };
+  }
   if (command === "edit_candidate" || command === "approve_candidate" || command === "reject_candidate") {
     return bridgeCandidateMutation();
   }
@@ -144,6 +155,14 @@ describe("trusted console", () => {
     expect(preview).toHaveAttribute("referrerpolicy", "no-referrer");
     expect(preview).toHaveAttribute("srcdoc", expect.stringContaining("default-src 'none'"));
     expect(screen.getByText(/Document digest:/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save new HTML file" }));
+    expect(await screen.findByText(/No existing file was replaced/i)).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_html", {
+      request: {
+        projection_id: resumeProjection().id,
+        expected_document_digest: resumePreview().document_digest,
+      },
+    });
     expect(
       tauri.invoke.mock.calls.some(([command]) =>
         String(command).includes("apply") ||

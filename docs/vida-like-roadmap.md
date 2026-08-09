@@ -277,10 +277,14 @@ privacy UX is validated on a signed macOS build.
   review. A fixed A4 HTML renderer now derives an escaped, no-network document,
   parser-order plain-text mirror, and digest from that same current projection;
   the desktop renders it in an empty-permission sandbox and rejects active
-  content at its protocol boundary. Deterministic file export, render/overflow
-  acceptance, supervised no-tool rewriting, and reviewed JSON Resume/document
+  content at its protocol boundary. Pinned-engine render/overflow acceptance,
+  supervised no-tool rewriting, and reviewed JSON Resume/document
   import remain open; drafts and all send/submit authority remain later,
-  separate capabilities.
+  separate capabilities. HTML export now uses a dedicated native command: it
+  re-fetches the current document, digest-CAS checks the WebView request, opens
+  the system save dialog, creates only a new private `.html` file, and never
+  exposes general filesystem write or overwrite authority. Pinned-engine
+  pagination/overflow evaluation and PDF/DOCX export remain open.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only

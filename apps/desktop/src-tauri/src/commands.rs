@@ -1,9 +1,12 @@
 use crate::bridge::{self, Operation, MAX_REQUEST_BYTES};
 use crate::error::DesktopError;
-use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashSet;
+use std::fs::OpenOptions;
+use std::io::{ErrorKind, Write};
+use std::path::Path;
 use tauri::{AppHandle, Manager};
 
 const MAX_CANDIDATE_ID_CHARS: usize = 128;
@@ -334,6 +337,13 @@ pub(crate) struct ResumePreviewRequest {
     pub projection_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeExportHtmlRequest {
+    pub projection_id: String,
+    pub expected_document_digest: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ForgetPreview {
     candidate_id: String,
@@ -348,6 +358,26 @@ struct ForgetCounts {
     memory_files: u64,
     memory_entries: u64,
     daily_wraps: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResumePreviewResponse {
+    preview: ResumePreviewPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResumePreviewPayload {
+    schema_version: u64,
+    projection_id: String,
+    artifact_digest: String,
+    renderer_version: u64,
+    template_id: String,
+    html: String,
+    plain_text: String,
+    document_digest: String,
+    action_capability: String,
 }
 
 #[tauri::command]
@@ -584,6 +614,23 @@ pub async fn get_resume_rescue_preview(
 }
 
 #[tauri::command]
+pub async fn export_resume_rescue_html(
+    app: AppHandle,
+    request: ResumeExportHtmlRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.projection_id)?;
+    validate_resume_digest(&request.expected_document_digest)?;
+    tauri::async_runtime::spawn_blocking(move || export_resume_html_blocking(&app, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The Résumé Rescue export worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
 pub async fn trace_provenance(request: TraceProvenanceRequest) -> Result<Value, DesktopError> {
     validate_kind(&request.kind)?;
     validate_reference_id(&request.artifact_id)?;
@@ -760,6 +807,144 @@ fn delete_reply_rescue_blocking(
     }
     let params = checked_value(&request)?;
     bridge::call_blocking(Operation::ReplyRescueDelete, params)
+}
+
+fn export_resume_html_blocking(
+    app: &AppHandle,
+    request: ResumeExportHtmlRequest,
+) -> Result<Value, DesktopError> {
+    let params = serde_json::json!({"projection_id": request.projection_id});
+    let value = bridge::call_blocking(Operation::ResumeRescuePreview, params)?;
+    let response: ResumePreviewResponse = serde_json::from_value(value).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid Résumé Rescue preview.",
+        )
+    })?;
+    validate_resume_preview_for_export(&response.preview, &request)?;
+
+    let default_name = format!(
+        "resume-{}.html",
+        request
+            .projection_id
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+    );
+    let mut dialog = FileDialog::new()
+        .add_filter("HTML document", &["html"])
+        .set_can_create_directories(true)
+        .set_file_name(default_name)
+        .set_title("Export a new Résumé Rescue HTML file");
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let path = dialog.save_file().ok_or_else(|| {
+        DesktopError::new("USER_CANCELLED", "Résumé Rescue export was cancelled.")
+    })?;
+    validate_resume_export_path(&path)?;
+    write_new_resume_export(&path, response.preview.html.as_bytes())?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("resume.html");
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "projection_id": request.projection_id,
+        "document_digest": response.preview.document_digest,
+        "file_name": file_name,
+        "byte_count": response.preview.html.len(),
+        "created": true,
+        "action_capability": "none",
+    }))
+}
+
+fn validate_resume_preview_for_export(
+    preview: &ResumePreviewPayload,
+    request: &ResumeExportHtmlRequest,
+) -> Result<(), DesktopError> {
+    let prohibited = [
+        "<script", "<iframe", "<object", "<embed", "<form", "<link", "<img", "<base",
+    ];
+    let lowercase_html = preview.html.to_ascii_lowercase();
+    if preview.schema_version != 1
+        || preview.projection_id != request.projection_id
+        || preview.renderer_version != 1
+        || preview.template_id != "openchronicle-classic-v1"
+        || preview.action_capability != "none"
+        || preview.plain_text.is_empty()
+        || !preview.html.starts_with("<!doctype html>\n")
+        || !preview.html.contains("default-src 'none'")
+        || prohibited.iter().any(|tag| lowercase_html.contains(tag))
+        || validate_resume_digest(&preview.artifact_digest).is_err()
+        || validate_resume_digest(&preview.document_digest).is_err()
+        || !constant_time_equal(
+            preview.document_digest.as_bytes(),
+            request.expected_document_digest.as_bytes(),
+        )
+    {
+        return Err(DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid Résumé Rescue preview.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_resume_export_path(path: &Path) -> Result<(), DesktopError> {
+    if !path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("html"))
+    {
+        return Err(DesktopError::new(
+            "INVALID_EXPORT_PATH",
+            "Résumé Rescue exports require a .html file name.",
+        ));
+    }
+    Ok(())
+}
+
+fn write_new_resume_export(path: &Path, content: &[u8]) -> Result<(), DesktopError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            DesktopError::new(
+                "EXPORT_EXISTS",
+                "The selected export path already exists; choose a new file name.",
+            )
+        } else {
+            DesktopError::new(
+                "EXPORT_FAILED",
+                "The Résumé Rescue HTML file could not be created.",
+            )
+        }
+    })?;
+    if file
+        .write_all(content)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(DesktopError::new(
+            "EXPORT_FAILED",
+            "The Résumé Rescue HTML file could not be written completely.",
+        ));
+    }
+    Ok(())
 }
 
 fn checked_value<T: Serialize + ?Sized>(request: &T) -> Result<Value, DesktopError> {
@@ -1500,6 +1685,70 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn resume_export_preview_is_digest_bound_and_rejects_active_content() {
+        let request = ResumeExportHtmlRequest {
+            projection_id: "resume-projection-1".to_owned(),
+            expected_document_digest: "d".repeat(64),
+        };
+        let mut preview = ResumePreviewPayload {
+            schema_version: 1,
+            projection_id: request.projection_id.clone(),
+            artifact_digest: "a".repeat(64),
+            renderer_version: 1,
+            template_id: "openchronicle-classic-v1".to_owned(),
+            html: "<!doctype html>\n<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'\"><main>Reviewed fact</main>".to_owned(),
+            plain_text: "Reviewed fact\n".to_owned(),
+            document_digest: request.expected_document_digest.clone(),
+            action_capability: "none".to_owned(),
+        };
+        assert!(validate_resume_preview_for_export(&preview, &request).is_ok());
+
+        preview.html.push_str("<script>alert(1)</script>");
+        assert_eq!(
+            validate_resume_preview_for_export(&preview, &request)
+                .expect_err("active content must fail")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+        preview.html = "<!doctype html>\ndefault-src 'none'<main>Reviewed fact</main>".to_owned();
+        preview.document_digest = "e".repeat(64);
+        assert!(validate_resume_preview_for_export(&preview, &request).is_err());
+    }
+
+    #[test]
+    fn resume_export_creates_private_html_without_overwriting() {
+        let directory = tempfile::tempdir().expect("temporary export directory");
+        let path = directory.path().join("reviewed-resume.html");
+        assert!(validate_resume_export_path(&path).is_ok());
+        assert!(validate_resume_export_path(&directory.path().join("resume.pdf")).is_err());
+
+        write_new_resume_export(&path, b"reviewed exact HTML").expect("new export");
+        assert_eq!(
+            std::fs::read(&path).expect("read export"),
+            b"reviewed exact HTML"
+        );
+        assert_eq!(
+            write_new_resume_export(&path, b"replacement")
+                .expect_err("existing file must not be overwritten")
+                .code,
+            "EXPORT_EXISTS"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read preserved export"),
+            b"reviewed exact HTML"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(&path).expect("export metadata").mode() & 0o777,
+                0o600
+            );
+        }
     }
 
     #[test]

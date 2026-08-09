@@ -57,6 +57,13 @@ uses a fixed, no-network HTML/CSS template and records its version. PDF is not
 called deterministic until a pinned engine passes text-order, overflow,
 pagination, and byte/document-diff acceptance on macOS packaging.
 
+For local export, the current [Tauri 2 dialog API](https://v2.tauri.app/reference/javascript/dialog/#save)
+explicitly recommends a dedicated native command when security matters instead
+of exposing a general WebView file-write scope. OpenChronicle follows that
+boundary: the WebView supplies only a projection ID and expected digest; Rust
+re-fetches and validates the current renderer output, opens the native save
+dialog, and creates a new `.html` file without overwrite authority.
+
 ## Research update: provenance helps only inside its evidence boundary
 
 [Career-Aware Resume Tailoring via Multi-Source RAG with Provenance Tracking](https://arxiv.org/abs/2605.05257)
