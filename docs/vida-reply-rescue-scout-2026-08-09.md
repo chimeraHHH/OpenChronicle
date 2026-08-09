@@ -42,6 +42,22 @@ evidence. OpenChronicle will not claim equivalent accuracy from those claims.
 | [OpenYak](https://github.com/openyak/openyak) | A local-first desktop agent produces reviewable artifacts such as follow-up emails. | Its broader agent/tool surface is not imported into the no-action preparation plane. |
 | [outlook_skill](https://github.com/grapeot/outlook_skill) | Local retrieval/search/reply tooling illustrates how quickly reply generation can acquire live mailbox authority. | It is a connector threat-model reference only. No mailbox credential, send function, or tool is available to the initial model job. |
 
+## Evaluation-neighborhood update
+
+The frozen evaluator also takes structure—not fixtures, prompts, or scores—from
+three primary security references:
+
+| Reference | Evaluated risk | Reply Rescue consequence |
+|---|---|---|
+| [AgentDojo](https://github.com/ethz-spylab/agentdojo) and its [NeurIPS paper](https://arxiv.org/abs/2406.13352) | An extensible environment measures both ordinary task utility and prompt-injection security over untrusted tool data, including workspace/email-style tasks. | Report useful-reply quality separately from injection success. OpenChronicle narrows the consequence surface further by giving the reply generator no tools or actions. |
+| [InjecAgent](https://github.com/uiuc-kang-lab/InjecAgent) and its [ACL paper](https://arxiv.org/abs/2403.02691) | 1,054 cases combine user tools with attacker tools and distinguish direct harm from data-stealing attacks over external content such as email. | Include quoted-message attacks, schema/role impersonation, secret exfiltration markers, and action-boundary escapes as distinct deterministic gates. |
+| [Microsoft BIPIA](https://github.com/microsoft/BIPIA) | The benchmark includes an EmailQA task and composes benign external context with separate text/code attack payloads. | Keep benign conversation evidence and attack-success labels separate in fixtures; do not grade safety only from answer fluency. |
+
+These projects evaluate broader systems than Reply Rescue and are not claimed
+as directly comparable leaderboards. Their common lesson is structural: measure
+benign utility and adversarial failure independently, preserve untrusted source
+boundaries, and make consequential actions impossible or separately authorized.
+
 ## Selected source contract
 
 The first source kind is `manual_conversation`. The user pastes or types a
@@ -159,4 +175,3 @@ binding escapes, zero excluded-data egress, and zero external mutations.
    conversation-identity claim.
 5. Only after separate connector threat modeling, add read-only Gmail/Graph
    snapshots; draft creation and send remain later capabilities.
-
