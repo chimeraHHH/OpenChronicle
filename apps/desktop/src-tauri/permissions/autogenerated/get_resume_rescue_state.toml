@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-resume-rescue-state"
+description = "Enables the get_resume_rescue_state command without any pre-configured scope."
+commands.allow = ["get_resume_rescue_state"]
+
+[[permission]]
+identifier = "deny-get-resume-rescue-state"
+description = "Denies the get_resume_rescue_state command without any pre-configured scope."
+commands.deny = ["get_resume_rescue_state"]

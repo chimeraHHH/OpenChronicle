@@ -34,6 +34,10 @@ import {
   promptRescueSummary,
   replyRescueJob,
   replyRescueSummary,
+  resumeOpportunity,
+  resumeProfileVersion,
+  resumeProjection,
+  resumeRescueState,
   resolvedEvidence,
   snapshot,
   suggestion,
@@ -89,6 +93,19 @@ function commandResult(command: string) {
   if (command === "delete_reply_rescue") {
     return { job_id: "reply-rescue-1", deleted: true };
   }
+  if (command === "get_resume_rescue_state") return resumeRescueState();
+  if (command === "save_resume_rescue_profile") {
+    return { profile: resumeProfileVersion(), created: true };
+  }
+  if (command === "save_resume_rescue_opportunity") {
+    return { opportunity: resumeOpportunity(), created: true };
+  }
+  if (command === "replace_resume_rescue_opportunity") {
+    return { opportunity: resumeOpportunity(), created: true };
+  }
+  if (command === "compose_resume_rescue_exact") {
+    return { projection: resumeProjection(), created: true };
+  }
   if (command === "edit_candidate" || command === "approve_candidate" || command === "reject_candidate") {
     return bridgeCandidateMutation();
   }
@@ -102,6 +119,32 @@ beforeEach(() => {
 });
 
 describe("trusted console", () => {
+  it("reviews an exact résumé projection without ATS, upload, or application capability", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Résumé Rescue/i }));
+
+    expect(await screen.findByRole("heading", { name: "Résumé Rescue" })).toBeInTheDocument();
+    expect(screen.getByText(/does not invent claims, score ATS compatibility, upload files, or apply/i)).toBeInTheDocument();
+    expect(
+      (await screen.findAllByText(
+        "Reduced API p95 latency by 40% after profiling the query path.",
+      )).length,
+    ).toBeGreaterThan(0);
+    expect(screen.getAllByText("Kubernetes is required.").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Missing evidence").length).toBeGreaterThan(0);
+    expect(screen.getByText(/manual_mapping_unverified/i)).toBeInTheDocument();
+    expect(screen.getByText(/Action capability: none/i)).toBeInTheDocument();
+    expect(
+      tauri.invoke.mock.calls.some(([command]) =>
+        String(command).includes("apply") ||
+        String(command).includes("upload") ||
+        String(command).includes("submit"),
+      ),
+    ).toBe(false);
+  });
+
   it("reviews and copies a manual reply without mailbox or send capability", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn(async () => undefined);

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-resume-rescue-opportunity"
+description = "Enables the save_resume_rescue_opportunity command without any pre-configured scope."
+commands.allow = ["save_resume_rescue_opportunity"]
+
+[[permission]]
+identifier = "deny-save-resume-rescue-opportunity"
+description = "Denies the save_resume_rescue_opportunity command without any pre-configured scope."
+commands.deny = ["save_resume_rescue_opportunity"]

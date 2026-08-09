@@ -3,15 +3,16 @@ export type PageId =
   | "suggestions"
   | "prompt-rescue"
   | "reply-rescue"
+  | "resume-rescue"
   | "review"
   | "daily-wrap"
   | "timeline"
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 7 adds exact-selection Reply Rescue
-// sources without adding mailbox, draft, paste, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 7 as const;
+// WebView result projection. Version 8 adds deterministic Résumé Rescue
+// sources without adding upload, application, submission, or send capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 8 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -152,6 +153,167 @@ export interface ReplyRescueSnapshot {
     location: ReplyRescueProviderLocation;
   };
   jobs: ReplyRescueJobSummary[];
+}
+
+export type ResumeSectionKind =
+  | "summary"
+  | "experience"
+  | "education"
+  | "skill"
+  | "project"
+  | "certification"
+  | "language"
+  | "other";
+export type ResumeConfidentiality = "public" | "private" | "confidential";
+export type ResumeOwnership =
+  | "individual"
+  | "shared"
+  | "organization"
+  | "unspecified";
+
+export type ResumeProvenance =
+  | { kind: "manual_reviewed"; reviewed_at: string }
+  | {
+      kind: "document_excerpt";
+      reviewed_at: string;
+      source_id: string;
+      source_digest: string;
+      page: number;
+      section: string;
+      start: number;
+      end: number;
+      extraction_method: string;
+    }
+  | {
+      kind: "reviewed_memory";
+      reviewed_at: string;
+      memory_id: string;
+      memory_path: string;
+      memory_digest: string;
+    };
+
+export interface ResumeFact {
+  id: string;
+  section: ResumeSectionKind;
+  text: string;
+  confidentiality: ResumeConfidentiality;
+  ownership_scope: ResumeOwnership;
+  provenance: ResumeProvenance[];
+}
+
+export interface ResumeConflict {
+  id: string;
+  fact_ids: string[];
+  description: string;
+}
+
+export interface ResumeProfile {
+  schema_version: 1;
+  profile_id: string;
+  display_name: string;
+  locale: string;
+  facts: ResumeFact[];
+  conflicts: ResumeConflict[];
+}
+
+export interface ResumeProfileVersion {
+  id: string;
+  version: number;
+  digest: string;
+  created_at: string;
+  profile: ResumeProfile;
+}
+
+export interface ResumeOpportunitySource {
+  schema_version: 1;
+  employer: string;
+  title: string;
+  source_url: string;
+  source_text: string;
+  priorities: string[];
+  locale: string;
+  captured_at: string;
+}
+
+export interface ResumeOpportunity {
+  id: string;
+  digest: string;
+  created_at: string;
+  snapshot: ResumeOpportunitySource;
+}
+
+export interface ResumeProjectionSectionRequest {
+  kind: ResumeSectionKind;
+  fact_ids: string[];
+}
+
+export interface ResumeRequirementRequest {
+  id: string;
+  text: string;
+  fact_ids: string[];
+}
+
+export interface ResumeProjectionRequest {
+  schema_version: 1;
+  sections: ResumeProjectionSectionRequest[];
+  requirements: ResumeRequirementRequest[];
+}
+
+export interface ResumeArtifactItem {
+  fact_id: string;
+  text: string;
+  transformation: "selected_exact";
+  confidentiality: ResumeConfidentiality;
+  ownership_scope: ResumeOwnership;
+  provenance: ResumeProvenance[];
+}
+
+export interface ResumeRequirementCoverage {
+  id: string;
+  text: string;
+  status: "candidate_supported" | "missing_evidence";
+  fact_ids: string[];
+  support_assurance: "manual_mapping_unverified" | "no_evidence";
+}
+
+export interface ResumeRescueArtifact {
+  schema_version: 1;
+  workflow: "resume_rescue";
+  action_capability: "none";
+  generation_mode: "deterministic_exact_projection";
+  profile_binding: { id: string; version: number; digest: string };
+  opportunity_binding: {
+    id: string;
+    digest: string;
+    employer: string;
+    title: string;
+  };
+  sections: Array<{ kind: ResumeSectionKind; items: ResumeArtifactItem[] }>;
+  requirement_coverage: ResumeRequirementCoverage[];
+  conflicts: ResumeConflict[];
+  missing_evidence: Array<{ requirement_id: string; text: string }>;
+  excluded_fact_ids: string[];
+  warnings: string[];
+}
+
+export interface ResumeProjection {
+  id: string;
+  profile_id: string;
+  profile_version: number;
+  profile_digest: string;
+  opportunity_id: string;
+  opportunity_digest: string;
+  request: ResumeProjectionRequest;
+  artifact: ResumeRescueArtifact;
+  artifact_digest: string;
+  created_at: string;
+}
+
+export interface ResumeRescueState {
+  enabled: boolean;
+  profiles: ResumeProfileVersion[];
+  opportunities: ResumeOpportunity[];
+  projections: ResumeProjection[];
 }
 
 export type SuggestionStatus =

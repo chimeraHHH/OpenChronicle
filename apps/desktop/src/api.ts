@@ -24,6 +24,22 @@ import type {
   ReplyRescueSource,
   ReplyRescueSourceKind,
   ReplyRescueStatus,
+  ResumeConfidentiality,
+  ResumeConflict,
+  ResumeFact,
+  ResumeOpportunity,
+  ResumeOpportunitySource,
+  ResumeOwnership,
+  ResumeProfile,
+  ResumeProfileVersion,
+  ResumeProjection,
+  ResumeProjectionRequest,
+  ResumeProvenance,
+  ResumeRequirementCoverage,
+  ResumeRequirementRequest,
+  ResumeRescueArtifact,
+  ResumeRescueState,
+  ResumeSectionKind,
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
@@ -87,6 +103,27 @@ const replyRescueIdentityAssurances = new Set([
   "manual_unverified",
   "selected_excerpt_unverified",
 ] as const);
+const resumeSections = new Set<ResumeSectionKind>([
+  "summary",
+  "experience",
+  "education",
+  "skill",
+  "project",
+  "certification",
+  "language",
+  "other",
+]);
+const resumeConfidentialities = new Set<ResumeConfidentiality>([
+  "public",
+  "private",
+  "confidential",
+]);
+const resumeOwnerships = new Set<ResumeOwnership>([
+  "individual",
+  "shared",
+  "organization",
+  "unspecified",
+]);
 const wrapCategories: WrapCategory[] = [
   "completed",
   "progressed",
@@ -132,6 +169,18 @@ function objectValue(value: unknown, detail: string): JsonRecord {
     return protocolError(detail);
   }
   return value as JsonRecord;
+}
+
+function closedObject(value: unknown, fields: readonly string[], detail: string): JsonRecord {
+  const raw = objectValue(value, detail);
+  const allowed = new Set(fields);
+  if (
+    Object.keys(raw).length !== allowed.size ||
+    Object.keys(raw).some((key) => !allowed.has(key))
+  ) {
+    return protocolError(detail);
+  }
+  return raw;
 }
 
 function arrayValue(value: unknown, detail: string): unknown[] {
@@ -701,6 +750,530 @@ function replyRescueJob(value: unknown): ReplyRescueJob {
     created_at: stringValue(raw.created_at, "Reply Rescue created time"),
     updated_at: stringValue(raw.updated_at, "Reply Rescue updated time"),
     version: numberValue(raw.version, "Reply Rescue version"),
+  };
+}
+
+function resumeDigest(value: unknown, detail: string): string {
+  const result = stringValue(value, detail);
+  if (!/^[0-9a-f]{64}$/.test(result)) return protocolError(detail);
+  return result;
+}
+
+function resumePositiveInteger(value: unknown, detail: string): number {
+  const result = numberValue(value, detail);
+  if (!Number.isSafeInteger(result) || result < 1) return protocolError(detail);
+  return result;
+}
+
+function resumeSection(value: unknown): ResumeSectionKind {
+  return allowedString(value, resumeSections, "Résumé Rescue section");
+}
+
+function resumeProvenance(value: unknown): ResumeProvenance {
+  const base = objectValue(value, "Résumé Rescue provenance");
+  const kind = stringValue(base.kind, "Résumé Rescue provenance kind");
+  if (kind === "manual_reviewed") {
+    const raw = closedObject(value, ["kind", "reviewed_at"], "manual résumé provenance");
+    return {
+      kind,
+      reviewed_at: stringValue(raw.reviewed_at, "résumé review time"),
+    };
+  }
+  if (kind === "document_excerpt") {
+    const raw = closedObject(
+      value,
+      [
+        "kind",
+        "reviewed_at",
+        "source_id",
+        "source_digest",
+        "page",
+        "section",
+        "start",
+        "end",
+        "extraction_method",
+      ],
+      "document résumé provenance",
+    );
+    const page = numberValue(raw.page, "résumé source page");
+    const start = numberValue(raw.start, "résumé source start");
+    const end = numberValue(raw.end, "résumé source end");
+    if (![page, start, end].every(Number.isSafeInteger) || page < 0 || start < 0 || end <= start) {
+      return protocolError("document résumé provenance span");
+    }
+    return {
+      kind,
+      reviewed_at: stringValue(raw.reviewed_at, "résumé review time"),
+      source_id: stringValue(raw.source_id, "résumé source id"),
+      source_digest: resumeDigest(raw.source_digest, "résumé source digest"),
+      page,
+      section: stringValue(raw.section, "résumé source section"),
+      start,
+      end,
+      extraction_method: stringValue(raw.extraction_method, "résumé extraction method"),
+    };
+  }
+  if (kind === "reviewed_memory") {
+    const raw = closedObject(
+      value,
+      ["kind", "reviewed_at", "memory_id", "memory_path", "memory_digest"],
+      "memory résumé provenance",
+    );
+    return {
+      kind,
+      reviewed_at: stringValue(raw.reviewed_at, "résumé review time"),
+      memory_id: stringValue(raw.memory_id, "résumé memory id"),
+      memory_path: stringValue(raw.memory_path, "résumé memory path"),
+      memory_digest: resumeDigest(raw.memory_digest, "résumé memory digest"),
+    };
+  }
+  return protocolError("Résumé Rescue provenance kind");
+}
+
+function resumeConflict(value: unknown): ResumeConflict {
+  const raw = closedObject(
+    value,
+    ["id", "fact_ids", "description"],
+    "Résumé Rescue conflict",
+  );
+  return {
+    id: stringValue(raw.id, "Résumé Rescue conflict id"),
+    fact_ids: stringArray(raw.fact_ids, "Résumé Rescue conflict facts"),
+    description: stringValue(raw.description, "Résumé Rescue conflict description"),
+  };
+}
+
+function resumeFact(value: unknown): ResumeFact {
+  const raw = closedObject(
+    value,
+    ["id", "section", "text", "confidentiality", "ownership_scope", "provenance"],
+    "Résumé Rescue fact",
+  );
+  return {
+    id: stringValue(raw.id, "Résumé Rescue fact id"),
+    section: resumeSection(raw.section),
+    text: stringValue(raw.text, "Résumé Rescue fact text"),
+    confidentiality: allowedString(
+      raw.confidentiality,
+      resumeConfidentialities,
+      "Résumé Rescue confidentiality",
+    ),
+    ownership_scope: allowedString(
+      raw.ownership_scope,
+      resumeOwnerships,
+      "Résumé Rescue ownership",
+    ),
+    provenance: arrayValue(raw.provenance, "Résumé Rescue provenance list").map(
+      resumeProvenance,
+    ),
+  };
+}
+
+function resumeProfile(value: unknown): ResumeProfile {
+  const raw = closedObject(
+    value,
+    ["schema_version", "profile_id", "display_name", "locale", "facts", "conflicts"],
+    "Résumé Rescue profile",
+  );
+  if (numberValue(raw.schema_version, "Résumé Rescue profile schema") !== 1) {
+    return protocolError("Résumé Rescue profile schema");
+  }
+  return {
+    schema_version: 1,
+    profile_id: stringValue(raw.profile_id, "Résumé Rescue profile id"),
+    display_name: stringValue(raw.display_name, "Résumé Rescue display name"),
+    locale: stringValue(raw.locale, "Résumé Rescue locale"),
+    facts: arrayValue(raw.facts, "Résumé Rescue facts").map(resumeFact),
+    conflicts: arrayValue(raw.conflicts, "Résumé Rescue conflicts").map(resumeConflict),
+  };
+}
+
+function resumeProfileVersion(value: unknown): ResumeProfileVersion {
+  const raw = closedObject(
+    value,
+    ["id", "version", "digest", "created_at", "profile"],
+    "Résumé Rescue profile version",
+  );
+  const profile = resumeProfile(raw.profile);
+  const id = stringValue(raw.id, "Résumé Rescue profile version id");
+  if (profile.profile_id !== id) return protocolError("Résumé Rescue profile identity");
+  return {
+    id,
+    version: resumePositiveInteger(raw.version, "Résumé Rescue profile version"),
+    digest: resumeDigest(raw.digest, "Résumé Rescue profile digest"),
+    created_at: stringValue(raw.created_at, "Résumé Rescue profile created time"),
+    profile,
+  };
+}
+
+function resumeOpportunitySource(value: unknown): ResumeOpportunitySource {
+  const raw = closedObject(
+    value,
+    [
+      "schema_version",
+      "employer",
+      "title",
+      "source_url",
+      "source_text",
+      "priorities",
+      "locale",
+      "captured_at",
+    ],
+    "Résumé Rescue opportunity source",
+  );
+  if (numberValue(raw.schema_version, "Résumé Rescue opportunity schema") !== 1) {
+    return protocolError("Résumé Rescue opportunity schema");
+  }
+  return {
+    schema_version: 1,
+    employer: stringValue(raw.employer, "Résumé Rescue employer"),
+    title: stringValue(raw.title, "Résumé Rescue title"),
+    source_url: stringValue(raw.source_url, "Résumé Rescue source URL"),
+    source_text: stringValue(raw.source_text, "Résumé Rescue source text"),
+    priorities: stringArray(raw.priorities, "Résumé Rescue priorities"),
+    locale: stringValue(raw.locale, "Résumé Rescue opportunity locale"),
+    captured_at: stringValue(raw.captured_at, "Résumé Rescue capture time"),
+  };
+}
+
+function resumeOpportunity(value: unknown): ResumeOpportunity {
+  const raw = closedObject(
+    value,
+    ["id", "digest", "created_at", "snapshot"],
+    "Résumé Rescue opportunity",
+  );
+  return {
+    id: stringValue(raw.id, "Résumé Rescue opportunity id"),
+    digest: resumeDigest(raw.digest, "Résumé Rescue opportunity digest"),
+    created_at: stringValue(raw.created_at, "Résumé Rescue opportunity created time"),
+    snapshot: resumeOpportunitySource(raw.snapshot),
+  };
+}
+
+function resumeProjectionRequest(value: unknown): ResumeProjectionRequest {
+  const raw = closedObject(
+    value,
+    ["schema_version", "sections", "requirements"],
+    "Résumé Rescue projection request",
+  );
+  if (numberValue(raw.schema_version, "Résumé Rescue request schema") !== 1) {
+    return protocolError("Résumé Rescue request schema");
+  }
+  const sections = arrayValue(raw.sections, "Résumé Rescue requested sections").map((value) => {
+    const item = closedObject(value, ["kind", "fact_ids"], "Résumé Rescue requested section");
+    return {
+      kind: resumeSection(item.kind),
+      fact_ids: stringArray(item.fact_ids, "Résumé Rescue selected facts"),
+    };
+  });
+  const requirements: ResumeRequirementRequest[] = arrayValue(
+    raw.requirements,
+    "Résumé Rescue requirements",
+  ).map((value) => {
+    const item = closedObject(
+      value,
+      ["id", "text", "fact_ids"],
+      "Résumé Rescue requirement",
+    );
+    return {
+      id: stringValue(item.id, "Résumé Rescue requirement id"),
+      text: stringValue(item.text, "Résumé Rescue requirement text"),
+      fact_ids: stringArray(item.fact_ids, "Résumé Rescue mapped facts"),
+    };
+  });
+  return { schema_version: 1, sections, requirements };
+}
+
+function resumeArtifact(value: unknown): ResumeRescueArtifact {
+  const raw = closedObject(
+    value,
+    [
+      "schema_version",
+      "workflow",
+      "action_capability",
+      "generation_mode",
+      "profile_binding",
+      "opportunity_binding",
+      "sections",
+      "requirement_coverage",
+      "conflicts",
+      "missing_evidence",
+      "excluded_fact_ids",
+      "warnings",
+    ],
+    "Résumé Rescue artifact",
+  );
+  if (
+    numberValue(raw.schema_version, "Résumé Rescue artifact schema") !== 1 ||
+    stringValue(raw.workflow, "Résumé Rescue workflow") !== "resume_rescue" ||
+    stringValue(raw.action_capability, "Résumé Rescue action capability") !== "none" ||
+    stringValue(raw.generation_mode, "Résumé Rescue generation mode") !==
+      "deterministic_exact_projection"
+  ) {
+    return protocolError("Résumé Rescue artifact identity");
+  }
+  const profileBinding = closedObject(
+    raw.profile_binding,
+    ["id", "version", "digest"],
+    "Résumé Rescue profile binding",
+  );
+  const opportunityBinding = closedObject(
+    raw.opportunity_binding,
+    ["id", "digest", "employer", "title"],
+    "Résumé Rescue opportunity binding",
+  );
+  const selectedIds = new Set<string>();
+  const sections = arrayValue(raw.sections, "Résumé Rescue artifact sections").map((value) => {
+    const section = closedObject(value, ["kind", "items"], "Résumé Rescue artifact section");
+    const items = arrayValue(section.items, "Résumé Rescue artifact items").map((value) => {
+      const item = closedObject(
+        value,
+        [
+          "fact_id",
+          "text",
+          "transformation",
+          "confidentiality",
+          "ownership_scope",
+          "provenance",
+        ],
+        "Résumé Rescue artifact item",
+      );
+      const factId = stringValue(item.fact_id, "Résumé Rescue artifact fact id");
+      if (selectedIds.has(factId)) return protocolError("Résumé Rescue duplicate selected fact");
+      selectedIds.add(factId);
+      if (stringValue(item.transformation, "Résumé Rescue transformation") !== "selected_exact") {
+        return protocolError("Résumé Rescue transformation");
+      }
+      return {
+        fact_id: factId,
+        text: stringValue(item.text, "Résumé Rescue artifact fact text"),
+        transformation: "selected_exact" as const,
+        confidentiality: allowedString(
+          item.confidentiality,
+          resumeConfidentialities,
+          "Résumé Rescue artifact confidentiality",
+        ),
+        ownership_scope: allowedString(
+          item.ownership_scope,
+          resumeOwnerships,
+          "Résumé Rescue artifact ownership",
+        ),
+        provenance: arrayValue(item.provenance, "Résumé Rescue artifact provenance").map(
+          resumeProvenance,
+        ),
+      };
+    });
+    return { kind: resumeSection(section.kind), items };
+  });
+  const requirementCoverage: ResumeRequirementCoverage[] = arrayValue(
+    raw.requirement_coverage,
+    "Résumé Rescue requirement coverage",
+  ).map((value) => {
+    const item = closedObject(
+      value,
+      ["id", "text", "status", "fact_ids", "support_assurance"],
+      "Résumé Rescue requirement coverage item",
+    );
+    const status = stringValue(item.status, "Résumé Rescue requirement status");
+    const assurance = stringValue(item.support_assurance, "Résumé Rescue support assurance");
+    const factIds = stringArray(item.fact_ids, "Résumé Rescue coverage facts");
+    if (factIds.some((factId) => !selectedIds.has(factId))) {
+      return protocolError("Résumé Rescue coverage fact binding");
+    }
+    if (
+      (status === "candidate_supported" &&
+        assurance === "manual_mapping_unverified" &&
+        factIds.length > 0) ||
+      (status === "missing_evidence" && assurance === "no_evidence" && factIds.length === 0)
+    ) {
+      return {
+        id: stringValue(item.id, "Résumé Rescue coverage id"),
+        text: stringValue(item.text, "Résumé Rescue coverage text"),
+        status,
+        fact_ids: factIds,
+        support_assurance: assurance,
+      } as ResumeRequirementCoverage;
+    }
+    return protocolError("Résumé Rescue coverage assurance");
+  });
+  const conflicts = arrayValue(raw.conflicts, "Résumé Rescue artifact conflicts").map(
+    resumeConflict,
+  );
+  const missingEvidence = arrayValue(
+    raw.missing_evidence,
+    "Résumé Rescue missing evidence",
+  ).map((value) => {
+    const item = closedObject(
+      value,
+      ["requirement_id", "text"],
+      "Résumé Rescue missing-evidence item",
+    );
+    return {
+      requirement_id: stringValue(item.requirement_id, "Résumé Rescue missing requirement id"),
+      text: stringValue(item.text, "Résumé Rescue missing requirement text"),
+    };
+  });
+  const expectedMissing = requirementCoverage
+    .filter((item) => item.status === "missing_evidence")
+    .map((item) => ({ requirement_id: item.id, text: item.text }));
+  if (JSON.stringify(missingEvidence) !== JSON.stringify(expectedMissing)) {
+    return protocolError("Résumé Rescue missing-evidence ledger");
+  }
+  const excludedFactIds = stringArray(raw.excluded_fact_ids, "Résumé Rescue excluded facts");
+  if (excludedFactIds.some((factId) => selectedIds.has(factId))) {
+    return protocolError("Résumé Rescue selected/excluded fact binding");
+  }
+  return {
+    schema_version: 1,
+    workflow: "resume_rescue",
+    action_capability: "none",
+    generation_mode: "deterministic_exact_projection",
+    profile_binding: {
+      id: stringValue(profileBinding.id, "Résumé Rescue profile binding id"),
+      version: resumePositiveInteger(profileBinding.version, "Résumé Rescue bound profile version"),
+      digest: resumeDigest(profileBinding.digest, "Résumé Rescue bound profile digest"),
+    },
+    opportunity_binding: {
+      id: stringValue(opportunityBinding.id, "Résumé Rescue bound opportunity id"),
+      digest: resumeDigest(opportunityBinding.digest, "Résumé Rescue bound opportunity digest"),
+      employer: stringValue(opportunityBinding.employer, "Résumé Rescue bound employer"),
+      title: stringValue(opportunityBinding.title, "Résumé Rescue bound title"),
+    },
+    sections,
+    requirement_coverage: requirementCoverage,
+    conflicts,
+    missing_evidence: missingEvidence,
+    excluded_fact_ids: excludedFactIds,
+    warnings: stringArray(raw.warnings, "Résumé Rescue warnings"),
+  };
+}
+
+function resumeProjection(value: unknown): ResumeProjection {
+  const raw = closedObject(
+    value,
+    [
+      "id",
+      "profile_id",
+      "profile_version",
+      "profile_digest",
+      "opportunity_id",
+      "opportunity_digest",
+      "request",
+      "artifact",
+      "artifact_digest",
+      "created_at",
+    ],
+    "Résumé Rescue projection",
+  );
+  const request = resumeProjectionRequest(raw.request);
+  const artifact = resumeArtifact(raw.artifact);
+  const profileId = stringValue(raw.profile_id, "Résumé Rescue projection profile id");
+  const profileVersion = resumePositiveInteger(
+    raw.profile_version,
+    "Résumé Rescue projection profile version",
+  );
+  const profileDigest = resumeDigest(raw.profile_digest, "Résumé Rescue projection profile digest");
+  const opportunityId = stringValue(raw.opportunity_id, "Résumé Rescue projection opportunity id");
+  const opportunityDigest = resumeDigest(
+    raw.opportunity_digest,
+    "Résumé Rescue projection opportunity digest",
+  );
+  if (
+    artifact.profile_binding.id !== profileId ||
+    artifact.profile_binding.version !== profileVersion ||
+    artifact.profile_binding.digest !== profileDigest ||
+    artifact.opportunity_binding.id !== opportunityId ||
+    artifact.opportunity_binding.digest !== opportunityDigest
+  ) {
+    return protocolError("Résumé Rescue projection binding");
+  }
+  if (
+    JSON.stringify(request.sections) !==
+      JSON.stringify(
+        artifact.sections.map((section) => ({
+          kind: section.kind,
+          fact_ids: section.items.map((item) => item.fact_id),
+        })),
+      ) ||
+    JSON.stringify(request.requirements) !==
+      JSON.stringify(
+        artifact.requirement_coverage.map((item) => ({
+          id: item.id,
+          text: item.text,
+          fact_ids: item.fact_ids,
+        })),
+      )
+  ) {
+    return protocolError("Résumé Rescue request/artifact binding");
+  }
+  return {
+    id: stringValue(raw.id, "Résumé Rescue projection id"),
+    profile_id: profileId,
+    profile_version: profileVersion,
+    profile_digest: profileDigest,
+    opportunity_id: opportunityId,
+    opportunity_digest: opportunityDigest,
+    request,
+    artifact,
+    artifact_digest: resumeDigest(raw.artifact_digest, "Résumé Rescue artifact digest"),
+    created_at: stringValue(raw.created_at, "Résumé Rescue projection created time"),
+  };
+}
+
+export function normalizeResumeRescueState(value: unknown): ResumeRescueState {
+  const raw = closedObject(
+    value,
+    ["enabled", "profiles", "opportunities", "projections"],
+    "Résumé Rescue state",
+  );
+  return {
+    enabled: booleanValue(raw.enabled, "Résumé Rescue enabled state"),
+    profiles: arrayValue(raw.profiles, "Résumé Rescue profiles").map(resumeProfileVersion),
+    opportunities: arrayValue(raw.opportunities, "Résumé Rescue opportunities").map(
+      resumeOpportunity,
+    ),
+    projections: arrayValue(raw.projections, "Résumé Rescue projections").map(resumeProjection),
+  };
+}
+
+export function normalizeResumeProfileMutation(value: unknown): {
+  profile: ResumeProfileVersion;
+  created: boolean;
+} {
+  const raw = closedObject(value, ["profile", "created"], "Résumé Rescue profile response");
+  return {
+    profile: resumeProfileVersion(raw.profile),
+    created: booleanValue(raw.created, "Résumé Rescue profile created state"),
+  };
+}
+
+export function normalizeResumeOpportunityMutation(value: unknown): {
+  opportunity: ResumeOpportunity;
+  created: boolean;
+} {
+  const raw = closedObject(
+    value,
+    ["opportunity", "created"],
+    "Résumé Rescue opportunity response",
+  );
+  return {
+    opportunity: resumeOpportunity(raw.opportunity),
+    created: booleanValue(raw.created, "Résumé Rescue opportunity created state"),
+  };
+}
+
+export function normalizeResumeProjectionMutation(value: unknown): {
+  projection: ResumeProjection;
+  created: boolean;
+} {
+  const raw = closedObject(
+    value,
+    ["projection", "created"],
+    "Résumé Rescue projection response",
+  );
+  return {
+    projection: resumeProjection(raw.projection),
+    created: booleanValue(raw.created, "Résumé Rescue projection created state"),
   };
 }
 
@@ -1359,6 +1932,90 @@ export const desktopApi = {
       (value) => {
         const result = normalizeReplyRescueDelete(value);
         if (result.job_id !== jobId) return protocolError("Reply Rescue delete identity");
+        return result;
+      },
+    ),
+  getResumeRescueState: () =>
+    request(
+      "get_resume_rescue_state",
+      { profile_limit: 20, opportunity_limit: 20, projection_limit: 20 },
+      normalizeResumeRescueState,
+    ),
+  saveResumeProfile: (profile: ResumeProfile, expectedVersion?: number) =>
+    request(
+      "save_resume_rescue_profile",
+      {
+        profile_id: profile.profile_id,
+        display_name: profile.display_name,
+        locale: profile.locale,
+        facts: profile.facts,
+        conflicts: profile.conflicts,
+        ...(expectedVersion === undefined ? {} : { expected_version: expectedVersion }),
+      },
+      (value) => {
+        const result = normalizeResumeProfileMutation(value);
+        if (result.profile.id !== profile.profile_id) {
+          return protocolError("Résumé Rescue profile response identity");
+        }
+        return result;
+      },
+    ),
+  saveResumeOpportunity: (opportunity: ResumeOpportunitySource) =>
+    request(
+      "save_resume_rescue_opportunity",
+      {
+        employer: opportunity.employer,
+        title: opportunity.title,
+        source_url: opportunity.source_url,
+        source_text: opportunity.source_text,
+        priorities: opportunity.priorities,
+        locale: opportunity.locale,
+        captured_at: opportunity.captured_at,
+      },
+      normalizeResumeOpportunityMutation,
+    ),
+  replaceResumeOpportunity: (
+    opportunityId: string,
+    expectedDigest: string,
+    opportunity: ResumeOpportunitySource,
+  ) =>
+    request(
+      "replace_resume_rescue_opportunity",
+      {
+        opportunity_id: opportunityId,
+        expected_digest: expectedDigest,
+        employer: opportunity.employer,
+        title: opportunity.title,
+        source_url: opportunity.source_url,
+        source_text: opportunity.source_text,
+        priorities: opportunity.priorities,
+        locale: opportunity.locale,
+        captured_at: opportunity.captured_at,
+      },
+      normalizeResumeOpportunityMutation,
+    ),
+  composeResumeExact: (
+    profileId: string,
+    opportunityId: string,
+    sections: ResumeProjectionRequest["sections"],
+    requirements: ResumeProjectionRequest["requirements"],
+  ) =>
+    request(
+      "compose_resume_rescue_exact",
+      {
+        profile_id: profileId,
+        opportunity_id: opportunityId,
+        sections,
+        requirements,
+      },
+      (value) => {
+        const result = normalizeResumeProjectionMutation(value);
+        if (
+          result.projection.profile_id !== profileId ||
+          result.projection.opportunity_id !== opportunityId
+        ) {
+          return protocolError("Résumé Rescue projection response identity");
+        }
         return result;
       },
     ),

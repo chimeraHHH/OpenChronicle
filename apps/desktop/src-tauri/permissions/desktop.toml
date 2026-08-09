@@ -10,6 +10,7 @@ permissions = [
   "allow-resolve-evidence",
   "allow-get-prompt-rescue",
   "allow-get-reply-rescue",
+  "allow-get-resume-rescue-state",
 ]
 
 [[set]]
@@ -30,4 +31,8 @@ permissions = [
   "allow-edit-reply-rescue",
   "allow-retry-reply-rescue",
   "allow-delete-reply-rescue",
+  "allow-save-resume-rescue-profile",
+  "allow-save-resume-rescue-opportunity",
+  "allow-replace-resume-rescue-opportunity",
+  "allow-compose-resume-rescue-exact",
 ]

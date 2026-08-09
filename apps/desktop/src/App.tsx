@@ -13,6 +13,7 @@ import { PrivacyPage } from "./pages/PrivacyPage";
 import { PromptRescuePage } from "./pages/PromptRescuePage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { ReplyRescuePage } from "./pages/ReplyRescuePage";
+import { ResumeRescuePage } from "./pages/ResumeRescuePage";
 import { SuggestionsPage } from "./pages/SuggestionsPage";
 import { TimelinePage } from "./pages/TimelinePage";
 
@@ -211,6 +212,7 @@ export function App({ api = desktopApi }: AppProps) {
               rescue={snapshot.reply_rescue}
             />
           ) : null}
+          {snapshot && page === "resume-rescue" ? <ResumeRescuePage api={api} /> : null}
           {snapshot && page === "review" ? (
             <ReviewPage
               api={api}

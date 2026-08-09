@@ -426,8 +426,12 @@ instead of overwriting a source used by an earlier projection. Opportunity
 updates preserve immutable snapshots in a digest-CAS supersession chain. The
 first deterministic projection can only select exact reviewed fact text; its
 job-requirement mappings are explicitly unverified until reviewed. This slice
-has no document upload, model call, ATS promise, application form access, or
-submission capability.
+is available in the trusted desktop console: users explicitly select facts and
+exact opportunity excerpts, inspect missing evidence and conflict exclusions,
+and review the resulting immutable bindings and policy ledger. The WebView
+receives only closed protocol-v8 objects through allowlisted native commands.
+This slice has no document upload, model call, ATS promise, application form
+access, or submission capability.
 
 ## `[search]`
 

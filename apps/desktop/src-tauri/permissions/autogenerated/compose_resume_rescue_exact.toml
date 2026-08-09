@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-compose-resume-rescue-exact"
+description = "Enables the compose_resume_rescue_exact command without any pre-configured scope."
+commands.allow = ["compose_resume_rescue_exact"]
+
+[[permission]]
+identifier = "deny-compose-resume-rescue-exact"
+description = "Denies the compose_resume_rescue_exact command without any pre-configured scope."
+commands.deny = ["compose_resume_rescue_exact"]

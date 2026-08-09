@@ -3,6 +3,7 @@ use crate::error::DesktopError;
 use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use tauri::{AppHandle, Manager};
 
 const MAX_CANDIDATE_ID_CHARS: usize = 128;
@@ -27,6 +28,15 @@ const MAX_REPLY_RESCUE_OUTPUT_CHARS: usize = 30_000;
 const MAX_REPLY_RESCUE_FIELD_CHARS: usize = 1_000;
 const MAX_REPLY_RESCUE_PARTICIPANTS: usize = 50;
 const MAX_REPLY_RESCUE_DIRECTIONS: usize = 20;
+const MAX_RESUME_ITEMS: usize = 50;
+const MAX_RESUME_FACTS: usize = 2_000;
+const MAX_RESUME_CONFLICTS: usize = 500;
+const MAX_RESUME_REQUIREMENTS: usize = 200;
+const MAX_RESUME_PRIORITIES: usize = 50;
+const MAX_RESUME_FACT_TEXT_CHARS: usize = 8_000;
+const MAX_RESUME_OPPORTUNITY_CHARS: usize = 50_000;
+const MAX_RESUME_REQUIREMENT_CHARS: usize = 5_000;
+const MAX_RESUME_PRIORITY_CHARS: usize = 2_000;
 const MAX_PROVENANCE_DEPTH: u8 = 8;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -198,6 +208,124 @@ pub(crate) struct ReplyRescueEditRequest {
 pub(crate) struct ReplyRescueCasRequest {
     pub job_id: String,
     pub expected_version: u64,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub(crate) struct ResumeRescueStateRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opportunity_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub projection_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum ResumeProvenanceRequest {
+    ManualReviewed {
+        reviewed_at: String,
+    },
+    DocumentExcerpt {
+        reviewed_at: String,
+        source_id: String,
+        source_digest: String,
+        page: u64,
+        section: String,
+        start: u64,
+        end: u64,
+        extraction_method: String,
+    },
+    ReviewedMemory {
+        reviewed_at: String,
+        memory_id: String,
+        memory_path: String,
+        memory_digest: String,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeFactRequest {
+    pub id: String,
+    pub section: String,
+    pub text: String,
+    pub confidentiality: String,
+    pub ownership_scope: String,
+    pub provenance: Vec<ResumeProvenanceRequest>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeConflictRequest {
+    pub id: String,
+    pub fact_ids: Vec<String>,
+    pub description: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeSaveProfileRequest {
+    pub profile_id: String,
+    pub display_name: String,
+    pub locale: String,
+    pub facts: Vec<ResumeFactRequest>,
+    pub conflicts: Vec<ResumeConflictRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeSaveOpportunityRequest {
+    pub employer: String,
+    pub title: String,
+    pub source_text: String,
+    pub source_url: String,
+    pub priorities: Vec<String>,
+    pub locale: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captured_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeReplaceOpportunityRequest {
+    pub opportunity_id: String,
+    pub expected_digest: String,
+    pub employer: String,
+    pub title: String,
+    pub source_text: String,
+    pub source_url: String,
+    pub priorities: Vec<String>,
+    pub locale: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub captured_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeProjectionSectionRequest {
+    pub kind: String,
+    pub fact_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRequirementRequest {
+    pub id: String,
+    pub text: String,
+    pub fact_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeComposeExactRequest {
+    pub profile_id: String,
+    pub opportunity_id: String,
+    pub sections: Vec<ResumeProjectionSectionRequest>,
+    pub requirements: Vec<ResumeRequirementRequest>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -381,6 +509,64 @@ pub async fn delete_reply_rescue(
                 "The Reply Rescue deletion worker stopped unexpectedly.",
             )
         })?
+}
+
+#[tauri::command]
+pub async fn get_resume_rescue_state(
+    request: ResumeRescueStateRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_state(&request)?;
+    invoke(Operation::ResumeRescueState, &request).await
+}
+
+#[tauri::command]
+pub async fn save_resume_rescue_profile(
+    request: ResumeSaveProfileRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_profile(&request)?;
+    invoke(Operation::ResumeRescueSaveProfile, &request).await
+}
+
+#[tauri::command]
+pub async fn save_resume_rescue_opportunity(
+    request: ResumeSaveOpportunityRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_opportunity(
+        &request.employer,
+        &request.title,
+        &request.source_text,
+        &request.source_url,
+        &request.priorities,
+        &request.locale,
+        request.captured_at.as_deref(),
+    )?;
+    invoke(Operation::ResumeRescueSaveOpportunity, &request).await
+}
+
+#[tauri::command]
+pub async fn replace_resume_rescue_opportunity(
+    request: ResumeReplaceOpportunityRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.opportunity_id)?;
+    validate_digest(&request.expected_digest)?;
+    validate_resume_opportunity(
+        &request.employer,
+        &request.title,
+        &request.source_text,
+        &request.source_url,
+        &request.priorities,
+        &request.locale,
+        request.captured_at.as_deref(),
+    )?;
+    invoke(Operation::ResumeRescueReplaceOpportunity, &request).await
+}
+
+#[tauri::command]
+pub async fn compose_resume_rescue_exact(
+    request: ResumeComposeExactRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_compose(&request)?;
+    invoke(Operation::ResumeRescueComposeExact, &request).await
 }
 
 #[tauri::command]
@@ -746,6 +932,254 @@ fn validate_reply_rescue_version(value: u64) -> Result<(), DesktopError> {
     Ok(())
 }
 
+fn validate_resume_state(request: &ResumeRescueStateRequest) -> Result<(), DesktopError> {
+    if [
+        request.profile_limit,
+        request.opportunity_limit,
+        request.projection_limit,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|limit| limit == 0 || limit > MAX_RESUME_ITEMS)
+    {
+        return Err(DesktopError::invalid_request(
+            "A Résumé Rescue state limit is invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_resume_profile(request: &ResumeSaveProfileRequest) -> Result<(), DesktopError> {
+    validate_resume_identifier(&request.profile_id)?;
+    validate_multiline_text(&request.display_name, 512, false)?;
+    validate_bounded_text(&request.locale, 64, true)?;
+    if request
+        .expected_version
+        .is_some_and(|version| version == 0 || version > 2_147_483_647)
+    {
+        return Err(DesktopError::invalid_request(
+            "The Résumé Rescue profile version is invalid.",
+        ));
+    }
+    if request.facts.len() > MAX_RESUME_FACTS || request.conflicts.len() > MAX_RESUME_CONFLICTS {
+        return Err(DesktopError::invalid_request(
+            "The Résumé Rescue profile has too many records.",
+        ));
+    }
+    let mut fact_ids = HashSet::new();
+    for fact in &request.facts {
+        validate_resume_identifier(&fact.id)?;
+        if !fact_ids.insert(fact.id.as_str()) || !valid_resume_section(&fact.section) {
+            return Err(DesktopError::invalid_request(
+                "A Résumé Rescue fact identity or section is invalid.",
+            ));
+        }
+        validate_multiline_text(&fact.text, MAX_RESUME_FACT_TEXT_CHARS, false)?;
+        if !matches!(
+            fact.confidentiality.as_str(),
+            "public" | "private" | "confidential"
+        ) || !matches!(
+            fact.ownership_scope.as_str(),
+            "individual" | "shared" | "organization" | "unspecified"
+        ) || fact.provenance.is_empty()
+            || fact.provenance.len() > 20
+        {
+            return Err(DesktopError::invalid_request(
+                "A Résumé Rescue fact policy or provenance is invalid.",
+            ));
+        }
+        for source in &fact.provenance {
+            validate_resume_provenance(source)?;
+        }
+    }
+    let mut conflict_ids = HashSet::new();
+    for conflict in &request.conflicts {
+        validate_resume_identifier(&conflict.id)?;
+        validate_multiline_text(&conflict.description, 2_000, false)?;
+        let mut members = HashSet::new();
+        if !conflict_ids.insert(conflict.id.as_str())
+            || conflict.fact_ids.len() < 2
+            || conflict.fact_ids.len() > 50
+        {
+            return Err(DesktopError::invalid_request(
+                "A Résumé Rescue conflict is invalid.",
+            ));
+        }
+        for fact_id in &conflict.fact_ids {
+            validate_resume_identifier(fact_id)?;
+            if !fact_ids.contains(fact_id.as_str()) || !members.insert(fact_id.as_str()) {
+                return Err(DesktopError::invalid_request(
+                    "A Résumé Rescue conflict references an invalid fact.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_resume_provenance(source: &ResumeProvenanceRequest) -> Result<(), DesktopError> {
+    match source {
+        ResumeProvenanceRequest::ManualReviewed { reviewed_at } => {
+            validate_bounded_text(reviewed_at, 100, false)
+        }
+        ResumeProvenanceRequest::DocumentExcerpt {
+            reviewed_at,
+            source_id,
+            source_digest,
+            page,
+            section,
+            start,
+            end,
+            extraction_method,
+        } => {
+            validate_bounded_text(reviewed_at, 100, false)?;
+            validate_resume_identifier(source_id)?;
+            validate_resume_digest(source_digest)?;
+            validate_multiline_text(section, 512, true)?;
+            validate_bounded_text(extraction_method, 128, false)?;
+            if *page > 100_000 || *start >= *end || *end > 10_000_000 {
+                return Err(DesktopError::invalid_request(
+                    "A Résumé Rescue document span is invalid.",
+                ));
+            }
+            Ok(())
+        }
+        ResumeProvenanceRequest::ReviewedMemory {
+            reviewed_at,
+            memory_id,
+            memory_path,
+            memory_digest,
+        } => {
+            validate_bounded_text(reviewed_at, 100, false)?;
+            validate_resume_identifier(memory_id)?;
+            validate_multiline_text(memory_path, 1_024, false)?;
+            validate_resume_digest(memory_digest)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_resume_opportunity(
+    employer: &str,
+    title: &str,
+    source_text: &str,
+    source_url: &str,
+    priorities: &[String],
+    locale: &str,
+    captured_at: Option<&str>,
+) -> Result<(), DesktopError> {
+    validate_multiline_text(employer, 512, false)?;
+    validate_multiline_text(title, 512, false)?;
+    validate_multiline_text(source_text, MAX_RESUME_OPPORTUNITY_CHARS, false)?;
+    validate_bounded_text(source_url, 4_096, true)?;
+    validate_bounded_text(locale, 64, true)?;
+    if priorities.len() > MAX_RESUME_PRIORITIES {
+        return Err(DesktopError::invalid_request(
+            "The Résumé Rescue opportunity has too many priorities.",
+        ));
+    }
+    for priority in priorities {
+        validate_multiline_text(priority, MAX_RESUME_PRIORITY_CHARS, false)?;
+    }
+    if let Some(timestamp) = captured_at {
+        validate_bounded_text(timestamp, 100, false)?;
+    }
+    Ok(())
+}
+
+fn validate_resume_compose(request: &ResumeComposeExactRequest) -> Result<(), DesktopError> {
+    validate_resume_identifier(&request.profile_id)?;
+    validate_resume_identifier(&request.opportunity_id)?;
+    if request.sections.len() > 8 || request.requirements.len() > MAX_RESUME_REQUIREMENTS {
+        return Err(DesktopError::invalid_request(
+            "The Résumé Rescue projection has too many records.",
+        ));
+    }
+    let mut sections = HashSet::new();
+    let mut selected = HashSet::new();
+    for section in &request.sections {
+        if !valid_resume_section(&section.kind)
+            || !sections.insert(section.kind.as_str())
+            || section.fact_ids.len() > MAX_RESUME_FACTS
+        {
+            return Err(DesktopError::invalid_request(
+                "A Résumé Rescue projection section is invalid.",
+            ));
+        }
+        for fact_id in &section.fact_ids {
+            validate_resume_identifier(fact_id)?;
+            if !selected.insert(fact_id.as_str()) {
+                return Err(DesktopError::invalid_request(
+                    "A Résumé Rescue fact may only be selected once.",
+                ));
+            }
+        }
+    }
+    let mut requirements = HashSet::new();
+    for requirement in &request.requirements {
+        validate_resume_identifier(&requirement.id)?;
+        validate_multiline_text(&requirement.text, MAX_RESUME_REQUIREMENT_CHARS, false)?;
+        if !requirements.insert(requirement.id.as_str()) || requirement.fact_ids.len() > 50 {
+            return Err(DesktopError::invalid_request(
+                "A Résumé Rescue requirement is invalid.",
+            ));
+        }
+        let mut mapped = HashSet::new();
+        for fact_id in &requirement.fact_ids {
+            validate_resume_identifier(fact_id)?;
+            if !selected.contains(fact_id.as_str()) || !mapped.insert(fact_id.as_str()) {
+                return Err(DesktopError::invalid_request(
+                    "A Résumé Rescue requirement maps an invalid fact.",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn valid_resume_section(value: &str) -> bool {
+    matches!(
+        value,
+        "summary"
+            | "experience"
+            | "education"
+            | "skill"
+            | "project"
+            | "certification"
+            | "language"
+            | "other"
+    )
+}
+
+fn validate_resume_identifier(value: &str) -> Result<(), DesktopError> {
+    let mut bytes = value.bytes();
+    if value.len() > 128
+        || !bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        || !bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+    {
+        return Err(DesktopError::invalid_request(
+            "A Résumé Rescue identifier is invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_resume_digest(value: &str) -> Result<(), DesktopError> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+    {
+        return Err(DesktopError::invalid_request(
+            "A Résumé Rescue digest is invalid.",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_edit_candidate(request: &EditCandidateRequest) -> Result<(), DesktopError> {
     validate_candidate_id(&request.candidate_id)?;
     validate_multiline_text(&request.content, MAX_CONTENT_CHARS, false)?;
@@ -956,6 +1390,102 @@ mod tests {
         assert!(validate_reply_rescue_queue(&unsupported_mode).is_err());
         assert!(validate_reply_rescue_version(1).is_ok());
         assert!(validate_reply_rescue_version(0).is_err());
+    }
+
+    #[test]
+    fn resume_profile_requires_closed_reviewed_sources_and_consistent_conflicts() {
+        let fact = ResumeFactRequest {
+            id: "fact-api".to_owned(),
+            section: "experience".to_owned(),
+            text: "Reduced API p95 latency by 40%.".to_owned(),
+            confidentiality: "private".to_owned(),
+            ownership_scope: "shared".to_owned(),
+            provenance: vec![ResumeProvenanceRequest::ManualReviewed {
+                reviewed_at: "2026-08-09T00:00:00Z".to_owned(),
+            }],
+        };
+        let valid = ResumeSaveProfileRequest {
+            profile_id: "primary-profile".to_owned(),
+            display_name: "Ada Example".to_owned(),
+            locale: "en-US".to_owned(),
+            facts: vec![fact],
+            conflicts: vec![],
+            expected_version: None,
+        };
+        assert!(validate_resume_profile(&valid).is_ok());
+
+        let conflicting = ResumeSaveProfileRequest {
+            conflicts: vec![ResumeConflictRequest {
+                id: "conflict-1".to_owned(),
+                fact_ids: vec!["fact-api".to_owned(), "missing".to_owned()],
+                description: "Review the competing claims.".to_owned(),
+            }],
+            ..valid
+        };
+        assert!(validate_resume_profile(&conflicting).is_err());
+    }
+
+    #[test]
+    fn resume_exact_projection_rejects_duplicate_and_unselected_mappings() {
+        let valid = ResumeComposeExactRequest {
+            profile_id: "primary-profile".to_owned(),
+            opportunity_id: "opportunity-1".to_owned(),
+            sections: vec![ResumeProjectionSectionRequest {
+                kind: "experience".to_owned(),
+                fact_ids: vec!["fact-api".to_owned()],
+            }],
+            requirements: vec![ResumeRequirementRequest {
+                id: "req-latency".to_owned(),
+                text: "Improve service latency.".to_owned(),
+                fact_ids: vec!["fact-api".to_owned()],
+            }],
+        };
+        assert!(validate_resume_compose(&valid).is_ok());
+
+        let invalid = ResumeComposeExactRequest {
+            requirements: vec![ResumeRequirementRequest {
+                id: "req-latency".to_owned(),
+                text: "Improve service latency.".to_owned(),
+                fact_ids: vec!["fact-missing".to_owned()],
+            }],
+            ..valid
+        };
+        assert!(validate_resume_compose(&invalid).is_err());
+    }
+
+    #[test]
+    fn resume_state_and_opportunity_bounds_match_the_python_bridge() {
+        assert!(validate_resume_state(&ResumeRescueStateRequest {
+            profile_limit: Some(50),
+            opportunity_limit: Some(50),
+            projection_limit: Some(50),
+        })
+        .is_ok());
+        assert!(validate_resume_state(&ResumeRescueStateRequest {
+            profile_limit: Some(0),
+            ..ResumeRescueStateRequest::default()
+        })
+        .is_err());
+        assert!(validate_resume_opportunity(
+            "Example Labs",
+            "Reliability Engineer",
+            "Improve service latency.",
+            "https://example.test/jobs/123",
+            &["Prefer measured evidence.".to_owned()],
+            "en-US",
+            Some("2026-08-09T01:00:00Z"),
+        )
+        .is_ok());
+        assert!(validate_resume_opportunity(
+            "Example Labs",
+            "Reliability Engineer",
+            "Improve service latency.\0hidden",
+            "",
+            &[],
+            "",
+            None,
+        )
+        .is_err());
     }
 
     #[test]

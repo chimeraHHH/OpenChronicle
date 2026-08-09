@@ -30,6 +30,10 @@ import {
   provenanceTrace,
   promptRescueJob,
   replyRescueJob,
+  resumeOpportunity,
+  resumeProfileVersion,
+  resumeProjection,
+  resumeRescueState,
   suggestion,
   wrapDetail,
 } from "./fixtures";
@@ -39,8 +43,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks exact-selection Reply Rescue as bridge protocol v7", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(7);
+  it("tracks deterministic Résumé Rescue as bridge protocol v8", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(8);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -139,6 +143,93 @@ describe("desktop bridge adapters", () => {
         job_id: "reply-rescue-1",
         expected_version: 3,
         reply_body: "Reviewed edit",
+      },
+    });
+  });
+
+  it("decodes only the closed Résumé Rescue state and exact no-action artifact", async () => {
+    tauri.invoke.mockResolvedValueOnce(resumeRescueState());
+
+    const state = await desktopApi.getResumeRescueState();
+
+    expect(tauri.invoke).toHaveBeenCalledWith("get_resume_rescue_state", {
+      request: { profile_limit: 20, opportunity_limit: 20, projection_limit: 20 },
+    });
+    expect(state.profiles[0]?.profile.facts[0]).toMatchObject({
+      id: "fact-api",
+      provenance: [{ kind: "manual_reviewed" }],
+    });
+    expect(state.projections[0]?.artifact).toMatchObject({
+      workflow: "resume_rescue",
+      action_capability: "none",
+      generation_mode: "deterministic_exact_projection",
+      missing_evidence: [
+        { requirement_id: "req-kubernetes", text: "Kubernetes is required." },
+      ],
+    });
+
+    const malformed = resumeRescueState() as unknown as Record<string, unknown>;
+    malformed.unknown = true;
+    tauri.invoke.mockResolvedValueOnce(malformed);
+    await expect(desktopApi.getResumeRescueState()).rejects.toMatchObject({
+      code: "BRIDGE_PROTOCOL_ERROR",
+    });
+
+    const unsafe = resumeRescueState();
+    unsafe.projections[0]!.artifact.action_capability = "submit" as never;
+    tauri.invoke.mockResolvedValueOnce(unsafe);
+    await expect(desktopApi.getResumeRescueState()).rejects.toMatchObject({
+      code: "BRIDGE_PROTOCOL_ERROR",
+    });
+  });
+
+  it("saves reviewed résumé sources and composes only caller-selected exact facts", async () => {
+    const profile = resumeProfileVersion();
+    tauri.invoke.mockResolvedValueOnce({ profile, created: true });
+    const savedProfile = await desktopApi.saveResumeProfile(profile.profile);
+    expect(savedProfile.profile).toEqual(profile);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("save_resume_rescue_profile", {
+      request: {
+        profile_id: profile.id,
+        display_name: profile.profile.display_name,
+        locale: profile.profile.locale,
+        facts: profile.profile.facts,
+        conflicts: [],
+      },
+    });
+
+    const opportunity = resumeOpportunity();
+    tauri.invoke.mockResolvedValueOnce({ opportunity, created: true });
+    await desktopApi.saveResumeOpportunity(opportunity.snapshot);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("save_resume_rescue_opportunity", {
+      request: {
+        employer: opportunity.snapshot.employer,
+        title: opportunity.snapshot.title,
+        source_url: opportunity.snapshot.source_url,
+        source_text: opportunity.snapshot.source_text,
+        priorities: opportunity.snapshot.priorities,
+        locale: opportunity.snapshot.locale,
+        captured_at: opportunity.snapshot.captured_at,
+      },
+    });
+
+    const projection = resumeProjection();
+    tauri.invoke.mockResolvedValueOnce({ projection, created: true });
+    const composed = await desktopApi.composeResumeExact(
+      profile.id,
+      opportunity.id,
+      projection.request.sections,
+      projection.request.requirements,
+    );
+    expect(composed.projection.artifact.sections[0]?.items[0]?.text).toBe(
+      profile.profile.facts[0]?.text,
+    );
+    expect(tauri.invoke).toHaveBeenLastCalledWith("compose_resume_rescue_exact", {
+      request: {
+        profile_id: profile.id,
+        opportunity_id: opportunity.id,
+        sections: projection.request.sections,
+        requirements: projection.request.requirements,
       },
     });
   });

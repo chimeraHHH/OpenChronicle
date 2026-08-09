@@ -9,6 +9,10 @@ import type {
   PromptRescueJobSummary,
   ReplyRescueJob,
   ReplyRescueJobSummary,
+  ResumeOpportunity,
+  ResumeProfileVersion,
+  ResumeProjection,
+  ResumeRescueState,
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
@@ -271,6 +275,136 @@ export function replyRescueJob(
     updated_at: summary.updated_at,
     version: summary.version,
     ...overrides,
+  };
+}
+
+export function resumeProfileVersion(): ResumeProfileVersion {
+  return {
+    id: "primary-profile",
+    version: 1,
+    digest: "a".repeat(64),
+    created_at: "2026-08-09T00:00:01.000000+00:00",
+    profile: {
+      schema_version: 1,
+      profile_id: "primary-profile",
+      display_name: "Ada Example",
+      locale: "en-US",
+      facts: [
+        {
+          id: "fact-api",
+          section: "experience",
+          text: "Reduced API p95 latency by 40% after profiling the query path.",
+          confidentiality: "private",
+          ownership_scope: "shared",
+          provenance: [
+            { kind: "manual_reviewed", reviewed_at: "2026-08-09T00:00:00.000000+00:00" },
+          ],
+        },
+      ],
+      conflicts: [],
+    },
+  };
+}
+
+export function resumeOpportunity(): ResumeOpportunity {
+  return {
+    id: "opportunity-1",
+    digest: "b".repeat(64),
+    created_at: "2026-08-09T01:00:01.000000+00:00",
+    snapshot: {
+      schema_version: 1,
+      employer: "Example Labs",
+      title: "Reliability Engineer",
+      source_url: "https://example.test/jobs/123",
+      source_text: "Improve service latency. Kubernetes is required.",
+      priorities: ["Prefer measured evidence."],
+      locale: "en-US",
+      captured_at: "2026-08-09T01:00:00.000000+00:00",
+    },
+  };
+}
+
+export function resumeProjection(): ResumeProjection {
+  const profile = resumeProfileVersion();
+  const opportunity = resumeOpportunity();
+  return {
+    id: "resume-projection-1",
+    profile_id: profile.id,
+    profile_version: profile.version,
+    profile_digest: profile.digest,
+    opportunity_id: opportunity.id,
+    opportunity_digest: opportunity.digest,
+    request: {
+      schema_version: 1,
+      sections: [{ kind: "experience", fact_ids: ["fact-api"] }],
+      requirements: [
+        { id: "req-latency", text: "Improve service latency.", fact_ids: ["fact-api"] },
+        { id: "req-kubernetes", text: "Kubernetes is required.", fact_ids: [] },
+      ],
+    },
+    artifact: {
+      schema_version: 1,
+      workflow: "resume_rescue",
+      action_capability: "none",
+      generation_mode: "deterministic_exact_projection",
+      profile_binding: { id: profile.id, version: profile.version, digest: profile.digest },
+      opportunity_binding: {
+        id: opportunity.id,
+        digest: opportunity.digest,
+        employer: opportunity.snapshot.employer,
+        title: opportunity.snapshot.title,
+      },
+      sections: [
+        {
+          kind: "experience",
+          items: [
+            {
+              fact_id: "fact-api",
+              text: profile.profile.facts[0]!.text,
+              transformation: "selected_exact",
+              confidentiality: "private",
+              ownership_scope: "shared",
+              provenance: profile.profile.facts[0]!.provenance,
+            },
+          ],
+        },
+      ],
+      requirement_coverage: [
+        {
+          id: "req-latency",
+          text: "Improve service latency.",
+          status: "candidate_supported",
+          fact_ids: ["fact-api"],
+          support_assurance: "manual_mapping_unverified",
+        },
+        {
+          id: "req-kubernetes",
+          text: "Kubernetes is required.",
+          status: "missing_evidence",
+          fact_ids: [],
+          support_assurance: "no_evidence",
+        },
+      ],
+      conflicts: [],
+      missing_evidence: [
+        { requirement_id: "req-kubernetes", text: "Kubernetes is required." },
+      ],
+      excluded_fact_ids: [],
+      warnings: [
+        "Requirement mappings require review; no ATS or hiring outcome is claimed.",
+      ],
+    },
+    artifact_digest: "c".repeat(64),
+    created_at: "2026-08-09T01:10:00.000000+00:00",
+  };
+}
+
+export function resumeRescueState(): ResumeRescueState {
+  return {
+    enabled: true,
+    profiles: [resumeProfileVersion()],
+    opportunities: [resumeOpportunity()],
+    projections: [resumeProjection()],
   };
 }
 
