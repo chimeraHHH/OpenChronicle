@@ -64,15 +64,42 @@ Raw ignored report:
 It records a dirty worktree and `blocked_unregistered`, so it cannot support a
 release or parity claim.
 
+## Timestamped trace extension
+
+The follow-up `OC-Vida-Activity-Traces-v1` adds 12 synthetic timestamped states
+without modifying the canonical opportunity fixture. It compares production
+Work Resumption with no gate and 5/10/20/30/60-second quiet thresholds. Labels
+remain engineering hypotheses, not independently collected field ground truth.
+
+| Threshold | Precision | Snapshot recall | False positives | Deferred positives | Added-delay p95 |
+|---|---:|---:|---:|---:|---:|
+| No gate | 0.333 | 1.00 | 8 | 0 | 0 s |
+| 5 s | 0.571 | 1.00 | 3 | 0 | 0 s |
+| 10 s | 0.667 | 1.00 | 2 | 0 | 0 s |
+| 20 s | 0.750 | 0.75 | 1 | 1 | 8 s |
+| 30 s | 1.000 | 0.50 | 0 | 2 | 18 s |
+| 60 s | 1.000 | 0.25 | 0 | 3 | 48 s |
+
+Every variant retained 100% evidence coverage and remained well under the 250
+ms decision-latency gate. Raw ignored report:
+`scratch/vida-breakpoint-traces.json`, SHA-256
+`17e760e306485b616bc0d4ac10aa7963ee4a20a14868a8d3caf4b17532bfe66f`.
+It is explicitly `blocked_unregistered_auxiliary`.
+
+The deliberately overlapping pair—helpful at 12 seconds, still thinking at 21
+seconds—shows why threshold tuning alone cannot preserve all useful moments and
+remove all interruptions. A 30-second threshold reaches the precision target
+only by deferring half the positives at the evaluation snapshot.
+
 ## Decision
 
-Retain the gate as a production safety/timing constraint. Do **not** claim that
-it fixes the active-conversation false positive until a frozen trace extension
-with independently reviewed activity timestamps tests gate-on versus gate-off.
-The other remaining false positive, already-resolved work, is untouched.
+Retain the default 20-second gate as a production safety/timing constraint, but
+stop the timing-only optimization route. It improves the synthetic tradeoff
+without reaching the 0.85 precision target and preserving all positives. The
+canonical active-conversation and already-resolved false positives therefore
+remain open.
 
-Next bounded experiment: add a trace fixture extension without changing the v1
-labels, then compare quiescence thresholds for precision, recall, delay, and
-invalid interruptions. If no threshold separates useful returns from active
-conversation, abandon timing-only optimization and require an explicit cue or
-a separately validated continuity/resolution assessor.
+Next bounded direction: prefer an explicit park/resume cue for inspectable,
+high-confidence labels while scouting a separately validated continuity and
+resolution assessor. No model-based assessor should be promoted on this tiny
+synthetic set.

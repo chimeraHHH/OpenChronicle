@@ -24,3 +24,13 @@ quality gate into a pass.
 The first bounded follow-up is recorded in
 [analysis/empty-context-ablation.md](analysis/empty-context-ablation.md). The
 full Kernel remains below the precision gate after that ablation.
+
+The separate development trace sweep does not alter the canonical fixture:
+
+```bash
+uv run python scripts/run_vida_breakpoint_eval.py
+```
+
+It compares capture-quiescence thresholds using production Work Resumption and
+is explicitly labeled synthetic, auxiliary, and unregistered. It is a timing
+sensitivity test, not field ground truth or a replacement quality baseline.

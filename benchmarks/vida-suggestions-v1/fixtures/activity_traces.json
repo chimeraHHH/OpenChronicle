@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "dataset_id": "OC-Vida-Activity-Traces-v1",
+  "split": "work-resumption-breakpoint-dev-v1",
+  "reference_now": "2026-08-09T06:00:00+00:00",
+  "context": {
+    "previous": {"start_minutes_ago": 45, "end_minutes_ago": 35, "entries": ["Prepared a verified work state"], "apps": ["Editor"]},
+    "current": {"start_minutes_ago": 4, "end_minutes_ago": 1, "entries": ["Returned to the verified work state"], "apps": ["Editor"]}
+  },
+  "cases": [
+    {"id": "positive-quick-useful-return", "simulated_user_day": "trace-day-01", "expected_display": true, "sample_state": "healthy", "latest_event_age_seconds": 12},
+    {"id": "positive-settled-return", "simulated_user_day": "trace-day-02", "expected_display": true, "sample_state": "healthy", "latest_event_age_seconds": 25},
+    {"id": "positive-deliberate-review", "simulated_user_day": "trace-day-03", "expected_display": true, "sample_state": "healthy", "latest_event_age_seconds": 45},
+    {"id": "positive-long-quiet-return", "simulated_user_day": "trace-day-04", "expected_display": true, "sample_state": "healthy", "latest_event_age_seconds": 90},
+    {"id": "negative-capture-just-arrived", "simulated_user_day": "trace-day-05", "expected_display": false, "sample_state": "healthy", "latest_event_age_seconds": 0},
+    {"id": "negative-active-three-seconds", "simulated_user_day": "trace-day-06", "expected_display": false, "sample_state": "healthy", "latest_event_age_seconds": 3},
+    {"id": "negative-active-eight-seconds", "simulated_user_day": "trace-day-07", "expected_display": false, "sample_state": "healthy", "latest_event_age_seconds": 8},
+    {"id": "negative-reading-at-fifteen-seconds", "simulated_user_day": "trace-day-08", "expected_display": false, "sample_state": "healthy", "latest_event_age_seconds": 15},
+    {"id": "negative-thinking-at-twenty-one-seconds", "simulated_user_day": "trace-day-09", "expected_display": false, "sample_state": "healthy", "latest_event_age_seconds": 21},
+    {"id": "negative-no-current-generation-sample", "simulated_user_day": "trace-day-10", "expected_display": false, "sample_state": "no_sample", "latest_event_age_seconds": null},
+    {"id": "negative-malformed-sample", "simulated_user_day": "trace-day-11", "expected_display": false, "sample_state": "malformed", "latest_event_age_seconds": null},
+    {"id": "negative-backwards-tick", "simulated_user_day": "trace-day-12", "expected_display": false, "sample_state": "backward", "latest_event_age_seconds": null}
+  ]
+}

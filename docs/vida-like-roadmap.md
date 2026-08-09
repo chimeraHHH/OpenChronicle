@@ -208,8 +208,10 @@ privacy UX is validated on a signed macOS build.
   fails the 0.85 gate and is not a publishable clean result. The bounded
   breakpoint-gate development result is recorded in
   `benchmarks/vida-suggestions-v1/analysis/capture-breakpoint-gate-dev.md`;
-  the unchanged canonical decisions confirm comparability, while the missing
-  timestamped trace split prevents a gate-effect claim.
+  the unchanged canonical decisions confirm comparability. A separate 12-case
+  synthetic trace sweep shows the 20-second default improves the timing
+  tradeoff but cannot reach the precision target without deferring useful
+  moments, so timing-only optimization is stopped.
 - [ ] Prompt Rescue prepared-artifact slice with explicit selection binding and
   no automatic submission.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no

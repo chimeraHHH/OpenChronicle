@@ -160,6 +160,15 @@ Abandonment condition: if capture activity cannot separate active conversation
 from a useful return without losing either positive or delaying beyond the
 activation window, stop this route and require a richer explicit input signal.
 
-Next stage: a bounded implementation/experiment on the clock envelope and
-breakpoint gate. The remaining already-resolved false positive stays visible
-and is not claimed solved.
+Bounded-result update: the production clock envelope and breakpoint gate are
+implemented. A separate 12-case synthetic trace sweep found that 20 seconds
+improves display precision from 0.333 to 0.750 but defers one of four positives;
+30 seconds reaches 1.00 precision only by reducing snapshot recall to 0.50 and
+adding up to 18 seconds of delay on the positive set. Because the fixture labels
+are engineering hypotheses and the timing distributions overlap, this route is
+retained as a safety constraint but stopped as the sole quality optimizer.
+
+Next stage: an explicit park/resume cue, plus broader external scouting for a
+separately evaluated continuity/resolution signal. The remaining canonical
+active-conversation and already-resolved false positives stay visible and are
+not claimed solved.
