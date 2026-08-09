@@ -26,6 +26,31 @@ Source: [Vida public product page](https://web-prod.vida.app/).
 | [Apple `NSPasteboard`](https://developer.apple.com/documentation/appkit/nspasteboard) | The general pasteboard is shared across apps and participates in Universal Clipboard. Its change count tracks ownership/content changes. | Clipboard bytes and change count can bind an imported snapshot, but clipboard provenance cannot prove the originating app/window. |
 | [Apple `kAXSelectedTextAttribute`](https://developer.apple.com/documentation/applicationservices/kaxselectedtextattribute) | Editable accessibility text objects expose the current selected text; noncontiguous selections have a separate ranges attribute. | A later macOS adapter can capture one exact focused selection. It must reject empty, multiple, unsupported, secure, policy-excluded, or identity-racing selections. |
 
+### macOS selection-adapter update
+
+The native adapter design was checked against Apple's
+[`AXUIElementCopyAttributeValue`](https://developer.apple.com/documentation/applicationservices/1462085-axuielementcopyattributevalue),
+[`kAXFocusedApplicationAttribute`](https://developer.apple.com/documentation/applicationservices/kaxfocusedapplicationattribute),
+[`kAXFocusedWindowAttribute`](https://developer.apple.com/documentation/applicationservices/kaxfocusedwindowattribute),
+[`frontmostApplication`](https://developer.apple.com/documentation/appkit/nsworkspace/frontmostapplication),
+and
+[`AXIsProcessTrustedWithOptions`](https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions)
+contracts. The API can report unsupported/no-value attributes, and frontmost
+state is time-varying, so a single successful text read is not a sufficient
+binding.
+
+[AXSwift](https://github.com/tmandry/AXSwift) and
+[Hammerspoon's accessibility element model](https://github.com/Hammerspoon/hammerspoon)
+were reviewed as public implementation references. They reinforce explicit AX
+error handling, element validity checks, and focused app/element traversal;
+their automation actions are deliberately outside this read-only adapter.
+The implemented probe therefore reads only `AXSelectedText` plus its range,
+checks the secure-field ancestor chain, and rechecks frontmost app, focused
+window, focused element, range, and text before emitting a receipt. It has no
+`AXValue`/clipboard fallback and no AX write API. A global shortcut is required
+for product integration because focusing an ordinary OpenChronicle button would
+destroy the external focus being bound.
+
 ## Repository and evaluation evidence
 
 | Reference | Mechanism worth reusing | Boundary |
