@@ -26,6 +26,8 @@ from .provenance.models import EvidenceRef
 from .reply_rescue import store as reply_rescue_store
 from .reply_rescue.service import ReplyRescueService
 from .reply_rescue.service import validate_config as validate_reply_rescue
+from .resume_rescue import store as resume_rescue_store
+from .resume_rescue.service import ResumeRescueService
 from .services.capture_control import PauseStateConflict, set_paused
 from .services.context import ContextService
 from .services.evidence import EvidenceResolver
@@ -85,6 +87,8 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         return _error("VERSION_CONFLICT", "The Prompt Rescue job changed."), 2
     except reply_rescue_store.ReplyRescueConflict:
         return _error("VERSION_CONFLICT", "The Reply Rescue job changed."), 2
+    except resume_rescue_store.ResumeRescueConflict:
+        return _error("VERSION_CONFLICT", "The Résumé Rescue source changed."), 2
     except SelectionCaptureError as exc:
         return _selection_error(exc.code), 2
     except StalePurgePlan:
@@ -163,6 +167,11 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "reply_rescue.edit": _reply_rescue_edit,
         "reply_rescue.retry": _reply_rescue_retry,
         "reply_rescue.delete": _reply_rescue_delete,
+        "resume_rescue.state": _resume_rescue_state,
+        "resume_rescue.save_profile": _resume_rescue_save_profile,
+        "resume_rescue.save_opportunity": _resume_rescue_save_opportunity,
+        "resume_rescue.replace_opportunity": _resume_rescue_replace_opportunity,
+        "resume_rescue.compose_exact": _resume_rescue_compose_exact,
         "provenance.trace": _provenance_trace,
         "evidence.resolve": _evidence_resolve,
         "capture.set_paused": _capture_set_paused,
@@ -386,6 +395,134 @@ def _reply_rescue_delete(params: dict[str, Any]) -> dict[str, Any]:
     with fts.cursor() as conn:
         ReplyRescueService(conn, cfg).delete(job_id, expected_version=expected_version)
         return {"job_id": job_id, "deleted": True}
+
+
+def _resume_rescue_state(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        optional={"profile_limit", "opportunity_limit", "projection_limit"},
+    )
+    profile_limit = _bounded_int(params.get("profile_limit", 20), 1, 50)
+    opportunity_limit = _bounded_int(params.get("opportunity_limit", 20), 1, 50)
+    projection_limit = _bounded_int(params.get("projection_limit", 20), 1, 50)
+    cfg = config_mod.load()
+    if type(cfg.resume_rescue.enabled) is not bool:
+        raise ValueError("resume rescue enabled state is invalid")
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, cfg)
+        return {
+            "enabled": cfg.resume_rescue.enabled,
+            "profiles": [
+                _resume_profile_payload(value)
+                for value in service.list_profiles(limit=profile_limit)
+            ],
+            "opportunities": [
+                _resume_opportunity_payload(value)
+                for value in service.list_opportunities(limit=opportunity_limit)
+            ],
+            "projections": [
+                _resume_projection_payload(value)
+                for value in service.list_projections(limit=projection_limit)
+            ],
+        }
+
+
+def _resume_rescue_save_profile(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={"profile_id", "display_name", "locale", "facts", "conflicts"},
+        optional={"expected_version"},
+    )
+    expected = params.get("expected_version")
+    expected_version = _bounded_int(expected, 1, 2_147_483_647) if expected is not None else None
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        profile, created = ResumeRescueService(conn, cfg).save_profile(
+            profile_id=_bounded_string(params["profile_id"], 128, nonempty=True),
+            display_name=_bounded_string(params["display_name"], 512, nonempty=True),
+            locale=_bounded_string(params["locale"], 64, nonempty=False),
+            facts=_object_list(params["facts"], 2_000),
+            conflicts=_object_list(params["conflicts"], 500),
+            expected_version=expected_version,
+        )
+        return {"profile": _resume_profile_payload(profile), "created": created}
+
+
+def _resume_rescue_save_opportunity(params: dict[str, Any]) -> dict[str, Any]:
+    values = _resume_opportunity_params(params, replacing=False)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        opportunity, created = ResumeRescueService(conn, cfg).save_opportunity(**values)
+        return {
+            "opportunity": _resume_opportunity_payload(opportunity),
+            "created": created,
+        }
+
+
+def _resume_rescue_replace_opportunity(params: dict[str, Any]) -> dict[str, Any]:
+    values = _resume_opportunity_params(params, replacing=True)
+    opportunity_id = values.pop("opportunity_id")
+    expected_digest = values.pop("expected_digest")
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        opportunity, created = ResumeRescueService(conn, cfg).replace_opportunity(
+            opportunity_id,
+            expected_digest=expected_digest,
+            **values,
+        )
+        return {
+            "opportunity": _resume_opportunity_payload(opportunity),
+            "created": created,
+        }
+
+
+def _resume_rescue_compose_exact(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={"profile_id", "opportunity_id", "sections", "requirements"},
+    )
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        projection, created = ResumeRescueService(conn, cfg).compose_exact(
+            profile_id=_bounded_string(params["profile_id"], 128, nonempty=True),
+            opportunity_id=_bounded_string(params["opportunity_id"], 128, nonempty=True),
+            sections=_object_list(params["sections"], 8),
+            requirements=_object_list(params["requirements"], 200),
+        )
+        return {
+            "projection": _resume_projection_payload(projection),
+            "created": created,
+        }
+
+
+def _resume_opportunity_params(params: dict[str, Any], *, replacing: bool) -> dict[str, Any]:
+    common = {
+        "employer",
+        "title",
+        "source_text",
+        "source_url",
+        "priorities",
+        "locale",
+    }
+    required = common | ({"opportunity_id", "expected_digest"} if replacing else set())
+    _fields(params, required=required, optional={"captured_at"})
+    result: dict[str, Any] = {
+        "employer": _bounded_string(params["employer"], 512, nonempty=True),
+        "title": _bounded_string(params["title"], 512, nonempty=True),
+        "source_text": _bounded_string(params["source_text"], 50_000, nonempty=True),
+        "source_url": _bounded_string(params["source_url"], 4_096, nonempty=False),
+        "priorities": _string_list(params["priorities"], max_items=50, max_length=2_000),
+        "locale": _bounded_string(params["locale"], 64, nonempty=False),
+        "captured_at": (
+            _bounded_string(params["captured_at"], 100, nonempty=True)
+            if "captured_at" in params
+            else None
+        ),
+    }
+    if replacing:
+        result["opportunity_id"] = _bounded_string(params["opportunity_id"], 128, nonempty=True)
+        result["expected_digest"] = _bounded_string(params["expected_digest"], 64, nonempty=True)
+    return result
 
 
 def _suggestion_transition(params: dict[str, Any]) -> dict[str, Any]:
@@ -781,6 +918,44 @@ def _bounded_reply_rescue_output(output: dict[str, Any] | None) -> dict[str, Any
     }
 
 
+def _resume_profile_payload(value: resume_rescue_store.ProfileVersion) -> dict[str, Any]:
+    return {
+        "id": value.profile_id,
+        "version": value.version,
+        "digest": value.digest,
+        "created_at": value.created_at,
+        "profile": value.profile,
+    }
+
+
+def _resume_opportunity_payload(
+    value: resume_rescue_store.OpportunitySnapshot,
+) -> dict[str, Any]:
+    return {
+        "id": value.id,
+        "digest": value.digest,
+        "created_at": value.created_at,
+        "snapshot": value.snapshot,
+    }
+
+
+def _resume_projection_payload(
+    value: resume_rescue_store.ResumeProjection,
+) -> dict[str, Any]:
+    return {
+        "id": value.id,
+        "profile_id": value.profile_id,
+        "profile_version": value.profile_version,
+        "profile_digest": value.profile_digest,
+        "opportunity_id": value.opportunity_id,
+        "opportunity_digest": value.opportunity_digest,
+        "request": value.request,
+        "artifact": value.artifact,
+        "artifact_digest": value.artifact_digest,
+        "created_at": value.created_at,
+    }
+
+
 def _bounded_output_strings(value: object, maximum: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -987,6 +1162,14 @@ def _string_list(value: object, *, max_items: int, max_length: int) -> list[str]
     if not isinstance(value, list) or len(value) > max_items:
         raise ValueError("bounded string list required")
     return [_bounded_string(item, max_length, nonempty=True) for item in value]
+
+
+def _object_list(value: object, maximum: int) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) > maximum:
+        raise ValueError("bounded object list required")
+    if not all(isinstance(item, dict) for item in value):
+        raise ValueError("bounded object list required")
+    return value
 
 
 def _strict_bool(value: object) -> bool:

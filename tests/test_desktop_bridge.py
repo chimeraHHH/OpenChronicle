@@ -612,6 +612,55 @@ def test_prompt_rescue_selection_does_not_capture_while_disabled(
     assert calls == 0
 
 
+def test_resume_rescue_bridge_replaces_opportunity_with_digest_cas(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.resume_rescue.enabled = True
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    initial, initial_code = _request(
+        "resume_rescue.save_opportunity",
+        {
+            "employer": "Example Labs",
+            "title": "Engineer",
+            "source_text": "Build systems.",
+            "source_url": "",
+            "priorities": [],
+            "locale": "en-US",
+            "captured_at": "2026-08-09T01:00:00Z",
+        },
+    )
+    assert initial_code == 0
+    old = initial["result"]["opportunity"]
+    replacement_params = {
+        "opportunity_id": old["id"],
+        "expected_digest": old["digest"],
+        "employer": "Example Labs",
+        "title": "Senior Engineer",
+        "source_text": "Build systems and lead reviews.",
+        "source_url": "",
+        "priorities": [],
+        "locale": "en-US",
+        "captured_at": "2026-08-09T02:00:00Z",
+    }
+    replacement, replacement_code = _request(
+        "resume_rescue.replace_opportunity", replacement_params
+    )
+    replay, replay_code = _request("resume_rescue.replace_opportunity", replacement_params)
+    assert replacement_code == replay_code == 0
+    assert replacement["result"]["created"] is True
+    assert replay["result"]["created"] is False
+    assert replay["result"]["opportunity"] == replacement["result"]["opportunity"]
+
+    stale, stale_code = _request(
+        "resume_rescue.replace_opportunity",
+        {**replacement_params, "expected_digest": "0" * 64},
+    )
+    assert stale_code == 2
+    assert stale["error"]["code"] == "VERSION_CONFLICT"
+
+
 def test_reply_rescue_bridge_is_manual_review_only_and_cas_bound(
     ac_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -797,6 +846,159 @@ def test_reply_rescue_selection_does_not_capture_while_disabled(
     assert rejected_code == 2
     assert rejected["error"]["code"] == "INVALID_PARAMS"
     assert calls == 0
+
+
+def test_resume_rescue_bridge_composes_exact_review_artifact_and_invalidates_stale(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.resume_rescue.enabled = True
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    fact = {
+        "id": "fact-api",
+        "section": "experience",
+        "text": "Reduced API p95 latency by 40% after profiling the query path.",
+        "confidentiality": "private",
+        "ownership_scope": "shared",
+        "provenance": [{"kind": "manual_reviewed", "reviewed_at": "2026-08-09T00:00:00Z"}],
+    }
+    saved, saved_code = _request(
+        "resume_rescue.save_profile",
+        {
+            "profile_id": "primary-profile",
+            "display_name": "Ada Example",
+            "locale": "en-US",
+            "facts": [fact],
+            "conflicts": [],
+        },
+    )
+    assert saved_code == 0
+    profile = saved["result"]["profile"]
+    assert saved["result"]["created"] is True
+    assert profile["version"] == 1
+    assert profile["profile"]["facts"] == [
+        {
+            **fact,
+            "provenance": [
+                {
+                    "kind": "manual_reviewed",
+                    "reviewed_at": "2026-08-09T00:00:00.000000+00:00",
+                }
+            ],
+        }
+    ]
+
+    saved_opportunity, opportunity_code = _request(
+        "resume_rescue.save_opportunity",
+        {
+            "employer": "Example Labs",
+            "title": "Reliability Engineer",
+            "source_text": "Improve service latency. Kubernetes is required.",
+            "source_url": "https://example.test/jobs/123",
+            "priorities": ["Prefer measured evidence."],
+            "locale": "en-US",
+            "captured_at": "2026-08-09T01:00:00Z",
+        },
+    )
+    assert opportunity_code == 0
+    opportunity = saved_opportunity["result"]["opportunity"]
+
+    composed, composed_code = _request(
+        "resume_rescue.compose_exact",
+        {
+            "profile_id": profile["id"],
+            "opportunity_id": opportunity["id"],
+            "sections": [{"kind": "experience", "fact_ids": ["fact-api"]}],
+            "requirements": [
+                {
+                    "id": "req-latency",
+                    "text": "Improve service latency.",
+                    "fact_ids": ["fact-api"],
+                },
+                {
+                    "id": "req-kubernetes",
+                    "text": "Kubernetes is required.",
+                    "fact_ids": [],
+                },
+            ],
+        },
+    )
+    assert composed_code == 0
+    projection = composed["result"]["projection"]
+    assert projection["artifact"]["action_capability"] == "none"
+    assert projection["artifact"]["sections"][0]["items"][0]["text"] == fact["text"]
+    assert projection["artifact"]["missing_evidence"] == [
+        {"requirement_id": "req-kubernetes", "text": "Kubernetes is required."}
+    ]
+
+    state, state_code = _request("resume_rescue.state")
+    assert state_code == 0
+    assert state["result"]["enabled"] is True
+    assert state["result"]["profiles"] == [profile]
+    assert state["result"]["opportunities"] == [opportunity]
+    assert state["result"]["projections"] == [projection]
+
+    changed, changed_code = _request(
+        "resume_rescue.save_profile",
+        {
+            "profile_id": "primary-profile",
+            "display_name": "Ada Example",
+            "locale": "en-US",
+            "facts": [{**fact, "text": "Reduced API p95 latency in a reviewed test."}],
+            "conflicts": [],
+            "expected_version": profile["version"],
+        },
+    )
+    assert changed_code == 0
+    assert changed["result"]["profile"]["version"] == 2
+    stale_state, stale_state_code = _request("resume_rescue.state")
+    assert stale_state_code == 0
+    assert stale_state["result"]["projections"] == []
+
+    stale, stale_code = _request(
+        "resume_rescue.save_profile",
+        {
+            "profile_id": "primary-profile",
+            "display_name": "Ada Example",
+            "locale": "en-US",
+            "facts": [{**fact, "text": "A stale third revision."}],
+            "conflicts": [],
+            "expected_version": 1,
+        },
+    )
+    assert stale_code == 2
+    assert stale["error"]["code"] == "VERSION_CONFLICT"
+
+
+def test_resume_rescue_bridge_is_disabled_and_closed_by_default(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    state, state_code = _request("resume_rescue.state")
+    assert state_code == 0
+    assert state["result"] == {
+        "enabled": False,
+        "profiles": [],
+        "opportunities": [],
+        "projections": [],
+    }
+
+    rejected, rejected_code = _request(
+        "resume_rescue.save_profile",
+        {
+            "profile_id": "profile",
+            "display_name": "Ada",
+            "locale": "",
+            "facts": [],
+            "conflicts": [],
+            "unknown": True,
+        },
+    )
+    assert rejected_code == 2
+    assert rejected["error"]["code"] == "INVALID_PARAMS"
 
 
 def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(
