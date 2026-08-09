@@ -25,6 +25,7 @@ import pdfplumber
 from defusedxml import ElementTree as DefusedElementTree
 from pdfminer.pdfdocument import PDFPasswordIncorrect
 
+from ..packaged_entry import DOCUMENT_WORKER, worker_command
 from ..provenance.models import canonical_digest
 from .models import (
     VALID_CONFIDENTIALITY,
@@ -207,7 +208,12 @@ def _run_extraction_worker(source: bytes, *, source_format: str) -> DocumentImpo
 
 
 def _document_worker_command() -> list[str]:
-    return [sys.executable, "-m", "openchronicle.resume_rescue.document_worker"]
+    return list(
+        worker_command(
+            DOCUMENT_WORKER,
+            [sys.executable, "-m", "openchronicle.resume_rescue.document_worker"],
+        )
+    )
 
 
 def _worker_environment() -> dict[str, str]:

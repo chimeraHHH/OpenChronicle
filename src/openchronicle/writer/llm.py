@@ -19,6 +19,7 @@ from typing import Any
 
 from ..config import Config, resolve_api_key
 from ..logger import get
+from ..packaged_entry import PROVIDER_WORKER, worker_command
 
 logger = get("openchronicle.writer")
 
@@ -565,11 +566,14 @@ def _unregister_provider_process(managed: _ManagedProviderProcess) -> None:
 
 def _provider_worker_command() -> tuple[str, ...]:
     """Return an argv with no request data or credentials."""
-    return (
-        sys.executable,
-        "-c",
-        "from openchronicle.writer.llm import _provider_worker_main; "
-        "_provider_worker_main()",
+    return worker_command(
+        PROVIDER_WORKER,
+        (
+            sys.executable,
+            "-c",
+            "from openchronicle.writer.llm import _provider_worker_main; "
+            "_provider_worker_main()",
+        ),
     )
 
 

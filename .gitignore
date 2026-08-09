@@ -15,6 +15,7 @@ build/
 apps/desktop/node_modules/
 apps/desktop/dist/
 apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/
 
 # Editors / OS
 .DS_Store
