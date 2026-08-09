@@ -8,12 +8,26 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 4 adds the bounded Prompt Rescue review
-// surface without adding paste, submit, or target-application capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 4 as const;
+// WebView result projection. Version 5 adds exact macOS selection receipts
+// without adding paste, submit, or target-application capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 5 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
+export type PromptRescueSourceKind = "manual_paste" | "macos_selection";
+
+export interface PromptRescueSelectionBinding {
+  schema_version: 1;
+  captured_at: string;
+  app_name: string;
+  bundle_id: string;
+  pid: number;
+  window_title: string;
+  element_role: string;
+  element_subrole: string;
+  selection_location: number;
+  selection_length: number;
+}
 
 export interface PromptRescueOutput {
   schema_version: 1;
@@ -28,7 +42,7 @@ export interface PromptRescueOutput {
 export interface PromptRescueJobSummary {
   id: string;
   status: PromptRescueStatus;
-  source_kind: "manual_paste";
+  source_kind: PromptRescueSourceKind;
   rough_prompt_preview: string;
   model_identity: string;
   provider_location: PromptRescueProviderLocation;
@@ -43,6 +57,7 @@ export interface PromptRescueJobSummary {
 export interface PromptRescueJob
   extends Omit<PromptRescueJobSummary, "rough_prompt_preview"> {
   rough_prompt: string;
+  source_binding: PromptRescueSelectionBinding | null;
   target: string;
   audience: string;
   constraints: string[];

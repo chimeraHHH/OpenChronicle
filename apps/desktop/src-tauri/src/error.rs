@@ -38,6 +38,26 @@ impl DesktopError {
                 "VERSION_CONFLICT",
                 "The record changed. Refresh before trying again.",
             ),
+            "ACCESSIBILITY_REQUIRED" => Self::new(
+                "ACCESSIBILITY_REQUIRED",
+                "Accessibility permission is required to read the explicit selection.",
+            ),
+            "NO_EXACT_SELECTION" => Self::new(
+                "NO_EXACT_SELECTION",
+                "Select one non-empty text range in another app and try again.",
+            ),
+            "SELECTION_EXCLUDED" => Self::new(
+                "SELECTION_EXCLUDED",
+                "The selected source is excluded by the local privacy boundary.",
+            ),
+            "SELECTION_CHANGED" => Self::new(
+                "SELECTION_CHANGED",
+                "The selected source changed before it could be bound.",
+            ),
+            "SELECTION_UNAVAILABLE" => Self::new(
+                "SELECTION_UNAVAILABLE",
+                "An exact external text selection is not currently available.",
+            ),
             "STALE_PURGE_PLAN" => Self::new(
                 "STALE_PURGE_PLAN",
                 "The forget preview changed. Review the updated impact before continuing.",

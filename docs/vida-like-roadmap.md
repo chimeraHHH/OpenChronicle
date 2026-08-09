@@ -220,16 +220,20 @@ privacy UX is validated on a signed macOS build.
   complete. Its durable, lease-fenced backend now accepts an honestly labeled
   manual-paste source, records model/provider disclosure and provenance, calls
   a strict JSON/no-tool generator, and supports bounded retry, CAS edit, and
-  hard delete. Protocol v4 now provides provider disclosure, manual-paste
+  hard delete. Protocol v5 now provides provider disclosure, manual-paste
   composition, asynchronous status, side-by-side review/edit, explicit copy,
-  retry, and native-confirmed delete in the desktop shell. The exact macOS
-  selection adapter remains; manual paste does not satisfy that gate by itself.
+  retry, and native-confirmed delete in the desktop shell. A global
+  `Command-Shift-Space` path now captures a double-fenced `AXSelectedText`
+  receipt before focusing OpenChronicle, persists its app/window/element/range
+  binding, and never falls back to clipboard or whole-field text. Live TCC
+  acceptance across the supported app matrix remains before this checkbox can
+  close.
   The frozen 17-case adversarial dataset, deterministic grader, and raw-input
   negative-control report now exist under `benchmarks/vida-prompt-rescue-v1`.
   Its explicit provider runner shares the production template, no-tool call,
   strict output validator, model/location disclosure, and closed failure codes.
   A reachable enabled provider is still required to publish a real comparison;
-  the next implementation gate is exact macOS selection binding.
+  the next selection gate is live TCC/app-matrix acceptance.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
   send/submit capability.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.

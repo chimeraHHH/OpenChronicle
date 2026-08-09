@@ -9,6 +9,7 @@ import pytest
 
 from openchronicle import config as config_mod
 from openchronicle.prompt_rescue import store
+from openchronicle.prompt_rescue.selection import SelectionReceipt
 from openchronicle.prompt_rescue.service import PromptRescueService
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef
@@ -55,6 +56,23 @@ def _output(improved: str = "Write a concise, evidence-backed release note.") ->
         "missing_context": ["Which release version should the note name?"],
         "changes": ["Made the requested deliverable and quality bar explicit."],
     }
+
+
+def _selection(**updates) -> SelectionReceipt:
+    values = {
+        "selected_text": "draft a launch plan",
+        "captured_at": "2026-08-09T12:00:00Z",
+        "app_name": "Notes",
+        "bundle_id": "com.apple.Notes",
+        "pid": 123,
+        "window_title": "Launch notes",
+        "element_role": "AXTextArea",
+        "element_subrole": "",
+        "selection_location": 4,
+        "selection_length": 19,
+    }
+    values.update(updates)
+    return SelectionReceipt(**values)
 
 
 def test_prompt_rescue_queues_idempotently_and_prepares_no_action_artifact(
@@ -108,6 +126,78 @@ def test_prompt_rescue_queues_idempotently_and_prepares_no_action_artifact(
         assert sources == [ready.input_ref]
         assert provenance_store.is_current(conn, ready.input_ref)
         assert service.list() == [ready]
+
+
+def test_prompt_rescue_selection_binding_is_durable_idempotent_and_policy_current(
+    ac_root: Path,
+) -> None:
+    cfg = _cfg()
+    with fts.cursor() as conn:
+        service = PromptRescueService(conn, cfg)
+        first, created = service.queue_selection(_selection())
+        replay, replay_created = service.queue_selection(_selection())
+        moved, moved_created = service.queue_selection(
+            _selection(selection_location=8, selection_length=19)
+        )
+
+        assert created is True
+        assert replay_created is False
+        assert replay == first
+        assert moved_created is True
+        assert moved.id != first.id
+        assert first.source_kind == "macos_selection"
+        assert first.rough_prompt == "draft a launch plan"
+        assert first.source_binding["bundle_id"] == "com.apple.Notes"
+        assert first.source_binding["selection_location"] == 4
+
+        conn.execute(
+            "UPDATE prompt_rescue_jobs SET source_binding_json='{}' WHERE id=?",
+            (moved.id,),
+        )
+        assert store.get(conn, moved.id) is None
+
+        cfg.capture.excluded_bundle_ids = ["com.apple.notes"]
+        assert service.get(first.id) is None
+        assert service.list() == []
+
+
+def test_prompt_rescue_v1_manual_rows_migrate_without_digest_change(ac_root: Path) -> None:
+    cfg = _cfg()
+    with fts.cursor() as conn:
+        service = PromptRescueService(conn, cfg)
+        original, _created = service.queue(rough_prompt="preserve the manual source")
+        current_sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='prompt_rescue_jobs'"
+        ).fetchone()["sql"]
+        legacy_sql = current_sql.replace(
+            "CHECK (source_kind IN ('manual_paste', 'macos_selection'))",
+            "CHECK (source_kind IN ('manual_paste'))",
+        ).replace("    source_binding_json TEXT NOT NULL DEFAULT '{}',\n", "")
+        columns = [
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(prompt_rescue_jobs)").fetchall()
+            if row["name"] != "source_binding_json"
+        ]
+        projection = ", ".join(columns)
+        conn.execute("DROP INDEX idx_prompt_rescue_queue")
+        conn.execute("DROP INDEX idx_prompt_rescue_recent")
+        conn.execute("ALTER TABLE prompt_rescue_jobs RENAME TO prompt_rescue_jobs_v2")
+        conn.execute(legacy_sql)
+        conn.execute(
+            f"INSERT INTO prompt_rescue_jobs({projection}) "
+            f"SELECT {projection} FROM prompt_rescue_jobs_v2"
+        )
+        conn.execute("DROP TABLE prompt_rescue_jobs_v2")
+
+        store.ensure_schema(conn)
+        migrated = store.get(conn, original.id)
+        store.ensure_schema(conn)
+
+        assert migrated is not None
+        assert migrated.source_kind == "manual_paste"
+        assert migrated.source_binding == {}
+        assert migrated.source_digest == original.source_digest
+        assert store.get(conn, original.id) == migrated
 
 
 def test_prompt_rescue_rejects_unknown_output_fields_then_retries(

@@ -175,8 +175,10 @@ excluded-data egress, and zero successful source-text instruction overrides.
    output validator. A real provider corpus remains unreported because no
    enabled reachable provider was available in the local acceptance
    environment; no score is synthesized.
-4. macOS exact focused-selection adapter with secure-field/policy/identity
-   fencing and live acceptance tests.
+4. **Implemented, pending live acceptance:** macOS exact focused-selection
+   adapter with secure-field/policy/identity fencing, durable binding, and a
+   global shortcut that captures before focusing the review app. The live TCC
+   app matrix is still required.
 
 Only after step 4 passes may the roadmap's “explicit selection binding” item be
 marked complete.

@@ -18,7 +18,9 @@ CREATE TABLE IF NOT EXISTS prompt_rescue_jobs (
     idempotency_key TEXT UNIQUE NOT NULL,
     status TEXT NOT NULL
         CHECK (status IN ('queued', 'leased', 'ready', 'failed')),
-    source_kind TEXT NOT NULL CHECK (source_kind IN ('manual_paste')),
+    source_kind TEXT NOT NULL
+        CHECK (source_kind IN ('manual_paste', 'macos_selection')),
+    source_binding_json TEXT NOT NULL DEFAULT '{}',
     rough_prompt TEXT NOT NULL,
     target TEXT NOT NULL DEFAULT '',
     audience TEXT NOT NULL DEFAULT '',
@@ -52,6 +54,19 @@ CREATE INDEX IF NOT EXISTS idx_prompt_rescue_recent
 
 VALID_STATUSES = {"queued", "leased", "ready", "failed"}
 VALID_ERRORS = {"", "provider_failed", "invalid_output", "input_changed", "cancelled"}
+VALID_SOURCE_KINDS = {"manual_paste", "macos_selection"}
+SELECTION_BINDING_FIELDS = {
+    "schema_version",
+    "captured_at",
+    "app_name",
+    "bundle_id",
+    "pid",
+    "window_title",
+    "element_role",
+    "element_subrole",
+    "selection_location",
+    "selection_length",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +75,7 @@ class PromptRescueJob:
     idempotency_key: str
     status: str
     source_kind: str
+    source_binding: dict[str, Any]
     rough_prompt: str
     target: str
     audience: str
@@ -98,9 +114,51 @@ class PromptRescueConflict(RuntimeError):
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
+    existing = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='prompt_rescue_jobs'"
+    ).fetchone()
+    if existing is not None:
+        table_sql = str(existing["sql"] if isinstance(existing, sqlite3.Row) else existing[0])
+        if "source_binding_json" not in table_sql or "macos_selection" not in table_sql:
+            _migrate_v1_schema(conn)
     for statement in SCHEMA.split(";"):
         if statement.strip():
             conn.execute(statement)
+
+
+def _migrate_v1_schema(conn: sqlite3.Connection) -> None:
+    columns = {
+        str(row[1]) for row in conn.execute("PRAGMA table_info(prompt_rescue_jobs)").fetchall()
+    }
+    if "source_binding_json" in columns or "source_kind" not in columns:
+        raise RuntimeError("unsupported Prompt Rescue schema")
+    with _atomic(conn, "prompt_rescue_schema_v2"):
+        conn.execute("DROP INDEX IF EXISTS idx_prompt_rescue_queue")
+        conn.execute("DROP INDEX IF EXISTS idx_prompt_rescue_recent")
+        conn.execute("ALTER TABLE prompt_rescue_jobs RENAME TO prompt_rescue_jobs_v1")
+        conn.execute(SCHEMA.split(";", 1)[0])
+        conn.execute(
+            """
+            INSERT INTO prompt_rescue_jobs(
+                id, idempotency_key, status, source_kind, source_binding_json,
+                rough_prompt, target, audience, constraints_json, desired_format,
+                source_digest, policy_digest, template_version, template_digest,
+                model_identity, provider_location, output_json, output_digest,
+                output_edited, error_code, attempt_count, lease_token,
+                lease_expires_at, created_at, created_at_us, updated_at, version,
+                projection_digest
+            )
+            SELECT id, idempotency_key, status, source_kind, '{}', rough_prompt,
+                   target, audience, constraints_json, desired_format,
+                   source_digest, policy_digest, template_version, template_digest,
+                   model_identity, provider_location, output_json, output_digest,
+                   output_edited, error_code, attempt_count, lease_token,
+                   lease_expires_at, created_at, created_at_us, updated_at, version,
+                   projection_digest
+              FROM prompt_rescue_jobs_v1
+            """
+        )
+        conn.execute("DROP TABLE prompt_rescue_jobs_v1")
 
 
 def source_digest(
@@ -111,18 +169,21 @@ def source_digest(
     audience: str,
     constraints: tuple[str, ...],
     desired_format: str,
+    source_binding: dict[str, Any] | None = None,
 ) -> str:
-    return canonical_digest(
-        {
-            "schema": "prompt-rescue-input-v1",
-            "source_kind": source_kind,
-            "rough_prompt": rough_prompt,
-            "target": target,
-            "audience": audience,
-            "constraints": list(constraints),
-            "desired_format": desired_format,
-        }
-    )
+    payload: dict[str, Any] = {
+        "schema": "prompt-rescue-input-v1",
+        "source_kind": source_kind,
+        "rough_prompt": rough_prompt,
+        "target": target,
+        "audience": audience,
+        "constraints": list(constraints),
+        "desired_format": desired_format,
+    }
+    if source_kind == "macos_selection":
+        payload["schema"] = "prompt-rescue-input-v2"
+        payload["source_binding"] = source_binding
+    return canonical_digest(payload)
 
 
 def create(
@@ -139,8 +200,10 @@ def create(
     template_digest: str,
     model_identity: str,
     provider_location: str,
+    source_binding: dict[str, Any] | None = None,
     now: datetime | None = None,
 ) -> tuple[PromptRescueJob, bool]:
+    binding = {} if source_binding is None else source_binding
     ensure_schema(conn)
     _validate_input(
         source_kind=source_kind,
@@ -154,6 +217,7 @@ def create(
         template_digest=template_digest,
         model_identity=model_identity,
         provider_location=provider_location,
+        source_binding=binding,
     )
     created = _aware(now or datetime.now(UTC))
     created_at = created.isoformat(timespec="microseconds")
@@ -165,6 +229,7 @@ def create(
         audience=audience,
         constraints=constraints,
         desired_format=desired_format,
+        source_binding=binding,
     )
     idempotency_key = canonical_digest(
         {
@@ -205,20 +270,21 @@ def create(
         conn.execute(
             """
             INSERT OR IGNORE INTO prompt_rescue_jobs(
-                id, idempotency_key, status, source_kind, rough_prompt,
+                id, idempotency_key, status, source_kind, source_binding_json, rough_prompt,
                 target, audience, constraints_json, desired_format,
                 source_digest, policy_digest, template_version, template_digest,
                 model_identity, provider_location, output_json, output_digest,
                 output_edited, error_code, attempt_count, lease_token,
                 lease_expires_at, created_at, created_at_us, updated_at,
                 version, projection_digest
-            ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '',
+            ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '',
                       0, '', 0, NULL, NULL, ?, ?, ?, 1, ?)
             """,
             (
                 job_id,
                 idempotency_key,
                 source_kind,
+                json.dumps(binding, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
                 rough_prompt,
                 target,
                 audience,
@@ -599,6 +665,7 @@ def _update(
 def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
     try:
         constraints_value = json.loads(row["constraints_json"])
+        binding_value = json.loads(row["source_binding_json"])
         output_value = json.loads(row["output_json"]) if row["output_json"] else None
         created = _aware(datetime.fromisoformat(row["created_at"]))
         lease_expires = (
@@ -609,9 +676,10 @@ def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
         if (
             not isinstance(constraints_value, list)
             or not all(isinstance(value, str) for value in constraints_value)
+            or not _valid_source_binding(row["source_kind"], binding_value)
             or (output_value is not None and not isinstance(output_value, dict))
             or row["status"] not in VALID_STATUSES
-            or row["source_kind"] != "manual_paste"
+            or row["source_kind"] not in VALID_SOURCE_KINDS
             or row["provider_location"] not in {"local", "remote_or_unknown"}
             or row["error_code"] not in VALID_ERRORS
             or type(row["template_version"]) is not int
@@ -639,6 +707,7 @@ def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
             audience=row["audience"],
             constraints=constraints,
             desired_format=row["desired_format"],
+            source_binding=binding_value,
         )
         if row["source_digest"] != expected_source:
             return None
@@ -647,6 +716,7 @@ def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
             idempotency_key=row["idempotency_key"],
             status=row["status"],
             source_kind=row["source_kind"],
+            source_binding=binding_value,
             rough_prompt=row["rough_prompt"],
             target=row["target"],
             audience=row["audience"],
@@ -788,7 +858,8 @@ def _validate_input(**values: Any) -> None:
         raise ValueError("prompt rescue input is invalid")
     constraints = values["constraints"]
     if (
-        values["source_kind"] != "manual_paste"
+        values["source_kind"] not in VALID_SOURCE_KINDS
+        or not _valid_source_binding(values["source_kind"], values["source_binding"])
         or not values["rough_prompt"].strip()
         or not values["policy_digest"]
         or type(values["template_version"]) is not int
@@ -800,6 +871,48 @@ def _validate_input(**values: Any) -> None:
         or not all(isinstance(value, str) and "\x00" not in value for value in constraints)
     ):
         raise ValueError("prompt rescue input is invalid")
+
+
+def _valid_source_binding(source_kind: object, binding: object) -> bool:
+    if not isinstance(binding, dict):
+        return False
+    if source_kind == "manual_paste":
+        return not binding
+    if source_kind != "macos_selection" or set(binding) != SELECTION_BINDING_FIELDS:
+        return False
+    strings = {
+        "captured_at": 100,
+        "app_name": 512,
+        "bundle_id": 512,
+        "window_title": 512,
+        "element_role": 128,
+        "element_subrole": 128,
+    }
+    if binding.get("schema_version") != 1:
+        return False
+    for name, maximum in strings.items():
+        value = binding.get(name)
+        if not isinstance(value, str) or len(value) > maximum or "\x00" in value:
+            return False
+    if not binding["captured_at"].strip() or not binding["bundle_id"].strip():
+        return False
+    if not binding["element_role"].strip():
+        return False
+    try:
+        captured_at = _aware(datetime.fromisoformat(binding["captured_at"].replace("Z", "+00:00")))
+    except ValueError:
+        return False
+    if captured_at.tzinfo is None:
+        return False
+    integer_bounds = {
+        "pid": (1, 2_147_483_647),
+        "selection_location": (0, 2_147_483_647),
+        "selection_length": (1, 2_147_483_647),
+    }
+    return all(
+        type(binding.get(name)) is int and minimum <= binding[name] <= maximum
+        for name, (minimum, maximum) in integer_bounds.items()
+    )
 
 
 @contextlib.contextmanager

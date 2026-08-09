@@ -181,6 +181,7 @@ export function promptRescueJob(
     id: summary.id,
     status: summary.status,
     source_kind: "manual_paste",
+    source_binding: null,
     rough_prompt: "make a release note",
     target: "Engineering",
     audience: "Reviewers",
@@ -420,11 +421,11 @@ export function bridgeSuggestionMutation(value: Suggestion = suggestion()) {
 }
 
 export function bridgePromptRescueJob(value: PromptRescueJob = promptRescueJob()) {
-  return { job: value };
+  return { job: { ...value, source_binding: value.source_binding ?? {} } };
 }
 
 export function bridgePromptRescueQueue(value: PromptRescueJob = promptRescueJob()) {
-  return { job: value, created: true };
+  return { job: { ...value, source_binding: value.source_binding ?? {} }, created: true };
 }
 
 export function bridgeWrapGet(value: DailyWrap = wrapDetail()) {

@@ -238,6 +238,15 @@ export function PromptRescuePage({
         </section>
       ) : null}
 
+      <section className="info-panel">
+        <h2>Import an exact macOS selection</h2>
+        <p>
+          In another app, select one text range and press <kbd>⌘</kbd> <kbd>⇧</kbd>{" "}
+          <kbd>Space</kbd>. OpenChronicle reads only that stable AX selection, queues it, and
+          opens this review. It never falls back to the clipboard or the whole text field.
+        </p>
+      </section>
+
       {error ? <div className="global-error" role="alert"><UntrustedText>{error}</UntrustedText></div> : null}
       {notice ? <div className="success-panel" role="status">{notice}</div> : null}
 
@@ -319,7 +328,10 @@ export function PromptRescuePage({
                   <span>{formatDateTime(job.updated_at)}</span>
                 </span>
                 <strong><UntrustedText>{job.rough_prompt_preview}</UntrustedText></strong>
-                <small>Manual paste · attempt {job.attempt_count}</small>
+                <small>
+                  {job.source_kind === "macos_selection" ? "Bound macOS selection" : "Manual paste"}
+                  {" · "}attempt {job.attempt_count}
+                </small>
               </button>
             ))
           )}
@@ -337,11 +349,32 @@ export function PromptRescuePage({
             <>
               <div className="detail-header">
                 <div>
-                  <p className="eyebrow">Manual paste · {formatDateTime(detail.created_at)}</p>
+                  <p className="eyebrow">
+                    {detail.source_kind === "macos_selection" ? "Bound macOS selection" : "Manual paste"}
+                    {" · "}{formatDateTime(detail.created_at)}
+                  </p>
                   <h2>Review prepared prompt</h2>
                 </div>
                 <StatusBadge tone={statusTone(detail.status)}>{detail.status}</StatusBadge>
               </div>
+
+              {detail.source_binding ? (
+                <section className="info-panel" aria-label="Exact selection source">
+                  <h3>Exact selection receipt</h3>
+                  <p>
+                    <strong><UntrustedText>{detail.source_binding.app_name || "Unnamed app"}</UntrustedText></strong>
+                    {" · "}<UntrustedText>{detail.source_binding.bundle_id}</UntrustedText>
+                    {" · PID "}{detail.source_binding.pid}
+                  </p>
+                  <p>
+                    Window: <UntrustedText>{detail.source_binding.window_title || "Untitled"}</UntrustedText>
+                    {" · "}<UntrustedText>{detail.source_binding.element_role}</UntrustedText>
+                    {" · range "}{detail.source_binding.selection_location}
+                    {"+"}{detail.source_binding.selection_length}
+                    {" · "}{formatDateTime(detail.source_binding.captured_at)}
+                  </p>
+                </section>
+              ) : null}
 
               <div className="prompt-rescue__comparison">
                 <label className="field">

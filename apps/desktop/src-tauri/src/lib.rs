@@ -1,16 +1,19 @@
 mod bridge;
 mod commands;
 mod error;
+mod selection_shortcut;
 mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             tray::install(app)?;
+            selection_shortcut::install(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

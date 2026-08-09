@@ -18,6 +18,7 @@ from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, canonical_digest
 from ..writer import llm as llm_mod
 from . import store
+from .selection import SelectionReceipt
 
 TEMPLATE_VERSION = 1
 _OUTPUT_FIELDS = {
@@ -60,6 +61,48 @@ class PromptRescueService:
         constraints: list[str] | tuple[str, ...] = (),
         desired_format: str = "",
     ) -> tuple[store.PromptRescueJob, bool]:
+        return self._queue(
+            source_kind="manual_paste",
+            source_binding={},
+            rough_prompt=rough_prompt,
+            target=target,
+            audience=audience,
+            constraints=constraints,
+            desired_format=desired_format,
+        )
+
+    def queue_selection(
+        self,
+        receipt: SelectionReceipt,
+        *,
+        target: str = "",
+        audience: str = "",
+        constraints: list[str] | tuple[str, ...] = (),
+        desired_format: str = "",
+    ) -> tuple[store.PromptRescueJob, bool]:
+        if not isinstance(receipt, SelectionReceipt):
+            raise ValueError("prompt rescue selection receipt is invalid")
+        return self._queue(
+            source_kind="macos_selection",
+            source_binding=receipt.binding,
+            rough_prompt=receipt.selected_text,
+            target=target,
+            audience=audience,
+            constraints=constraints,
+            desired_format=desired_format,
+        )
+
+    def _queue(
+        self,
+        *,
+        source_kind: str,
+        source_binding: dict[str, Any],
+        rough_prompt: str,
+        target: str,
+        audience: str,
+        constraints: list[str] | tuple[str, ...],
+        desired_format: str,
+    ) -> tuple[store.PromptRescueJob, bool]:
         validate_config(self.cfg)
         if not self.cfg.prompt_rescue.enabled:
             raise ValueError("prompt rescue is disabled")
@@ -75,7 +118,8 @@ class PromptRescueService:
         provider = self.provider_summary()
         return store.create(
             self.conn,
-            source_kind="manual_paste",
+            source_kind=source_kind,
+            source_binding=source_binding,
             rough_prompt=normalized["rough_prompt"],
             target=normalized["target"],
             audience=normalized["audience"],
@@ -214,7 +258,20 @@ class PromptRescueService:
         )
 
     def _current(self, job: store.PromptRescueJob) -> bool:
-        return _job_is_current(self.conn, job)
+        if not _job_is_current(self.conn, job):
+            return False
+        if job.source_kind != "macos_selection":
+            return True
+        if job.policy_digest != privacy_policy.stored_observation_policy_digest(self.cfg.capture):
+            return False
+        binding = job.source_binding
+        decision = privacy_policy.evaluate_window(
+            self.cfg.capture,
+            app_name=binding["app_name"],
+            bundle_id=binding["bundle_id"],
+            window_title=binding["window_title"],
+        )
+        return decision.allowed and not privacy_policy.has_url_policy(self.cfg.capture)
 
 
 def provider_summary(cfg: Config) -> dict[str, str]:

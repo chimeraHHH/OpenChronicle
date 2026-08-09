@@ -22,6 +22,7 @@ from openchronicle.desktop_bridge import (
 )
 from openchronicle.memory_candidates import store as candidate_store
 from openchronicle.prompt_rescue import store as prompt_rescue_store
+from openchronicle.prompt_rescue.selection import SelectionCaptureError, SelectionReceipt
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import (
     EvidenceRef,
@@ -547,6 +548,67 @@ def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(
     missing, missing_code = _request("prompt_rescue.get", {"job_id": ready.id})
     assert missing_code == 2
     assert missing["error"]["code"] == "NOT_FOUND"
+
+
+def test_prompt_rescue_selection_bridge_is_exact_bound_and_fail_closed(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.prompt_rescue.enabled = True
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    receipt = SelectionReceipt(
+        selected_text="draft a release announcement",
+        captured_at="2026-08-09T12:00:00Z",
+        app_name="Notes",
+        bundle_id="com.apple.Notes",
+        pid=123,
+        window_title="Release",
+        element_role="AXTextArea",
+        element_subrole="",
+        selection_location=7,
+        selection_length=28,
+    )
+    monkeypatch.setattr(desktop_bridge, "capture_selection", lambda _cfg: receipt)
+
+    queued, queue_code = _request("prompt_rescue.queue_selection")
+
+    assert queue_code == 0
+    job = queued["result"]["job"]
+    assert job["source_kind"] == "macos_selection"
+    assert job["rough_prompt"] == receipt.selected_text
+    assert job["source_binding"] == receipt.binding
+    assert job["output"] is None
+
+    def excluded(_cfg):
+        raise SelectionCaptureError("secure_field")
+
+    monkeypatch.setattr(desktop_bridge, "capture_selection", excluded)
+    rejected, rejected_code = _request("prompt_rescue.queue_selection")
+    assert rejected_code == 2
+    assert rejected["error"]["code"] == "SELECTION_EXCLUDED"
+    assert "secure" not in rejected["error"]["message"].casefold()
+
+
+def test_prompt_rescue_selection_does_not_capture_while_disabled(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    calls = 0
+
+    def capture(_cfg):
+        nonlocal calls
+        calls += 1
+        raise AssertionError("selection must not be read")
+
+    monkeypatch.setattr(desktop_bridge, "capture_selection", capture)
+    rejected, rejected_code = _request("prompt_rescue.queue_selection")
+
+    assert rejected_code == 2
+    assert rejected["error"]["code"] == "INVALID_PARAMS"
+    assert calls == 0
 
 
 def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(

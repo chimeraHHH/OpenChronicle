@@ -14,6 +14,8 @@ import type {
   PromptRescueJobSummary,
   PromptRescueOutput,
   PromptRescueProviderLocation,
+  PromptRescueSelectionBinding,
+  PromptRescueSourceKind,
   PromptRescueStatus,
   ProvenanceTrace,
   ResolvedEvidence,
@@ -58,6 +60,10 @@ const promptRescueStatuses = new Set<PromptRescueStatus>([
 const promptRescueProviderLocations = new Set<PromptRescueProviderLocation>([
   "local",
   "remote_or_unknown",
+]);
+const promptRescueSourceKinds = new Set<PromptRescueSourceKind>([
+  "manual_paste",
+  "macos_selection",
 ]);
 const wrapCategories: WrapCategory[] = [
   "completed",
@@ -355,6 +361,60 @@ function promptRescueProviderLocation(value: unknown): PromptRescueProviderLocat
   );
 }
 
+function promptRescueSourceKind(value: unknown): PromptRescueSourceKind {
+  return allowedString(value, promptRescueSourceKinds, "Prompt Rescue source kind");
+}
+
+function promptRescueBinding(
+  value: unknown,
+  sourceKind: PromptRescueSourceKind,
+): PromptRescueSelectionBinding | null {
+  const raw = objectValue(value, "Prompt Rescue source binding");
+  if (sourceKind === "manual_paste") {
+    if (Object.keys(raw).length !== 0) return protocolError("Prompt Rescue source binding");
+    return null;
+  }
+  const fields = new Set([
+    "schema_version",
+    "captured_at",
+    "app_name",
+    "bundle_id",
+    "pid",
+    "window_title",
+    "element_role",
+    "element_subrole",
+    "selection_location",
+    "selection_length",
+  ]);
+  if (Object.keys(raw).length !== fields.size || Object.keys(raw).some((key) => !fields.has(key))) {
+    return protocolError("Prompt Rescue source binding");
+  }
+  if (numberValue(raw.schema_version, "Prompt Rescue binding schema") !== 1) {
+    return protocolError("Prompt Rescue source binding");
+  }
+  const bundleId = stringValue(raw.bundle_id, "Prompt Rescue source bundle");
+  const elementRole = stringValue(raw.element_role, "Prompt Rescue source role");
+  const pid = numberValue(raw.pid, "Prompt Rescue source pid");
+  const location = numberValue(raw.selection_location, "Prompt Rescue selection location");
+  const length = numberValue(raw.selection_length, "Prompt Rescue selection length");
+  if (!bundleId || !elementRole || !Number.isInteger(pid) || pid <= 0 ||
+      !Number.isInteger(location) || location < 0 || !Number.isInteger(length) || length <= 0) {
+    return protocolError("Prompt Rescue source binding");
+  }
+  return {
+    schema_version: 1,
+    captured_at: stringValue(raw.captured_at, "Prompt Rescue capture time"),
+    app_name: stringValue(raw.app_name, "Prompt Rescue source app"),
+    bundle_id: bundleId,
+    pid,
+    window_title: stringValue(raw.window_title, "Prompt Rescue source window"),
+    element_role: elementRole,
+    element_subrole: stringValue(raw.element_subrole, "Prompt Rescue source subrole"),
+    selection_location: location,
+    selection_length: length,
+  };
+}
+
 function promptRescueOutput(value: unknown): PromptRescueOutput | null {
   if (value === null) return null;
   const raw = objectValue(value, "Prompt Rescue output");
@@ -380,13 +440,11 @@ function promptRescueOutput(value: unknown): PromptRescueOutput | null {
 
 function promptRescueSummary(value: unknown): PromptRescueJobSummary {
   const raw = objectValue(value, "Prompt Rescue summary");
-  if (stringValue(raw.source_kind, "Prompt Rescue source kind") !== "manual_paste") {
-    return protocolError("Prompt Rescue source kind");
-  }
+  const sourceKind = promptRescueSourceKind(raw.source_kind);
   return {
     id: stringValue(raw.id, "Prompt Rescue id"),
     status: promptRescueStatus(raw.status),
-    source_kind: "manual_paste",
+    source_kind: sourceKind,
     rough_prompt_preview: stringValue(raw.rough_prompt_preview, "Prompt Rescue preview"),
     model_identity: stringValue(raw.model_identity, "Prompt Rescue model"),
     provider_location: promptRescueProviderLocation(raw.provider_location),
@@ -401,9 +459,7 @@ function promptRescueSummary(value: unknown): PromptRescueJobSummary {
 
 function promptRescueJob(value: unknown): PromptRescueJob {
   const raw = objectValue(value, "Prompt Rescue job");
-  if (stringValue(raw.source_kind, "Prompt Rescue source kind") !== "manual_paste") {
-    return protocolError("Prompt Rescue source kind");
-  }
+  const sourceKind = promptRescueSourceKind(raw.source_kind);
   const output = promptRescueOutput(raw.output);
   const status = promptRescueStatus(raw.status);
   if ((status === "ready") !== (output !== null)) {
@@ -412,7 +468,8 @@ function promptRescueJob(value: unknown): PromptRescueJob {
   return {
     id: stringValue(raw.id, "Prompt Rescue id"),
     status,
-    source_kind: "manual_paste",
+    source_kind: sourceKind,
+    source_binding: promptRescueBinding(raw.source_binding, sourceKind),
     rough_prompt: stringValue(raw.rough_prompt, "rough prompt"),
     target: stringValue(raw.target, "Prompt Rescue target"),
     audience: stringValue(raw.audience, "Prompt Rescue audience"),

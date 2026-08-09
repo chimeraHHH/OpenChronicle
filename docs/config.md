@@ -376,7 +376,11 @@ stores a closed prepared-artifact schema. A ready artifact can be reviewed,
 edited, copied, retried after a visible sanitized failure, or permanently
 deleted. It has no capability to paste into another app or submit on the
 user's behalf. The current slice does not claim that pasted text is bound to
-an external macOS selection; that requires a later trusted selection adapter.
+an external macOS selection. On macOS, `Command-Shift-Space` instead invokes a
+read-only Accessibility adapter while the source app still owns focus; a
+successful job records the exact app/window/element/range receipt and is
+labeled `macos_selection`. Secure, empty, multiple, changing, excluded, and
+URL-policy-unverifiable selections are rejected without clipboard fallback.
 The frozen Prompt Rescue evaluator never invokes this model unless
 `--run-configured-provider` is supplied and this workflow is enabled. That
 explicit runner records a complete raw corpus under the caller-selected path;

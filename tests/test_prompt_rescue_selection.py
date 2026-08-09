@@ -7,7 +7,12 @@ import pytest
 
 from openchronicle import config as config_mod
 from openchronicle.capture.ax_capture import _BoundedProcessResult
-from openchronicle.prompt_rescue.selection import SelectionCaptureError, capture_selection
+from openchronicle.prompt_rescue import selection as selection_mod
+from openchronicle.prompt_rescue.selection import (
+    SelectionCaptureError,
+    capture_selection,
+    prepare_selection_helper,
+)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
@@ -146,3 +151,33 @@ def test_native_selection_helper_has_no_clipboard_or_whole_value_fallback() -> N
     assert "kAXValueAttribute" not in source
     assert "NSPasteboard" not in source
     assert "AXUIElementSetAttributeValue" not in source
+
+
+def test_selection_helper_builds_in_writable_runtime_and_capture_never_compiles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENCHRONICLE_AX_SELECTION_HELPER", raising=False)
+    monkeypatch.setattr(selection_mod.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(selection_mod.paths, "root", lambda: tmp_path)
+    compiled: list[tuple[Path, Path]] = []
+
+    def compile_helper(source: Path, binary: Path) -> None:
+        compiled.append((source, binary))
+        binary.write_bytes(b"helper")
+        binary.chmod(0o700)
+
+    monkeypatch.setattr(selection_mod, "_maybe_compile", compile_helper)
+    helper = prepare_selection_helper()
+
+    expected = tmp_path / "runtime" / "helpers" / "mac-ax-selection"
+    assert helper == expected
+    assert compiled == [(selection_mod._selection_helper_source(), expected)]
+    assert expected.parent.stat().st_mode & 0o777 == 0o700
+    assert expected.stat().st_mode & 0o777 == 0o700
+
+    def reject_compile(*_args, **_kwargs) -> None:
+        raise AssertionError("the desktop request path must never invoke swiftc")
+
+    monkeypatch.setattr(selection_mod, "_maybe_compile", reject_compile)
+    receipt = capture_selection(config_mod.Config(), process_runner=_runner(_payload()))
+    assert receipt.selected_text == "Draft the launch prompt"

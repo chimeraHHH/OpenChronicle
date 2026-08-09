@@ -18,7 +18,9 @@ from .daily_wrap.service import DailyWrapService
 from .memory_candidates import store as candidate_store
 from .privacy.egress import privacy_egress_lock
 from .prompt_rescue import store as prompt_rescue_store
+from .prompt_rescue.selection import SelectionCaptureError, capture_selection
 from .prompt_rescue.service import PromptRescueService
+from .prompt_rescue.service import validate_config as validate_prompt_rescue
 from .provenance import store as provenance_store
 from .provenance.models import EvidenceRef
 from .services.capture_control import PauseStateConflict, set_paused
@@ -31,7 +33,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 MAX_REQUEST_BYTES = 64 * 1024
 
 
@@ -78,6 +80,8 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         return _error("VERSION_CONFLICT", "The suggestion changed."), 2
     except prompt_rescue_store.PromptRescueConflict:
         return _error("VERSION_CONFLICT", "The Prompt Rescue job changed."), 2
+    except SelectionCaptureError as exc:
+        return _selection_error(exc.code), 2
     except StalePurgePlan:
         return _error("STALE_PURGE_PLAN", "The deletion preview is stale."), 2
     except PurgeClosureUnverifiable:
@@ -144,6 +148,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "suggestion.transition": _suggestion_transition,
         "prompt_rescue.get": _prompt_rescue_get,
         "prompt_rescue.queue": _prompt_rescue_queue,
+        "prompt_rescue.queue_selection": _prompt_rescue_queue_selection,
         "prompt_rescue.edit": _prompt_rescue_edit,
         "prompt_rescue.retry": _prompt_rescue_retry,
         "prompt_rescue.delete": _prompt_rescue_delete,
@@ -224,6 +229,18 @@ def _prompt_rescue_queue(params: dict[str, Any]) -> dict[str, Any]:
             constraints=constraints,
             desired_format=desired_format,
         )
+        return {"job": _prompt_rescue_payload(job), "created": created}
+
+
+def _prompt_rescue_queue_selection(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params)
+    cfg = config_mod.load()
+    validate_prompt_rescue(cfg)
+    if not cfg.prompt_rescue.enabled:
+        raise ValueError("prompt rescue is disabled")
+    receipt = capture_selection(cfg)
+    with fts.cursor() as conn:
+        job, created = PromptRescueService(conn, cfg).queue_selection(receipt)
         return {"job": _prompt_rescue_payload(job), "created": created}
 
 
@@ -541,6 +558,7 @@ def _prompt_rescue_payload(job) -> dict[str, Any]:
         "id": str(job.id)[:128],
         "status": str(job.status)[:50],
         "source_kind": str(job.source_kind)[:50],
+        "source_binding": _bounded_prompt_rescue_binding(job.source_binding),
         "rough_prompt": str(job.rough_prompt)[:20_000],
         "target": str(job.target)[:500],
         "audience": str(job.audience)[:500],
@@ -555,6 +573,23 @@ def _prompt_rescue_payload(job) -> dict[str, Any]:
         "created_at": str(job.created_at)[:100],
         "updated_at": str(job.updated_at)[:100],
         "version": int(job.version),
+    }
+
+
+def _bounded_prompt_rescue_binding(binding: object) -> dict[str, Any]:
+    if not isinstance(binding, dict) or not binding:
+        return {}
+    return {
+        "schema_version": int(binding.get("schema_version") or 0),
+        "captured_at": str(binding.get("captured_at") or "")[:100],
+        "app_name": str(binding.get("app_name") or "")[:512],
+        "bundle_id": str(binding.get("bundle_id") or "")[:512],
+        "pid": int(binding.get("pid") or 0),
+        "window_title": str(binding.get("window_title") or "")[:512],
+        "element_role": str(binding.get("element_role") or "")[:128],
+        "element_subrole": str(binding.get("element_subrole") or "")[:128],
+        "selection_location": int(binding.get("selection_location") or 0),
+        "selection_length": int(binding.get("selection_length") or 0),
     }
 
 
@@ -810,6 +845,33 @@ def _error(code: str, message: str) -> dict[str, Any]:
         "ok": False,
         "error": {"code": code, "message": message},
     }
+
+
+def _selection_error(code: str) -> dict[str, Any]:
+    if code == "accessibility_untrusted":
+        return _error(
+            "ACCESSIBILITY_REQUIRED",
+            "Accessibility permission is required to read the explicit selection.",
+        )
+    if code in {"no_selection", "multiple_selection"}:
+        return _error(
+            "NO_EXACT_SELECTION",
+            "Select one non-empty text range in another app and try again.",
+        )
+    if code in {"secure_field", "privacy_denied", "url_policy_unverifiable"}:
+        return _error(
+            "SELECTION_EXCLUDED",
+            "The selected source is excluded by the local privacy boundary.",
+        )
+    if code == "focus_changed":
+        return _error(
+            "SELECTION_CHANGED",
+            "The selected source changed before it could be bound.",
+        )
+    return _error(
+        "SELECTION_UNAVAILABLE",
+        "An exact external text selection is not currently available.",
+    )
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ import {
   maliciousText,
   provenanceTrace,
   promptRescueJob,
+  promptRescueSummary,
   resolvedEvidence,
   snapshot,
   suggestion,
@@ -100,6 +101,56 @@ describe("trusted console", () => {
         String(command).includes("paste") || String(command).includes("submit"),
       ),
     ).toBe(false);
+  });
+
+  it("shows the global shortcut and exact selection receipt without an import button", async () => {
+    const user = userEvent.setup();
+    const binding = {
+      schema_version: 1 as const,
+      captured_at: "2026-08-09T12:00:00Z",
+      app_name: "Notes",
+      bundle_id: "com.apple.Notes",
+      pid: 123,
+      window_title: "Launch notes",
+      element_role: "AXTextArea",
+      element_subrole: "",
+      selection_location: 4,
+      selection_length: 27,
+    };
+    const summary = promptRescueSummary({ source_kind: "macos_selection" });
+    const detail = promptRescueJob({
+      source_kind: "macos_selection",
+      source_binding: binding,
+    });
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") {
+        return bridgeSnapshot(
+          snapshot({
+            prompt_rescue: {
+              ...snapshot().prompt_rescue,
+              jobs: [summary],
+            },
+          }),
+        );
+      }
+      if (command === "get_prompt_rescue") return bridgePromptRescueJob(detail);
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Prompt Rescue/i }));
+    const selectionHelp = screen
+      .getByRole("heading", { name: "Import an exact macOS selection" })
+      .closest("section");
+    expect(selectionHelp).not.toBeNull();
+    expect(selectionHelp).toHaveTextContent("press ⌘ ⇧ Space");
+    expect(screen.getByText(/never falls back to the clipboard/i)).toBeInTheDocument();
+    const receipt = await screen.findByLabelText("Exact selection source");
+    expect(within(receipt).getByText("Notes")).toBeInTheDocument();
+    expect(within(receipt).getByText("com.apple.Notes")).toBeInTheDocument();
+    expect(within(receipt).getByText(/Launch notes/)).toBeInTheDocument();
+    expect(within(receipt).getByText(/range 4\+27/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /import selection/i })).not.toBeInTheDocument();
   });
 
   it("queues the exact reviewed rough prompt through the bounded desktop command", async () => {

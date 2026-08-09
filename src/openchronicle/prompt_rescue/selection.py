@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .. import paths
 from ..capture.ax_capture import _BoundedProcessResult, _maybe_compile, _run_bounded_process
 from ..config import Config
 from ..privacy import policy as privacy_policy
@@ -132,6 +133,30 @@ def capture_selection(
     return receipt
 
 
+def prepare_selection_helper() -> Path | None:
+    """Build the bundled helper outside the five-second desktop bridge path."""
+    if platform.system() != "Darwin":
+        return None
+    if os.environ.get("OPENCHRONICLE_AX_SELECTION_HELPER"):
+        return _resolve_helper_path()
+
+    source = _selection_helper_source()
+    if source is None:
+        return _resolve_helper_path()
+    helper_dir = paths.root() / "runtime" / "helpers"
+    try:
+        helper_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        helper_dir.chmod(0o700)
+        binary = helper_dir / "mac-ax-selection"
+        _maybe_compile(source, binary)
+        if binary.is_file() and os.access(binary, os.X_OK):
+            binary.chmod(0o700)
+            return binary
+    except OSError:
+        return None
+    return None
+
+
 def _decode_payload(raw: bytes) -> dict[str, Any]:
     try:
         payload = json.loads(raw)
@@ -198,7 +223,7 @@ def _resolve_helper_path() -> Path | None:
         candidate = Path(override).expanduser().resolve()
         return candidate if candidate.is_file() and os.access(candidate, os.X_OK) else None
 
-    candidates: list[Path] = []
+    candidates = [paths.root() / "runtime" / "helpers" / "mac-ax-selection"]
     try:
         from importlib.resources import files as package_files
 
@@ -208,9 +233,21 @@ def _resolve_helper_path() -> Path | None:
         pass
     candidates.append(Path(__file__).resolve().parents[3] / "resources" / "mac-ax-selection")
     for binary in candidates:
-        source = binary.with_suffix(".swift")
-        if source.is_file():
-            _maybe_compile(source, binary)
         if binary.is_file() and os.access(binary, os.X_OK):
             return binary
     return None
+
+
+def _selection_helper_source() -> Path | None:
+    candidates: list[Path] = []
+    try:
+        from importlib.resources import files as package_files
+
+        candidates.append(
+            Path(str(package_files("openchronicle").joinpath("_bundled")))
+            / "mac-ax-selection.swift"
+        )
+    except (ModuleNotFoundError, ValueError):
+        pass
+    candidates.append(Path(__file__).resolve().parents[3] / "resources" / "mac-ax-selection.swift")
+    return next((candidate for candidate in candidates if candidate.is_file()), None)

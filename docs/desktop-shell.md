@@ -34,9 +34,10 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v4** retains the
-v2 immutable Daily Wrap projection, adds v3 side-effect-free suggestion review,
-and adds the v4 Prompt Rescue prepared-artifact surface. Older requests or
+The bridge protocol is versioned and allowlisted. Protocol **v5** retains the
+v2 immutable Daily Wrap projection, v3 side-effect-free suggestion review, and
+v4 manual Prompt Rescue surface, then adds a v5 exact-selection queue receipt.
+Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:
 
@@ -47,8 +48,9 @@ only:
 - two-phase permanent forget with a version- and closure-bound plan digest;
 - exact Daily Wrap reads;
 - bounded Work Resumption cards with acknowledgement/dismissal only;
-- Prompt Rescue manual-input queue/read/edit/retry/delete operations and
-  explicit clipboard copy in the WebView;
+- Prompt Rescue manual-input and global-shortcut exact-selection queue,
+  read/edit/retry/delete operations, and explicit clipboard copy in the
+  WebView;
 - bounded provenance tracing and exact, policy-aware evidence resolution;
 - compare-and-set pause/resume for **new capture**.
 
@@ -69,6 +71,11 @@ submission, or any other external effect.
 - **Copy reviewed prompt** writes only the reviewed prepared text to the shared
   clipboard. OpenChronicle does not claim where it will be pasted and has no
   command to paste or submit it.
+- **Import selected text** is initiated with `Command-Shift-Space` while the
+  external app still owns focus. The native probe reads only a stable
+  `AXSelectedText` range, rejects secure/multiple/empty/policy-excluded/racing
+  sources, queues the receipt, and only then focuses OpenChronicle. It never
+  reads `AXValue` or the clipboard as a fallback.
 - **Delete Prompt Rescue job** uses a native confirmation and version-bound
   delete to remove the local rough input, artifact, and provenance edge. It
   does not alter clipboard contents or another application.
@@ -130,7 +137,7 @@ The design follows the official Tauri guidance for
 ## Current product boundary
 
 Daily Wrap is read-only in the first shell slice. The scheduler retains
-`running/succeeded/failed` internally, but protocol v4 exposes only an
+`running/succeeded/failed` internally, but protocol v5 exposes only an
 authorized published revision (`status="succeeded"`) and its `ready/partial`
 coverage state. Neither field is user acceptance. The UI therefore does not
 present fake Accept/Edit/Ignore actions. A later revision-bound review overlay

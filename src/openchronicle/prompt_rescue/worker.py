@@ -7,6 +7,7 @@ import asyncio
 from ..config import Config
 from ..logger import get
 from ..store import fts
+from .selection import prepare_selection_helper
 from .service import PromptRescueService, validate_config
 
 logger = get("openchronicle.prompt_rescue")
@@ -20,6 +21,8 @@ def process_once(cfg: Config) -> str | None:
 
 async def run_forever(cfg: Config) -> None:
     validate_config(cfg)
+    if cfg.prompt_rescue.enabled:
+        await asyncio.to_thread(prepare_selection_helper)
     while True:
         try:
             job_id = await asyncio.to_thread(process_once, cfg)

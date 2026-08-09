@@ -36,8 +36,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks the no-action Prompt Rescue surface as bridge protocol v4", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(4);
+  it("tracks the exact-selection Prompt Rescue surface as bridge protocol v5", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(5);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -130,6 +130,41 @@ describe("desktop bridge adapters", () => {
         expected_version: 3,
         improved_prompt: "Reviewed edit",
       },
+    });
+  });
+
+  it("accepts only a closed exact-selection receipt", async () => {
+    const selected = promptRescueJob({
+      source_kind: "macos_selection",
+      source_binding: {
+        schema_version: 1,
+        captured_at: "2026-08-09T12:00:00Z",
+        app_name: "Notes",
+        bundle_id: "com.apple.Notes",
+        pid: 123,
+        window_title: "Release",
+        element_role: "AXTextArea",
+        element_subrole: "",
+        selection_location: 7,
+        selection_length: 28,
+      },
+    });
+    tauri.invoke.mockResolvedValueOnce(bridgePromptRescueJob(selected));
+
+    const result = await desktopApi.getPromptRescue(selected.id);
+
+    expect(result.source_kind).toBe("macos_selection");
+    expect(result.source_binding).toMatchObject({
+      bundle_id: "com.apple.Notes",
+      selection_location: 7,
+      selection_length: 28,
+    });
+
+    const malformed = bridgePromptRescueJob(selected);
+    (malformed.job.source_binding as Record<string, unknown>).unknown = true;
+    tauri.invoke.mockResolvedValueOnce(malformed);
+    await expect(desktopApi.getPromptRescue(selected.id)).rejects.toMatchObject({
+      code: "BRIDGE_PROTOCOL_ERROR",
     });
   });
 

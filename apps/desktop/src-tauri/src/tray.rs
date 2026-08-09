@@ -61,7 +61,7 @@ pub(crate) fn install(app: &tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show_main_window(app: &tauri::AppHandle) {
+pub(crate) fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
         let _ = window.show();
         let _ = window.set_focus();
@@ -114,7 +114,12 @@ fn show_native_error(app: &tauri::AppHandle, error: DesktopError) {
     );
 }
 
-fn show_message(app: &tauri::AppHandle, title: &str, description: String, level: MessageLevel) {
+pub(crate) fn show_message(
+    app: &tauri::AppHandle,
+    title: &str,
+    description: String,
+    level: MessageLevel,
+) {
     let mut dialog = MessageDialog::new()
         .set_description(description)
         .set_title(title)

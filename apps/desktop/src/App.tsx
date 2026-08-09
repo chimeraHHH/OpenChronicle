@@ -62,8 +62,12 @@ export function App({ api = desktopApi }: AppProps) {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen<string>("desktop:navigate", (event) => {
-      if (event.payload === "permissions" || event.payload === "privacy") {
-        setPage("privacy");
+      if (
+        event.payload === "permissions" ||
+        event.payload === "privacy" ||
+        event.payload === "prompt-rescue"
+      ) {
+        setPage(event.payload === "prompt-rescue" ? "prompt-rescue" : "privacy");
         setSourceSubject(null);
         window.requestAnimationFrame(() => document.getElementById("main-content")?.focus());
       }
@@ -76,6 +80,20 @@ export function App({ api = desktopApi }: AppProps) {
       });
     return () => unlisten?.();
   }, []);
+
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen("desktop:refresh", () => {
+      void refresh().catch((reason: unknown) => setError(displayError(reason)));
+    })
+      .then((value) => {
+        unlisten = value;
+      })
+      .catch(() => {
+        // A normal browser preview has no Tauri event transport.
+      });
+    return () => unlisten?.();
+  }, [refresh]);
 
   function navigate(next: PageId) {
     setPage(next);
