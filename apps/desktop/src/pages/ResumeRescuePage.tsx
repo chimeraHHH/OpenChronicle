@@ -690,6 +690,26 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
     }
   }
 
+  async function exportPdfPreview() {
+    if (!preview) return;
+    clearMessages();
+    setBusy("export-pdf");
+    try {
+      const result = await api.exportResumePdf(
+        preview.projection_id,
+        preview.artifact_digest,
+        preview.document_digest,
+      );
+      setNotice(
+        `Created ${result.file_name} (${result.byte_count} bytes). No existing file was replaced.`,
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (!state && busy === "load") {
     return <main className="page" id="main-content" tabIndex={-1}><p role="status">Loading local Résumé Rescue sources…</p></main>;
   }
@@ -1444,8 +1464,9 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
               <p className="muted">Template {preview.template_id} · renderer v{preview.renderer_version}</p>
             </div>
             <div className="button-row">
-              <button className="button button--primary" disabled={Boolean(busy)} onClick={() => void exportDocxPreview()} type="button">{busy === "export-docx" ? "Saving…" : "Save new DOCX file"}</button>
-              <button className="button button--secondary" disabled={Boolean(busy)} onClick={() => void exportPreview()} type="button">{busy === "export" ? "Saving…" : "Save new HTML file"}</button>
+              <button className="button button--primary" disabled={Boolean(busy)} onClick={() => void exportPdfPreview()} type="button">{busy === "export-pdf" ? "Rendering…" : "Save new PDF file"}</button>
+              <button className="button button--secondary" disabled={Boolean(busy)} onClick={() => void exportDocxPreview()} type="button">{busy === "export-docx" ? "Saving…" : "Save new DOCX file"}</button>
+              <button className="button button--ghost" disabled={Boolean(busy)} onClick={() => void exportPreview()} type="button">{busy === "export" ? "Saving…" : "Save new HTML file"}</button>
               <button className="button button--ghost" onClick={() => setPreview(null)} type="button">Close preview</button>
             </div>
           </div>

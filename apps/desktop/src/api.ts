@@ -39,6 +39,7 @@ import type {
   ResumeOpportunity,
   ResumeOpportunitySource,
   ResumeOwnership,
+  ResumePdfExportResult,
   ResumeProfile,
   ResumeProfileVersion,
   ResumePreview,
@@ -1482,6 +1483,54 @@ export function normalizeResumeDocxExport(value: unknown): ResumeDocxExportResul
   };
 }
 
+export function normalizeResumePdfExport(value: unknown): ResumePdfExportResult {
+  const raw = closedObject(
+    value,
+    [
+      "schema_version",
+      "projection_id",
+      "artifact_digest",
+      "preview_document_digest",
+      "content_digest",
+      "format",
+      "file_name",
+      "byte_count",
+      "created",
+      "action_capability",
+    ],
+    "Résumé Rescue PDF export result",
+  );
+  const byteCount = numberValue(raw.byte_count, "Résumé Rescue PDF byte count");
+  const fileName = stringValue(raw.file_name, "Résumé Rescue PDF file name");
+  if (
+    numberValue(raw.schema_version, "Résumé Rescue PDF schema") !== 1 ||
+    stringValue(raw.format, "Résumé Rescue PDF format") !== "pdf" ||
+    booleanValue(raw.created, "Résumé Rescue PDF created state") !== true ||
+    stringValue(raw.action_capability, "Résumé Rescue PDF action") !== "none" ||
+    !fileName.toLowerCase().endsWith(".pdf") ||
+    !Number.isSafeInteger(byteCount) ||
+    byteCount < 1 ||
+    byteCount > 10 * 1024 * 1024
+  ) {
+    return protocolError("Résumé Rescue PDF export contract");
+  }
+  return {
+    schema_version: 1,
+    projection_id: stringValue(raw.projection_id, "Résumé Rescue PDF projection id"),
+    artifact_digest: resumeDigest(raw.artifact_digest, "Résumé Rescue PDF artifact digest"),
+    preview_document_digest: resumeDigest(
+      raw.preview_document_digest,
+      "Résumé Rescue PDF preview digest",
+    ),
+    content_digest: resumeDigest(raw.content_digest, "Résumé Rescue PDF content digest"),
+    format: "pdf",
+    file_name: fileName,
+    byte_count: byteCount,
+    created: true,
+    action_capability: "none",
+  };
+}
+
 export function normalizeOpenedJsonResumeReview(value: unknown): OpenedJsonResumeReview {
   const response = closedObject(
     value,
@@ -2784,6 +2833,30 @@ export const desktopApi = {
           result.preview_document_digest !== expectedPreviewDocumentDigest
         ) {
           return protocolError("Résumé Rescue DOCX export response identity");
+        }
+        return result;
+      },
+    ),
+  exportResumePdf: (
+    projectionId: string,
+    expectedArtifactDigest: string,
+    expectedPreviewDocumentDigest: string,
+  ) =>
+    request(
+      "export_resume_rescue_pdf",
+      {
+        projection_id: projectionId,
+        expected_artifact_digest: expectedArtifactDigest,
+        expected_preview_document_digest: expectedPreviewDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumePdfExport(value);
+        if (
+          result.projection_id !== projectionId ||
+          result.artifact_digest !== expectedArtifactDigest ||
+          result.preview_document_digest !== expectedPreviewDocumentDigest
+        ) {
+          return protocolError("Résumé Rescue PDF export response identity");
         }
         return result;
       },

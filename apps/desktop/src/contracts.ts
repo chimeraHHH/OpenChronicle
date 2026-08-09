@@ -12,7 +12,7 @@ export type PageId =
 // Rust owns the sidecar envelope, while these types own the corresponding
 // WebView result projection. Version 11 adds reviewed PDF/DOCX extraction without
 // exposing source bytes or adding upload, application, submission, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 12 as const;
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 13 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -355,6 +355,19 @@ export interface ResumeDocxExportResult {
   preview_document_digest: string;
   content_digest: string;
   format: "docx";
+  file_name: string;
+  byte_count: number;
+  created: true;
+  action_capability: "none";
+}
+
+export interface ResumePdfExportResult {
+  schema_version: 1;
+  projection_id: string;
+  artifact_digest: string;
+  preview_document_digest: string;
+  content_digest: string;
+  format: "pdf";
   file_name: string;
   byte_count: number;
   created: true;

@@ -136,6 +136,20 @@ function commandResult(command: string) {
       action_capability: "none",
     };
   }
+  if (command === "export_resume_rescue_pdf") {
+    return {
+      schema_version: 1,
+      projection_id: resumePreview().projection_id,
+      artifact_digest: resumePreview().artifact_digest,
+      preview_document_digest: resumePreview().document_digest,
+      content_digest: "f".repeat(64),
+      format: "pdf",
+      file_name: "resume-projection-1.pdf",
+      byte_count: 56_864,
+      created: true,
+      action_capability: "none",
+    };
+  }
   if (command === "open_resume_rescue_json") return openedJsonResumeReview();
   if (command === "admit_resume_rescue_json") {
     return { profile: resumeProfileVersion(), created: true };
@@ -198,6 +212,15 @@ describe("trusted console", () => {
     expect(preview).toHaveAttribute("referrerpolicy", "no-referrer");
     expect(preview).toHaveAttribute("srcdoc", expect.stringContaining("default-src 'none'"));
     expect(screen.getByText(/Document digest:/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save new PDF file" }));
+    expect(await screen.findByText(/resume-projection-1\.pdf/i)).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_pdf", {
+      request: {
+        projection_id: resumeProjection().id,
+        expected_artifact_digest: resumeProjection().artifact_digest,
+        expected_preview_document_digest: resumePreview().document_digest,
+      },
+    });
     await user.click(screen.getByRole("button", { name: "Save new DOCX file" }));
     expect(await screen.findByText(/resume-projection-1\.docx/i)).toBeInTheDocument();
     expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_docx", {

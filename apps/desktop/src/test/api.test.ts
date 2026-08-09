@@ -47,8 +47,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks native DOCX export as bridge protocol v12", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(12);
+  it("tracks pinned native PDF export as bridge protocol v13", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(13);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -319,6 +319,38 @@ describe("desktop bridge adapters", () => {
         preview.document_digest,
       ),
     ).rejects.toMatchObject({ code: "BRIDGE_PROTOCOL_ERROR" });
+
+    tauri.invoke.mockResolvedValueOnce({
+      schema_version: 1,
+      projection_id: projection.id,
+      artifact_digest: projection.artifact_digest,
+      preview_document_digest: preview.document_digest,
+      content_digest: "f".repeat(64),
+      format: "pdf",
+      file_name: "resume-projection-1.pdf",
+      byte_count: 56_864,
+      created: true,
+      action_capability: "none",
+    });
+    const exportedPdf = await desktopApi.exportResumePdf(
+      projection.id,
+      projection.artifact_digest,
+      preview.document_digest,
+    );
+    expect(exportedPdf).toMatchObject({
+      file_name: "resume-projection-1.pdf",
+      content_digest: "f".repeat(64),
+      action_capability: "none",
+    });
+    expect(exportedPdf).not.toHaveProperty("content_base64");
+    expect(exportedPdf).not.toHaveProperty("path");
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_pdf", {
+      request: {
+        projection_id: projection.id,
+        expected_artifact_digest: projection.artifact_digest,
+        expected_preview_document_digest: preview.document_digest,
+      },
+    });
 
     tauri.invoke.mockResolvedValueOnce({
       preview: { ...resumePreview(), action_capability: "download" },
