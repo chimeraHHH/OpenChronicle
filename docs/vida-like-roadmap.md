@@ -31,6 +31,9 @@ Every product slice must also satisfy the executable gates in
 or vendor parity claim is not an acceptance result.
 The selected follow-up for Work Resumption timing is recorded in
 [vida-work-resumption-signal-brief.md](vida-work-resumption-signal-brief.md).
+The clean-room interaction, source-binding, runtime, and evaluation contract for
+the next workflow lives in
+[vida-prompt-rescue-scout-2026-08-09.md](vida-prompt-rescue-scout-2026-08-09.md).
 
 The memory classifier must never receive file, browser, messaging, or other
 side-effecting tools. Screen-derived text is untrusted data, not an instruction
@@ -213,7 +216,9 @@ privacy UX is validated on a signed macOS build.
   tradeoff but cannot reach the precision target without deferring useful
   moments, so timing-only optimization is stopped.
 - [ ] Prompt Rescue prepared-artifact slice with explicit selection binding and
-  no automatic submission.
+  no automatic submission. The external scout and implementation contract are
+  complete; implementation starts with an honestly labeled manual-paste source
+  and does not satisfy the exact macOS selection gate by itself.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
   send/submit capability.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
