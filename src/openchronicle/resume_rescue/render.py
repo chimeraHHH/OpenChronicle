@@ -66,10 +66,61 @@ class ResumePreview:
         }
 
 
-def render_preview(
+@dataclass(frozen=True, slots=True)
+class ResumeDocumentItem:
+    fact_id: str
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeDocumentSection:
+    kind: str
+    label: str
+    items: tuple[ResumeDocumentItem, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeDocumentTree:
+    schema_version: int
+    projection_id: str
+    artifact_digest: str
+    created_at: str
+    display_name: str
+    locale: str
+    sections: tuple[ResumeDocumentSection, ...]
+
+    def plain_text(self) -> str:
+        lines = [self.display_name]
+        for section in self.sections:
+            lines.extend(["", section.label.upper()])
+            lines.extend(f"- {item.text}" for item in section.items)
+        return "\n".join(lines) + "\n"
+
+    def digest_payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "projection_id": self.projection_id,
+            "artifact_digest": self.artifact_digest,
+            "created_at": self.created_at,
+            "display_name": self.display_name,
+            "locale": self.locale,
+            "sections": [
+                {
+                    "kind": section.kind,
+                    "label": section.label,
+                    "items": [
+                        {"fact_id": item.fact_id, "text": item.text} for item in section.items
+                    ],
+                }
+                for section in self.sections
+            ],
+        }
+
+
+def build_document_tree(
     *, profile: ProfileVersion, projection: ResumeProjection
-) -> ResumePreview:
-    """Render one current projection without templates, scripts, or external assets."""
+) -> ResumeDocumentTree:
+    """Build the single closed tree consumed by every résumé renderer."""
 
     normalized_profile = validate_profile(profile.profile)
     artifact = validate_artifact(projection.artifact)
@@ -80,27 +131,52 @@ def render_preview(
         or artifact["profile_binding"]
         != {"id": profile.profile_id, "version": profile.version, "digest": profile.digest}
     ):
-        raise ValueError("resume preview profile binding differs")
+        raise ValueError("resume document profile binding differs")
+    return ResumeDocumentTree(
+        schema_version=1,
+        projection_id=projection.id,
+        artifact_digest=projection.artifact_digest,
+        created_at=projection.created_at,
+        display_name=normalized_profile["display_name"],
+        locale=normalized_profile["locale"] or "en",
+        sections=tuple(
+            ResumeDocumentSection(
+                kind=section["kind"],
+                label=SECTION_LABELS[section["kind"]],
+                items=tuple(
+                    ResumeDocumentItem(fact_id=item["fact_id"], text=item["text"])
+                    for item in section["items"]
+                ),
+            )
+            for section in artifact["sections"]
+        ),
+    )
 
-    display_name = normalized_profile["display_name"]
-    locale = normalized_profile["locale"] or "en"
+
+def render_preview(*, profile: ProfileVersion, projection: ResumeProjection) -> ResumePreview:
+    """Render one current projection without templates, scripts, or external assets."""
+
+    return render_preview_tree(build_document_tree(profile=profile, projection=projection))
+
+
+def render_preview_tree(tree: ResumeDocumentTree) -> ResumePreview:
+    """Render HTML and plain text from an already validated semantic tree."""
+
+    if not isinstance(tree, ResumeDocumentTree) or tree.schema_version != 1:
+        raise ValueError("resume document tree is invalid")
     section_html: list[str] = []
-    plain_lines = [display_name]
-    for section in artifact["sections"]:
-        label = SECTION_LABELS[section["kind"]]
-        plain_lines.extend(["", label.upper()])
+    for section in tree.sections:
         items_html = []
-        for item in section["items"]:
-            fact_id = html.escape(item["fact_id"], quote=True)
-            fact_text = html.escape(item["text"], quote=True)
+        for item in section.items:
+            fact_id = html.escape(item.fact_id, quote=True)
+            fact_text = html.escape(item.text, quote=True)
             items_html.append(
                 f'        <li class="resume-item" data-fact-id="{fact_id}">{fact_text}</li>'
             )
-            plain_lines.append(f'- {item["text"]}')
         section_html.extend(
             [
-                f'    <section class="resume-section" data-section="{section["kind"]}">',
-                f'      <h2 class="resume-section-title">{label}</h2>',
+                f'    <section class="resume-section" data-section="{section.kind}">',
+                f'      <h2 class="resume-section-title">{section.label}</h2>',
                 '      <ul class="resume-items">',
                 *items_html,
                 "      </ul>",
@@ -108,9 +184,9 @@ def render_preview(
             ]
         )
 
-    escaped_name = html.escape(display_name, quote=True)
-    escaped_locale = html.escape(locale, quote=True)
-    escaped_projection_id = html.escape(projection.id, quote=True)
+    escaped_name = html.escape(tree.display_name, quote=True)
+    escaped_locale = html.escape(tree.locale, quote=True)
+    escaped_projection_id = html.escape(tree.projection_id, quote=True)
     document = "\n".join(
         [
             "<!doctype html>",
@@ -137,12 +213,12 @@ def render_preview(
             "",
         ]
     )
-    plain_text = "\n".join(plain_lines) + "\n"
+    plain_text = tree.plain_text()
     document_digest = canonical_digest(
         {
             "schema": "resume-preview-v1",
-            "projection_id": projection.id,
-            "artifact_digest": projection.artifact_digest,
+            "projection_id": tree.projection_id,
+            "artifact_digest": tree.artifact_digest,
             "renderer_version": RENDERER_VERSION,
             "template_id": TEMPLATE_ID,
             "html": document,
@@ -150,8 +226,8 @@ def render_preview(
         }
     )
     return ResumePreview(
-        projection_id=projection.id,
-        artifact_digest=projection.artifact_digest,
+        projection_id=tree.projection_id,
+        artifact_digest=tree.artifact_digest,
         renderer_version=RENDERER_VERSION,
         template_id=TEMPLATE_ID,
         html=document,
