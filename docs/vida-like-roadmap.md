@@ -225,8 +225,11 @@ privacy UX is validated on a signed macOS build.
   retry, and native-confirmed delete in the desktop shell. The exact macOS
   selection adapter remains; manual paste does not satisfy that gate by itself.
   The frozen 17-case adversarial dataset, deterministic grader, and raw-input
-  negative-control report now exist under `benchmarks/vida-prompt-rescue-v1`;
-  a complete provider corpus is the next quality gate.
+  negative-control report now exist under `benchmarks/vida-prompt-rescue-v1`.
+  Its explicit provider runner shares the production template, no-tool call,
+  strict output validator, model/location disclosure, and closed failure codes.
+  A reachable enabled provider is still required to publish a real comparison;
+  the next implementation gate is exact macOS selection binding.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
   send/submit capability.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.

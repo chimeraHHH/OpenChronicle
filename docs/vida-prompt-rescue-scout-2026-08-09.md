@@ -145,8 +145,11 @@ excluded-data egress, and zero successful source-text instruction overrides.
 2. **Implemented:** manual-paste desktop form, provider disclosure, status,
    side-by-side preview, edit, copy, retry, and native-confirmed delete; no
    submit/paste command.
-3. Frozen model-stub and adversarial fixture evaluation, followed by an
-   explicitly labeled provider comparison when credentials are available.
+3. **Implemented:** frozen model-stub/adversarial evaluation and an explicit
+   configured-provider runner that reuses the production template and strict
+   output validator. A real provider corpus remains unreported because no
+   enabled reachable provider was available in the local acceptance
+   environment; no score is synthesized.
 4. macOS exact focused-selection adapter with secure-field/policy/identity
    fencing and live acceptance tests.
 

@@ -5,10 +5,12 @@ from pathlib import Path
 
 import pytest
 
+from openchronicle import config as config_mod
 from openchronicle.evaluation.prompt_rescue import (
     load_dataset,
     main,
     run_evaluation,
+    run_provider_corpus,
 )
 from openchronicle.prompt_rescue.service import TEMPLATE_VERSION
 from openchronicle.prompts import load as load_prompt
@@ -31,6 +33,7 @@ def _perfect_corpus() -> dict:
                     "case_id": case.id,
                     "admission": "rejected",
                     "output": None,
+                    "error_code": "invalid_source",
                     "latency_ms": 2.0,
                 }
             )
@@ -56,12 +59,13 @@ def _perfect_corpus() -> dict:
                     ),
                     "changes": ["Structured the reviewed request."],
                 },
+                "error_code": "",
                 "latency_ms": 2.0,
             }
         )
     template = load_prompt("prompt_rescue.md")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "dataset_id": dataset.id,
         "variant": "perfect_fixture",
         "model_identity": "fixture/no-provider",
@@ -169,9 +173,89 @@ def test_cli_writes_exact_report_and_resolves_relative_paths(tmp_path: Path) -> 
     )
     report = json.loads(output.read_text(encoding="utf-8"))
     assert report["dataset"]["case_count"] == 17
-    assert report["dataset"]["path"] == (
-        "benchmarks/vida-prompt-rescue-v1/fixtures/cases.json"
+    assert report["dataset"]["path"] == ("benchmarks/vida-prompt-rescue-v1/fixtures/cases.json")
+
+
+def test_provider_runner_uses_production_path_and_rejects_invalid_source_locally() -> None:
+    dataset = load_dataset(DATASET_PATH)
+    cfg = config_mod.Config()
+    cfg.prompt_rescue.enabled = True
+    cfg.models["prompt_rescue"] = config_mod.ModelConfig(
+        model="ollama/test-local",
+        base_url="http://127.0.0.1:11434",
     )
+    calls: list[dict] = []
+
+    def fake_llm(_cfg, stage: str, **kwargs):
+        calls.append({"stage": stage, **kwargs})
+        prompt = json.loads(kwargs["messages"][1]["content"])["rough_prompt"]
+        payload = {
+            "schema_version": 1,
+            "workflow": "prompt_rescue",
+            "action_capability": "none",
+            "improved_prompt": f"Clarify and structure: {prompt}",
+            "assumptions": [],
+            "missing_context": [],
+            "changes": ["Structured the request."],
+        }
+        return type(
+            "Response",
+            (),
+            {
+                "choices": [
+                    type(
+                        "Choice",
+                        (),
+                        {"message": type("Message", (), {"content": json.dumps(payload)})()},
+                    )()
+                ]
+            },
+        )()
+
+    payload = run_provider_corpus(dataset, cfg, llm_caller=fake_llm)
+
+    assert payload["schema_version"] == 2
+    assert payload["model_identity"] == "ollama/test-local"
+    assert payload["provider_location"] == "local"
+    assert len(calls) == 12
+    assert all(call["stage"] == "prompt_rescue" for call in calls)
+    assert all(call["json_mode"] is True and "tools" not in call for call in calls)
+    rejected = [row for row in payload["cases"] if row["admission"] == "rejected"]
+    assert len(rejected) == 5
+    assert {row["error_code"] for row in rejected} == {"invalid_source"}
+
+
+def test_provider_runner_records_closed_failure_codes() -> None:
+    dataset = load_dataset(DATASET_PATH)
+    cfg = config_mod.Config()
+    cfg.prompt_rescue.enabled = True
+    responses = iter(["not-json", RuntimeError("private provider detail")])
+
+    def fake_llm(*_args, **_kwargs):
+        value = next(responses, RuntimeError("private provider detail"))
+        if isinstance(value, Exception):
+            raise value
+        return type(
+            "Response",
+            (),
+            {
+                "choices": [
+                    type(
+                        "Choice",
+                        (),
+                        {"message": type("Message", (), {"content": value})()},
+                    )()
+                ]
+            },
+        )()
+
+    payload = run_provider_corpus(dataset, cfg, llm_caller=fake_llm)
+    accepted = [row for row in payload["cases"] if row["admission"] == "accepted"]
+
+    assert accepted[0]["error_code"] == "invalid_output"
+    assert accepted[1]["error_code"] == "provider_failed"
+    assert all(row["output"] is None for row in accepted)
+    assert "private provider detail" not in json.dumps(payload)
 
 
 def test_dataset_parser_rejects_unknown_fields_and_unbounded_repeat(tmp_path: Path) -> None:

@@ -377,6 +377,10 @@ edited, copied, retried after a visible sanitized failure, or permanently
 deleted. It has no capability to paste into another app or submit on the
 user's behalf. The current slice does not claim that pasted text is bound to
 an external macOS selection; that requires a later trusted selection adapter.
+The frozen Prompt Rescue evaluator never invokes this model unless
+`--run-configured-provider` is supplied and this workflow is enabled. That
+explicit runner records a complete raw corpus under the caller-selected path;
+keep it under `scratch/` until its contents and provider cost are reviewed.
 
 ## `[search]`
 

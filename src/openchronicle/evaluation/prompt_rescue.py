@@ -8,16 +8,21 @@ import json
 import math
 import platform
 import subprocess
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .. import config as config_mod
 from ..config import Config
 from ..local_time import local_timezone
 from ..prompt_rescue.service import (
     TEMPLATE_VERSION,
     PromptRescueValidationError,
+    generate_output,
+    provider_summary,
+    validate_config,
     validate_output,
     validate_source,
 )
@@ -71,6 +76,7 @@ class CorpusCase:
     case_id: str
     admission: str
     output: dict[str, Any] | None
+    error_code: str
     latency_ms: float
 
 
@@ -122,7 +128,7 @@ def load_corpus(path: Path) -> Corpus:
         "cases",
     }:
         raise ValueError("Prompt Rescue corpus envelope is invalid")
-    if payload["schema_version"] != 1:
+    if payload["schema_version"] != 2:
         raise ValueError("Prompt Rescue corpus schema is unsupported")
     provider_location = _text(payload["provider_location"], 50, nonempty=True)
     if provider_location not in {"local", "remote_or_unknown", "not_applicable"}:
@@ -169,6 +175,7 @@ def raw_baseline(dataset: Dataset) -> Corpus:
                     case_id=case.id,
                     admission="rejected",
                     output=None,
+                    error_code="invalid_source",
                     latency_ms=0.0,
                 )
             )
@@ -186,6 +193,7 @@ def raw_baseline(dataset: Dataset) -> Corpus:
                     "missing_context": [],
                     "changes": [],
                 },
+                error_code="",
                 latency_ms=0.0,
             )
         )
@@ -205,6 +213,82 @@ def raw_baseline(dataset: Dataset) -> Corpus:
         ),
         source_path="generated:raw_input",
     )
+
+
+def run_provider_corpus(
+    dataset: Dataset,
+    cfg: Config,
+    *,
+    llm_caller: Any | None = None,
+    variant: str = "configured_provider",
+) -> dict[str, Any]:
+    """Run the frozen dataset through the exact configured production path."""
+    validate_config(cfg)
+    if not cfg.prompt_rescue.enabled:
+        raise ValueError("prompt rescue must be explicitly enabled for provider evaluation")
+    provider = provider_summary(cfg)
+    template = load_prompt("prompt_rescue.md")
+    cases: list[dict[str, Any]] = []
+    for case in dataset.cases:
+        started = time.perf_counter()
+        try:
+            normalized = validate_source(
+                cfg,
+                rough_prompt=case.input.rough_prompt,
+                target=case.input.target,
+                audience=case.input.audience,
+                constraints=case.input.constraints,
+                desired_format=case.input.desired_format,
+            )
+        except ValueError:
+            cases.append(
+                {
+                    "case_id": case.id,
+                    "admission": "rejected",
+                    "output": None,
+                    "error_code": "invalid_source",
+                    "latency_ms": _elapsed_ms(started),
+                }
+            )
+            continue
+        try:
+            output = generate_output(
+                cfg,
+                rough_prompt=normalized["rough_prompt"],
+                target=normalized["target"],
+                audience=normalized["audience"],
+                constraints=normalized["constraints"],
+                desired_format=normalized["desired_format"],
+                llm_caller=llm_caller,
+            )
+            error_code = ""
+        except PromptRescueValidationError:
+            output = None
+            error_code = "invalid_output"
+        except Exception:  # noqa: BLE001 - corpus exposes a closed error code only
+            output = None
+            error_code = "provider_failed"
+        cases.append(
+            {
+                "case_id": case.id,
+                "admission": "accepted",
+                "output": output,
+                "error_code": error_code,
+                "latency_ms": _elapsed_ms(started),
+            }
+        )
+    return {
+        "schema_version": 2,
+        "dataset_id": dataset.id,
+        "variant": _text(variant, 100, nonempty=True),
+        "model_identity": provider["model"],
+        "provider_location": provider["location"],
+        "template_version": TEMPLATE_VERSION,
+        "template_digest": canonical_digest(
+            {"schema": "prompt-rescue-template-v1", "text": template}
+        ),
+        "cases": cases,
+    }
 
 
 def run_evaluation(
@@ -342,6 +426,7 @@ def _evaluate_case(case: PromptRescueCase, row: CorpusCase) -> dict[str, Any]:
         "category": case.category,
         "expected_admission": expected.admission,
         "actual_admission": row.admission,
+        "error_code": row.error_code,
         "admission_correct": admission_correct,
         "schema_valid": False,
         "intent_preserved": False,
@@ -391,9 +476,7 @@ def _evaluate_case(case: PromptRescueCase, row: CorpusCase) -> dict[str, Any]:
     base["missing_context_satisfied"] = not expected.required_missing_context_any or any(
         _normalized(fragment) in missing for fragment in expected.required_missing_context_any
     )
-    base["material_change_satisfied"] = (
-        len(output["changes"]) >= expected.min_material_changes
-    )
+    base["material_change_satisfied"] = len(output["changes"]) >= expected.min_material_changes
     base["forbidden_output"] = any(
         _normalized(fragment) in all_output for fragment in expected.forbidden_output_fragments
     )
@@ -436,13 +519,17 @@ def _gate_verdict(metrics: dict[str, Any], contract: dict[str, Any]) -> dict[str
 
 
 def _validate_contract(contract: dict[str, Any], dataset: Dataset) -> None:
-    if set(contract) != {
-        "schema_version",
-        "dataset",
-        "primary_metric",
-        "safety_gates",
-        "quality_gates",
-    } or contract["schema_version"] != 1:
+    if (
+        set(contract)
+        != {
+            "schema_version",
+            "dataset",
+            "primary_metric",
+            "safety_gates",
+            "quality_gates",
+        }
+        or contract["schema_version"] != 1
+    ):
         raise ValueError("Prompt Rescue metric contract is invalid")
     dataset_ref = contract["dataset"]
     if (
@@ -553,6 +640,7 @@ def _parse_corpus_case(value: object) -> CorpusCase:
         "case_id",
         "admission",
         "output",
+        "error_code",
         "latency_ms",
     }:
         raise ValueError("Prompt Rescue corpus case is invalid")
@@ -562,6 +650,19 @@ def _parse_corpus_case(value: object) -> CorpusCase:
     output = value["output"]
     if output is not None and not isinstance(output, dict):
         raise ValueError("Prompt Rescue corpus output is invalid")
+    error_code = _text(value["error_code"], 50, nonempty=False)
+    if error_code not in {"", "invalid_source", "provider_failed", "invalid_output"}:
+        raise ValueError("Prompt Rescue corpus error code is invalid")
+    if (
+        (admission == "rejected" and (output is not None or error_code != "invalid_source"))
+        or (admission == "accepted" and output is not None and error_code)
+        or (
+            admission == "accepted"
+            and output is None
+            and error_code not in {"provider_failed", "invalid_output"}
+        )
+    ):
+        raise ValueError("Prompt Rescue corpus result state is invalid")
     latency = value["latency_ms"]
     if isinstance(latency, bool) or not isinstance(latency, (int, float)):
         raise ValueError("Prompt Rescue corpus latency is invalid")
@@ -572,6 +673,7 @@ def _parse_corpus_case(value: object) -> CorpusCase:
         case_id=_text(value["case_id"], 128, nonempty=True),
         admission=admission,
         output=output,
+        error_code=error_code,
         latency_ms=latency_value,
     )
 
@@ -659,6 +761,10 @@ def _percentile(values: list[float], quantile: float) -> float:
     return round(ordered[index], 6)
 
 
+def _elapsed_ms(started: float) -> float:
+    return round((time.perf_counter() - started) * 1_000, 6)
+
+
 def _repository_state(repository_root: Path) -> dict[str, Any]:
     def command(*args: str) -> str:
         completed = subprocess.run(
@@ -692,6 +798,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--contract", type=Path, required=True)
     parser.add_argument("--corpus", action="append", default=[], type=Path)
+    parser.add_argument("--run-configured-provider", action="store_true")
+    parser.add_argument("--provider-output", type=Path)
+    parser.add_argument("--config", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
@@ -700,11 +809,28 @@ def main(argv: list[str] | None = None) -> int:
     def resolve(path: Path) -> Path:
         return path if path.is_absolute() else repository_root / path
 
+    if args.run_configured_provider != (args.provider_output is not None):
+        parser.error("--run-configured-provider and --provider-output must be supplied together")
+
+    corpus_paths = [resolve(path) for path in args.corpus]
+    if args.run_configured_provider:
+        dataset_path = resolve(args.dataset)
+        config_path = resolve(args.config) if args.config is not None else None
+        provider_path = resolve(args.provider_output)
+        if provider_path == resolve(args.output):
+            parser.error("--provider-output and --output must be different paths")
+        provider_payload = run_provider_corpus(
+            load_dataset(dataset_path),
+            config_mod.load(config_path),
+        )
+        write_report(provider_payload, provider_path)
+        corpus_paths.append(provider_path)
+
     report = run_evaluation(
         dataset_path=resolve(args.dataset),
         metric_contract_path=resolve(args.contract),
         repository_root=repository_root,
-        corpus_paths=tuple(resolve(path) for path in args.corpus),
+        corpus_paths=tuple(corpus_paths),
     )
     encoded = write_report(report, args.output)
     if not args.quiet:

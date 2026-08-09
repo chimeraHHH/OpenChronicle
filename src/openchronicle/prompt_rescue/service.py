@@ -49,14 +49,7 @@ class PromptRescueService:
         store.ensure_schema(conn)
 
     def provider_summary(self) -> dict[str, str]:
-        model_cfg = self.cfg.model_for("prompt_rescue")
-        model = model_cfg.model
-        if not isinstance(model, str) or not model.strip() or len(model) > 256 or "\x00" in model:
-            raise ValueError("prompt rescue model identity is invalid")
-        return {
-            "model": model,
-            "location": _provider_location(model, model_cfg.base_url),
-        }
+        return provider_summary(self.cfg)
 
     def queue(
         self,
@@ -210,45 +203,90 @@ class PromptRescueService:
         )
 
     def _generate(self, job: store.PromptRescueJob) -> dict[str, Any]:
-        payload = {
-            "rough_prompt": job.rough_prompt,
-            "target": job.target,
-            "audience": job.audience,
-            "constraints": list(job.constraints),
-            "desired_format": job.desired_format,
-        }
-        encoded = json.dumps(
-            payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        if len(encoded.encode("utf-8")) > 256 * 1024:
-            raise PromptRescueValidationError("prompt rescue input changed")
-        response = self.llm_caller(
+        return generate_output(
             self.cfg,
-            "prompt_rescue",
-            messages=[
-                {"role": "system", "content": load_prompt("prompt_rescue.md")},
-                {"role": "user", "content": encoded},
-            ],
-            json_mode=True,
+            rough_prompt=job.rough_prompt,
+            target=job.target,
+            audience=job.audience,
+            constraints=job.constraints,
+            desired_format=job.desired_format,
+            llm_caller=self.llm_caller,
         )
-        text = llm_mod.extract_text(response).strip()
-        try:
-            raw = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise PromptRescueValidationError("prompt rescue output is invalid") from exc
-        return validate_output(self.cfg, raw)
 
     def _current(self, job: store.PromptRescueJob) -> bool:
-        sources = provenance_store.direct_sources_checked(
-            self.conn,
-            EvidenceRef(kind="prompt_rescue", id=job.id),
-        )
-        return bool(
-            sources == [job.input_ref] and provenance_store.is_current(self.conn, job.input_ref)
-        )
+        return _job_is_current(self.conn, job)
+
+
+def provider_summary(cfg: Config) -> dict[str, str]:
+    model_cfg = cfg.model_for("prompt_rescue")
+    model = model_cfg.model
+    if not isinstance(model, str) or not model.strip() or len(model) > 256 or "\x00" in model:
+        raise ValueError("prompt rescue model identity is invalid")
+    return {
+        "model": model,
+        "location": _provider_location(model, model_cfg.base_url),
+    }
+
+
+def generate_output(
+    cfg: Config,
+    *,
+    rough_prompt: str,
+    target: str,
+    audience: str,
+    constraints: tuple[str, ...],
+    desired_format: str,
+    llm_caller: Callable[..., Any] | None = None,
+) -> dict[str, Any]:
+    normalized = validate_source(
+        cfg,
+        rough_prompt=rough_prompt,
+        target=target,
+        audience=audience,
+        constraints=constraints,
+        desired_format=desired_format,
+    )
+    payload = {
+        "rough_prompt": normalized["rough_prompt"],
+        "target": normalized["target"],
+        "audience": normalized["audience"],
+        "constraints": list(normalized["constraints"]),
+        "desired_format": normalized["desired_format"],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    if len(encoded.encode("utf-8")) > 256 * 1024:
+        raise PromptRescueValidationError("prompt rescue input changed")
+    response = (llm_caller or llm_mod.call_llm)(
+        cfg,
+        "prompt_rescue",
+        messages=[
+            {"role": "system", "content": load_prompt("prompt_rescue.md")},
+            {"role": "user", "content": encoded},
+        ],
+        json_mode=True,
+    )
+    text = llm_mod.extract_text(response).strip()
+    try:
+        raw = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise PromptRescueValidationError("prompt rescue output is invalid") from exc
+    return validate_output(cfg, raw)
+
+
+def _job_is_current(
+    conn: sqlite3.Connection,
+    job: store.PromptRescueJob,
+) -> bool:
+    sources = provenance_store.direct_sources_checked(
+        conn,
+        EvidenceRef(kind="prompt_rescue", id=job.id),
+    )
+    return bool(sources == [job.input_ref] and provenance_store.is_current(conn, job.input_ref))
 
 
 def validate_config(cfg: Config) -> None:

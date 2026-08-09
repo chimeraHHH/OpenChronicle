@@ -28,3 +28,22 @@ Add one or more `--corpus path/to/provider-results.json` arguments to compare
 complete pre-recorded provider runs. Raw provider corpora and generated reports
 belong under ignored `scratch/` until their provenance, cost, and run conditions
 are reviewed for publication.
+
+To execute the frozen cases through the exact production template, JSON mode,
+no-tool call, and output validator, first explicitly enable `[prompt_rescue]`
+and configure `[models.prompt_rescue]`. Then run:
+
+```bash
+uv run python -m openchronicle.evaluation.prompt_rescue \
+  --dataset benchmarks/vida-prompt-rescue-v1/fixtures/cases.json \
+  --contract benchmarks/vida-prompt-rescue-v1/json/metric_contract.json \
+  --run-configured-provider \
+  --provider-output scratch/prompt-rescue-provider-corpus.json \
+  --output scratch/vida-prompt-rescue-provider-report.json
+```
+
+The runner rejects the five deterministically invalid cases before model
+egress. Every other case records a closed `error_code`, per-case latency,
+model identity, provider location, and template version/digest. Provider
+exceptions are never copied into the corpus. The corpus schema is version 2;
+an output and an error cannot both claim the same accepted case.
