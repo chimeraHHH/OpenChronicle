@@ -43,6 +43,9 @@ def test_pyinstaller_command_is_pinned_onefile_console_and_target_suffixed() -> 
     with pytest.raises(ValueError, match="identity is invalid"):
         builder.pyinstaller_command("aarch64-apple-darwin", codesign_identity="x\x00y")
 
+    assert builder.FONT_BUILDER == ROOT / "scripts" / "fetch_pdf_fonts.py"
+    assert builder.FONT_BUILDER.is_file()
+
 
 def test_tauri_bundle_config_uses_external_binary_basename() -> None:
     payload = json.loads(

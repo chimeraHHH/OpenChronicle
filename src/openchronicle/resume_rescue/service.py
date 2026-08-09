@@ -33,8 +33,13 @@ from .json_resume import (
 )
 from .models import build_exact_artifact
 from .native_export import ResumeNativeExport, render_docx_export
-from .pdf_export import render_pdf_export
-from .render import ResumePreview, build_document_tree, render_preview, render_preview_tree
+from .render import (
+    ResumeDocumentTree,
+    ResumePreview,
+    build_document_tree,
+    render_preview,
+    render_preview_tree,
+)
 from .rewrite import ResumeRewriteValidationError
 from .rewrite_generation import (
     TEMPLATE_VERSION as REWRITE_TEMPLATE_VERSION,
@@ -49,6 +54,16 @@ from .rewrite_generation import (
 from .rewrite_generation import (
     provider_summary as rewrite_provider_summary,
 )
+
+
+def render_pdf_export(
+    tree: ResumeDocumentTree, *, preview_document_digest: str
+) -> ResumeNativeExport:
+    """Import the heavy PDF stack only for an actual PDF export operation."""
+
+    from .pdf_export import render_pdf_export as render
+
+    return render(tree, preview_document_digest=preview_document_digest)
 
 
 class ResumeRescueService:
@@ -608,7 +623,7 @@ class ResumeRescueService:
     def export_pdf(
         self, projection_id: str, *, expected_preview_document_digest: str
     ) -> ResumeNativeExport:
-        """Build a current PDF only through the exact audited development engine."""
+        """Build a current PDF only through the exact audited bundled engine."""
 
         self._require_enabled()
         projection = self.get_projection(projection_id)

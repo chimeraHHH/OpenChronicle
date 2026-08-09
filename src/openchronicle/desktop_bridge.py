@@ -30,7 +30,7 @@ from .reply_rescue.service import validate_config as validate_reply_rescue
 from .resume_rescue import review_store as resume_review_store
 from .resume_rescue import rewrite_store as resume_rewrite_store
 from .resume_rescue import store as resume_rescue_store
-from .resume_rescue.pdf_export import PdfExportUnavailable
+from .resume_rescue.native_export import PdfExportUnavailable
 from .resume_rescue.rewrite import rewrite_proposal_digest
 from .resume_rescue.rewrite_generation import ResumeRewriteEgressDenied
 from .resume_rescue.service import ResumeRescueService

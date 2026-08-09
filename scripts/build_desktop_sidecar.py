@@ -25,6 +25,7 @@ SUPPORTED_TARGETS = {
 }
 ROOT = Path(__file__).resolve().parents[1]
 ENTRY_POINT = ROOT / "resources" / "desktop_bridge_entry.py"
+FONT_BUILDER = ROOT / "scripts" / "fetch_pdf_fonts.py"
 BINARIES_DIR = ROOT / "apps" / "desktop" / "src-tauri" / "binaries"
 SCRATCH_ROOT = ROOT / "scratch" / "desktop-sidecar"
 
@@ -85,6 +86,7 @@ def build(*, triple: str, keep_work: bool = False, codesign_identity: str = "") 
     scratch = SCRATCH_ROOT / triple
     if scratch.exists():
         shutil.rmtree(scratch)
+    subprocess.run([sys.executable, str(FONT_BUILDER)], cwd=ROOT, check=True)
     subprocess.run(
         pyinstaller_command(triple, codesign_identity=codesign_identity), cwd=ROOT, check=True
     )

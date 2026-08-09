@@ -36,6 +36,10 @@ class NativeResumeExportError(ValueError):
     """A native résumé document could not be built or validated."""
 
 
+class PdfExportUnavailable(NativeResumeExportError):
+    """The audited bundled PDF engine is unavailable or failed closed."""
+
+
 @dataclass(frozen=True, slots=True)
 class ResumeNativeExport:
     projection_id: str

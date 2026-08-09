@@ -12,7 +12,8 @@ def test_native_export_contract_freezes_formats_references_and_hard_gates() -> N
 
     assert manifest["schema_version"] == 1
     assert manifest["formats"] == ["pdf", "docx"]
-    assert manifest["pdf_engine"]["release_boundary"] == "development_only_until_bundled"
+    assert manifest["pdf_engine"]["release_boundary"] == "bundled_offline"
+    assert manifest["pdf_engine"]["kind"] == "reportlab-harfbuzz-offline"
     assert manifest["docx_engine"] == {
         "repository": "python-openxml/python-docx",
         "commit": "e45454602b53e8e572b179ccf1c91093ec9f4ed7",
@@ -43,6 +44,7 @@ def test_native_export_contract_freezes_formats_references_and_hard_gates() -> N
         "AmruthPillai/Reactive-Resume",
         "Kozea/WeasyPrint",
         "MrBitBucket/reportlab-mirror",
+        "py-pdf/fpdf2",
         "typst/typst",
     }
     assert all(

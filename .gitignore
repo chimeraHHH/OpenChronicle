@@ -35,3 +35,6 @@ resources/mac-ax-watcher
 *.log
 scratch/
 /tmp/pdfs/
+
+# Deterministically generated from pinned Google Fonts sources during release builds.
+src/openchronicle/assets/pdf_fonts/*.ttf

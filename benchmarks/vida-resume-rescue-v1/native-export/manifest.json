@@ -12,10 +12,23 @@
     "renderer_timeout_seconds": 30
   },
   "pdf_engine": {
-    "kind": "google-chrome-headless",
-    "version": "Google Chrome 151.0.7922.77",
-    "executable_sha256": "696e4277196f9bc4d6655285f617efb068a84d4c7fc498948f10d8a4e03f9663",
-    "release_boundary": "development_only_until_bundled"
+    "kind": "reportlab-harfbuzz-offline",
+    "version": "ReportLab 5.0.0 + uharfbuzz 0.56.0",
+    "reportlab_version": "5.0.0",
+    "uharfbuzz_version": "0.56.0",
+    "pypdf_version": "6.15.0",
+    "release_boundary": "bundled_offline",
+    "font_source": {
+      "repository": "google/fonts",
+      "commit": "2d85e20401920891efb7cd6272d6339685df2820",
+      "build_tool": "fonttools@4.63.0",
+      "license": "OFL-1.1",
+      "assets": {
+        "NotoSans-Regular.ttf": "82d154854e9c223e853625ae9faf7302fdccc02f6bacfd429d6ff311da93d011",
+        "NotoSansSC-Regular.ttf": "56b7235feaf4eeeccaa59289ee95d965ed07fb3b2297251981e5e05b4e21ed27",
+        "NotoSansArabic-Regular.ttf": "1a4e20719f69a8b17b80a82d732f1f45f88b662b4213817554b06499eef00c68"
+      }
+    }
   },
   "docx_engine": {
     "repository": "python-openxml/python-docx",
@@ -46,10 +59,11 @@
   "comparators": [
     {
       "repository": "AmruthPillai/Reactive-Resume",
-      "commit": "ba1f46995067ac834ab90c64855393731625c4c6",
+      "commit": "efd950bd9394975201655fefb8c47f0edb44d273",
       "pdf_dependency": "@react-pdf/renderer@^4.6.0",
       "docx_dependency": "docx@^9.7.1",
-      "license": "MIT"
+      "license": "MIT",
+      "observed_boundary": "PDF.js preview shares React-PDF output, but the audited Arabic extraction probe did not preserve exact logical Unicode order"
     },
     {
       "repository": "MrBitBucket/reportlab-mirror",
@@ -67,7 +81,15 @@
       "repository": "typst/typst",
       "commit": "9dfd3a08500b7896045f907433cf7b4b02434fad",
       "release": "v0.15.1",
-      "license": "Apache-2.0"
+      "license": "Apache-2.0",
+      "observed_boundary": "CJK requires bundled fonts and the audited Arabic extraction probe did not preserve exact logical Unicode order"
+    },
+    {
+      "repository": "py-pdf/fpdf2",
+      "commit": "42ec66442bf278b9768ca787fe601d3d334c62e4",
+      "version": "2.8.7",
+      "license": "LGPL-3.0-only",
+      "observed_boundary": "HarfBuzz-shaped Arabic rendered visually but the audited extraction probe returned CID/control substitutions"
     }
   ],
   "hard_gates": {
@@ -81,7 +103,8 @@
     "output_digest_recomputed_in_rust": true,
     "pdf_a4_and_text_order_verified": true,
     "pdf_fonts_embedded": true,
-    "pdf_renderer_process_group_drained": true,
+    "pdf_no_child_process_or_network": true,
+    "pdf_repeat_bytes_deterministic": true,
     "docx_deterministic_zip": true,
     "docx_external_relationships_forbidden": true,
     "docx_active_content_forbidden": true,
