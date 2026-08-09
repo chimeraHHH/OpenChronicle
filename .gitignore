@@ -33,3 +33,4 @@ resources/mac-ax-watcher
 # Ad-hoc logs / scratch
 *.log
 scratch/
+/tmp/pdfs/

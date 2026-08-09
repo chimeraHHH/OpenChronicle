@@ -1,0 +1,125 @@
+{
+  "schema_version": 1,
+  "suite_id": "OC-Vida-Resume-Render-v1",
+  "cases": [
+    {
+      "id": "single-page-hostile-markup",
+      "display_name": "Ada <img src=https://evil.test/x>",
+      "locale": "en-US",
+      "expected_pages": {"minimum": 1, "maximum": 1},
+      "sections": [
+        {
+          "kind": "summary",
+          "items": [
+            "Reliability engineer who treats </li><script>alert('x')</script> as inert text and ships reviewed, evidence-backed changes."
+          ]
+        },
+        {
+          "kind": "experience",
+          "items": [
+            "Reduced API p95 latency by 40% after profiling the query path.",
+            "Led an incident review with a cross-functional service team."
+          ]
+        },
+        {
+          "kind": "skill",
+          "items": ["Python, SQLite, observability, and fault-injection testing."]
+        }
+      ]
+    },
+    {
+      "id": "unicode-and-directionality",
+      "display_name": "林玥 · Zoë Łukasz",
+      "locale": "zh-CN",
+      "expected_pages": {"minimum": 1, "maximum": 1},
+      "sections": [
+        {
+          "kind": "summary",
+          "items": [
+            "构建本地优先的软件，并用可追溯证据审查每项声明。",
+            "Maintained résumé text in English, français, 日本語, and العربية."
+          ]
+        },
+        {
+          "kind": "language",
+          "items": ["中文（母语）；English (professional); Français (intermediate)."]
+        }
+      ]
+    },
+    {
+      "id": "long-unbroken-token",
+      "display_name": "Long Token Example",
+      "locale": "en-US",
+      "expected_pages": {"minimum": 1, "maximum": 1},
+      "sections": [
+        {
+          "kind": "project",
+          "items": [
+            "Verified overflow handling for artifact-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx-end without clipping."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "automatic-multipage-flow",
+      "display_name": "Morgan Multipage",
+      "locale": "en-US",
+      "expected_pages": {"minimum": 3, "maximum": 6},
+      "sections": [
+        {
+          "kind": "experience",
+          "items": [
+            "01. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "02. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "03. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "04. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "05. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "06. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "07. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "08. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "09. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "10. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "11. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "12. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "13. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "14. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "15. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "16. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "17. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "18. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "19. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "20. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "21. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "22. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "23. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "24. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "25. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "26. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "27. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "28. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "29. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "30. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "31. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "32. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "33. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "34. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "35. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "36. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "37. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "38. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "39. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "40. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "41. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release.",
+            "42. Documented a production migration with explicit rollback criteria, reviewed evidence, ownership boundaries, and measurable verification before release."
+          ]
+        },
+        {
+          "kind": "education",
+          "items": [
+            "Completed systems coursework with a reviewed capstone on durable local data pipelines."
+          ]
+        }
+      ]
+    }
+  ]
+}

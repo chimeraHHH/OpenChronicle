@@ -277,14 +277,19 @@ privacy UX is validated on a signed macOS build.
   review. A fixed A4 HTML renderer now derives an escaped, no-network document,
   parser-order plain-text mirror, and digest from that same current projection;
   the desktop renders it in an empty-permission sandbox and rejects active
-  content at its protocol boundary. Pinned-engine render/overflow acceptance,
-  supervised no-tool rewriting, and reviewed JSON Resume/document
-  import remain open; drafts and all send/submit authority remain later,
-  separate capabilities. HTML export now uses a dedicated native command: it
+  content at its protocol boundary. A frozen Chrome 151 + Poppler 26.04 macOS
+  suite now passes hostile markup, Unicode/RTL, unbroken-token, and automatic
+  three-page fixtures through two independent renders; text order, page boxes,
+  font embedding, in-bounds glyph boxes, layout, and page pixels pass, followed
+  by manual review of all six PNG pages. The report explicitly does not claim
+  PDF-byte determinism or portability to another engine/OS/font set.
+  Supervised no-tool rewriting and reviewed JSON Resume/document import remain
+  open; drafts and all send/submit authority remain later, separate
+  capabilities. HTML export now uses a dedicated native command: it
   re-fetches the current document, digest-CAS checks the WebView request, opens
   the system save dialog, creates only a new private `.html` file, and never
-  exposes general filesystem write or overwrite authority. Pinned-engine
-  pagination/overflow evaluation and PDF/DOCX export remain open.
+  exposes general filesystem write or overwrite authority. Native engine
+  packaging and digest-bound PDF/DOCX export remain open.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only

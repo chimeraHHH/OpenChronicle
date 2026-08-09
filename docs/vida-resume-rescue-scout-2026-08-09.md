@@ -57,6 +57,19 @@ uses a fixed, no-network HTML/CSS template and records its version. PDF is not
 called deterministic until a pinned engine passes text-order, overflow,
 pagination, and byte/document-diff acceptance on macOS packaging.
 
+Chrome's maintained [Headless mode documentation](https://developer.chrome.com/docs/chromium/headless)
+documents `--print-to-pdf` and the flag that removes date, URL, and page-number
+headers and footers. The browser's
+[DevTools `Page.printToPDF` contract](https://chromedevtools.github.io/devtools-protocol/tot/Page/#method-printToPDF)
+also exposes CSS page-size preference and print-background controls. These are
+engine mechanisms, not fidelity guarantees. OpenChronicle therefore freezes an
+exact Chrome and Poppler toolchain in a separate render manifest and requires
+two-pass text, geometry, raster, and manual PNG review. The first macOS run is
+recorded in [the Chrome 151 render evidence](vida-resume-render-evidence-2026-08-09.md).
+It passed that local configuration, while intentionally leaving product PDF
+export closed until the engine is packaged behind the native digest-bound
+export boundary.
+
 For local export, the current [Tauri 2 dialog API](https://v2.tauri.app/reference/javascript/dialog/#save)
 explicitly recommends a dedicated native command when security matters instead
 of exposing a general WebView file-write scope. OpenChronicle follows that
@@ -229,7 +242,9 @@ as proof of ATS or hiring success.
 2. Add deterministic fixtures and an adversarial factual-support evaluator.
 3. Add local structured profile/job composition and review; generation remains
    a supervised no-tool job.
-4. Add deterministic HTML preview and render/parse/layout acceptance.
+4. Add deterministic HTML preview and render/parse/layout acceptance. The
+   Chrome 151 macOS acceptance is complete; cross-platform packaging remains a
+   separate export prerequisite.
 5. Add reviewed document extraction, then JSON Resume import/export mapping.
 6. Consider PDF/DOCX export after packaging evaluation. Application submission
    remains outside Stage 2.

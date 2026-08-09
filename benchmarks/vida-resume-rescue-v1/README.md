@@ -37,3 +37,26 @@ Generated reports belong under ignored `scratch/` until run provenance and the
 fixture contract are reviewed. Later no-tool tailoring providers must add a
 separately recorded corpus and human claim-level review; they cannot inherit
 the exact projection's factual pass by similarity alone.
+
+## Pinned render acceptance
+
+The separate render suite passes each production preview through the exact
+Chrome and Poppler versions frozen in `render/manifest.json`. It prints every
+case twice, then checks A4 geometry, page-count bounds, embedded fonts, ordered
+text preservation, in-page text boxes, bounded artifacts, and repeatable text,
+layout, and per-page raster output. Its fixtures cover hostile markup,
+multilingual and right-to-left text, a long unbroken token, and automatic
+three-page flow.
+
+```bash
+uv run python -m openchronicle.evaluation.resume_render \
+  --output-dir tmp/pdfs/resume-render-chrome151
+```
+
+The output directory must be new. A successful automated report deliberately
+uses `release_gate_status=pending_visual_review`; inspect every generated PNG
+for clipping, overlap, missing glyphs, spacing defects, and bad page
+transitions before recording a local evidence decision. PDF bytes are not a
+determinism gate because engine metadata can change while extracted text,
+layout, and pixels remain identical. This audit neither enables product PDF
+export nor proves fidelity on another browser, OS, or font installation.
