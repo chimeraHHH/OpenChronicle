@@ -56,6 +56,28 @@ Rescue therefore:
 - requires multi-profile, adversarial, human-annotated evaluation before any
   claim about tailoring quality beyond the frozen fixture.
 
+## Research update: evaluation signals are not factual proof
+
+[ResumeFlow](https://arxiv.org/abs/2402.06221) proposes token-overlap and
+embedding-similarity measures for job alignment and content preservation. The
+paper itself describes low preservation plus high job alignment as a warning
+that hallucination may have occurred; similarity does not establish
+claim-level entailment. OpenChronicle may report relevance separately, but its
+factual gate compares every rendered claim with its admitted fact IDs and
+exact source revision.
+
+A 2025 [NAACL observational study](https://aclanthology.org/2025.findings-naacl.270/)
+compared zero-shot GPT-4 and human ratings over 736 real résumés and found only
+minor correlation. Résumé Rescue therefore does not use an LLM match score as
+a substitute for human preference, qualification, or hiring judgment.
+
+The maintained [JSON Resume schema documentation](https://jsonresume.org/docs/013-schema-definitions)
+also notes that the canonical package permits additional properties. That is
+appropriate for an interchange ecosystem, but not for a security boundary.
+OpenChronicle keeps a closed internal schema and will implement JSON Resume as
+an explicit import/export mapping with unknown-field review, never as its
+authorization model.
+
 ## Selected source model
 
 Résumé Rescue has two independently versioned source sets.
