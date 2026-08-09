@@ -14,6 +14,7 @@ import type {
   ReplyRescueJobSummary,
   ResumeOpportunity,
   ResumeProfileVersion,
+  ResumePdfPreview,
   ResumePreview,
   ResumeProjection,
   ResumeRescueState,
@@ -517,6 +518,37 @@ export function resumePreview(): ResumePreview {
       "Ada Example\n\nEXPERIENCE\n- Reduced API p95 latency by 40% after profiling the query path.\n",
     document_digest: "d".repeat(64),
     action_capability: "none",
+  };
+}
+
+export function resumePdfPreview(
+  overrides: Partial<ResumePdfPreview> = {},
+): ResumePdfPreview {
+  const preview = resumePreview();
+  return {
+    schema_version: 1,
+    pdf_preview_version: 1,
+    projection_id: preview.projection_id,
+    artifact_digest: preview.artifact_digest,
+    preview_document_digest: preview.document_digest,
+    pdf_content_digest: "f".repeat(64),
+    pdf_byte_count: 56_864,
+    renderer: "pypdfium2-5.12.1-scale-1.5",
+    page_count: 1,
+    pages: [
+      {
+        page_number: 1,
+        width_pixels: 893,
+        height_pixels: 1_263,
+        media_type: "image/png",
+        byte_count: 68,
+        content_digest: "1".repeat(64),
+        content_base64:
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZK7sAAAAASUVORK5CYII=",
+      },
+    ],
+    action_capability: "none",
+    ...overrides,
   };
 }
 

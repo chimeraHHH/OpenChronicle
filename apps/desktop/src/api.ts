@@ -40,6 +40,7 @@ import type {
   ResumeOpportunitySource,
   ResumeOwnership,
   ResumePdfExportResult,
+  ResumePdfPreview,
   ResumeProfile,
   ResumeProfileVersion,
   ResumePreview,
@@ -1869,6 +1870,120 @@ export function normalizeResumePreview(value: unknown): ResumePreview {
   };
 }
 
+export function normalizeResumePdfPreview(value: unknown): ResumePdfPreview {
+  const raw = closedObject(
+    value,
+    [
+      "schema_version",
+      "pdf_preview_version",
+      "projection_id",
+      "artifact_digest",
+      "preview_document_digest",
+      "pdf_content_digest",
+      "pdf_byte_count",
+      "renderer",
+      "page_count",
+      "pages",
+      "action_capability",
+    ],
+    "Résumé Rescue PDF preview",
+  );
+  const pageCount = numberValue(raw.page_count, "Résumé Rescue PDF preview page count");
+  const pdfByteCount = numberValue(raw.pdf_byte_count, "Résumé Rescue PDF byte count");
+  const pages = arrayValue(raw.pages, "Résumé Rescue PDF preview pages").map((value, index) => {
+    const page = closedObject(
+      value,
+      [
+        "page_number",
+        "width_pixels",
+        "height_pixels",
+        "media_type",
+        "byte_count",
+        "content_digest",
+        "content_base64",
+      ],
+      "Résumé Rescue PDF preview page",
+    );
+    const pageNumber = numberValue(page.page_number, "Résumé Rescue PDF preview page number");
+    const width = numberValue(page.width_pixels, "Résumé Rescue PDF preview width");
+    const height = numberValue(page.height_pixels, "Résumé Rescue PDF preview height");
+    const byteCount = numberValue(page.byte_count, "Résumé Rescue PDF preview byte count");
+    const contentBase64 = stringValue(
+      page.content_base64,
+      "Résumé Rescue PDF preview page content",
+    );
+    if (
+      pageNumber !== index + 1 ||
+      !Number.isSafeInteger(width) ||
+      width < 1 ||
+      width > 2_048 ||
+      !Number.isSafeInteger(height) ||
+      height < 1 ||
+      height > 2_048 ||
+      stringValue(page.media_type, "Résumé Rescue PDF preview media type") !== "image/png" ||
+      !Number.isSafeInteger(byteCount) ||
+      byteCount < 1 ||
+      byteCount > 4 * 1024 * 1024 ||
+      contentBase64.length > Math.ceil((4 * 1024 * 1024) / 3) * 4 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(contentBase64)
+    ) {
+      return protocolError("Résumé Rescue PDF preview page contract");
+    }
+    return {
+      page_number: pageNumber,
+      width_pixels: width,
+      height_pixels: height,
+      media_type: "image/png" as const,
+      byte_count: byteCount,
+      content_digest: resumeDigest(
+        page.content_digest,
+        "Résumé Rescue PDF preview page digest",
+      ),
+      content_base64: contentBase64,
+    };
+  });
+  const totalBytes = pages.reduce((total, page) => total + page.byte_count, 0);
+  if (
+    numberValue(raw.schema_version, "Résumé Rescue PDF preview schema") !== 1 ||
+    numberValue(raw.pdf_preview_version, "Résumé Rescue PDF preview version") !== 1 ||
+    stringValue(raw.renderer, "Résumé Rescue PDF preview renderer") !==
+      "pypdfium2-5.12.1-scale-1.5" ||
+    stringValue(raw.action_capability, "Résumé Rescue PDF preview action") !== "none" ||
+    !Number.isSafeInteger(pageCount) ||
+    pageCount < 1 ||
+    pageCount > 20 ||
+    pageCount !== pages.length ||
+    totalBytes > 20 * 1024 * 1024 ||
+    !Number.isSafeInteger(pdfByteCount) ||
+    pdfByteCount < 1 ||
+    pdfByteCount > 10 * 1024 * 1024
+  ) {
+    return protocolError("Résumé Rescue PDF preview contract");
+  }
+  return {
+    schema_version: 1,
+    pdf_preview_version: 1,
+    projection_id: stringValue(raw.projection_id, "Résumé Rescue PDF preview projection id"),
+    artifact_digest: resumeDigest(
+      raw.artifact_digest,
+      "Résumé Rescue PDF preview artifact digest",
+    ),
+    preview_document_digest: resumeDigest(
+      raw.preview_document_digest,
+      "Résumé Rescue PDF preview document digest",
+    ),
+    pdf_content_digest: resumeDigest(
+      raw.pdf_content_digest,
+      "Résumé Rescue PDF preview content digest",
+    ),
+    pdf_byte_count: pdfByteCount,
+    renderer: "pypdfium2-5.12.1-scale-1.5",
+    page_count: pageCount,
+    pages,
+    action_capability: "none",
+  };
+}
+
 export function normalizeResumeHtmlExport(value: unknown): ResumeHtmlExportResult {
   const raw = closedObject(
     value,
@@ -3289,6 +3404,30 @@ export const desktopApi = {
         return preview;
       },
     ),
+  getResumeRewritePdfPreview: (
+    versionId: string,
+    expectedArtifactDigest: string,
+    expectedPreviewDocumentDigest: string,
+  ) =>
+    request(
+      "get_resume_rescue_rewrite_pdf_preview",
+      {
+        projection_id: versionId,
+        expected_artifact_digest: expectedArtifactDigest,
+        expected_preview_document_digest: expectedPreviewDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumePdfPreview(value);
+        if (
+          result.projection_id !== versionId ||
+          result.artifact_digest !== expectedArtifactDigest ||
+          result.preview_document_digest !== expectedPreviewDocumentDigest
+        ) {
+          return protocolError("Reviewed résumé PDF preview identity");
+        }
+        return result;
+      },
+    ),
   getResumeRewriteJsonExport: (versionId: string, expectedArtifactDigest: string) =>
     request(
       "get_resume_rescue_rewrite_json_export",
@@ -3350,6 +3489,7 @@ export const desktopApi = {
     versionId: string,
     expectedArtifactDigest: string,
     expectedPreviewDocumentDigest: string,
+    expectedPdfContentDigest: string,
   ) =>
     request(
       "export_resume_rescue_rewrite_pdf",
@@ -3357,13 +3497,15 @@ export const desktopApi = {
         version_id: versionId,
         expected_artifact_digest: expectedArtifactDigest,
         expected_preview_document_digest: expectedPreviewDocumentDigest,
+        expected_pdf_content_digest: expectedPdfContentDigest,
       },
       (value) => {
         const result = normalizeResumePdfExport(value);
         if (
           result.projection_id !== versionId ||
           result.artifact_digest !== expectedArtifactDigest ||
-          result.preview_document_digest !== expectedPreviewDocumentDigest
+          result.preview_document_digest !== expectedPreviewDocumentDigest ||
+          result.content_digest !== expectedPdfContentDigest
         ) {
           return protocolError("Reviewed résumé PDF export response identity");
         }
@@ -3459,6 +3601,30 @@ export const desktopApi = {
       }
       return preview;
     }),
+  getResumePdfPreview: (
+    projectionId: string,
+    expectedArtifactDigest: string,
+    expectedPreviewDocumentDigest: string,
+  ) =>
+    request(
+      "get_resume_rescue_pdf_preview",
+      {
+        projection_id: projectionId,
+        expected_artifact_digest: expectedArtifactDigest,
+        expected_preview_document_digest: expectedPreviewDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumePdfPreview(value);
+        if (
+          result.projection_id !== projectionId ||
+          result.artifact_digest !== expectedArtifactDigest ||
+          result.preview_document_digest !== expectedPreviewDocumentDigest
+        ) {
+          return protocolError("Résumé Rescue PDF preview response identity");
+        }
+        return result;
+      },
+    ),
   exportResumeHtml: (projectionId: string, expectedDocumentDigest: string) =>
     request(
       "export_resume_rescue_html",
@@ -3505,6 +3671,7 @@ export const desktopApi = {
     projectionId: string,
     expectedArtifactDigest: string,
     expectedPreviewDocumentDigest: string,
+    expectedPdfContentDigest: string,
   ) =>
     request(
       "export_resume_rescue_pdf",
@@ -3512,13 +3679,15 @@ export const desktopApi = {
         projection_id: projectionId,
         expected_artifact_digest: expectedArtifactDigest,
         expected_preview_document_digest: expectedPreviewDocumentDigest,
+        expected_pdf_content_digest: expectedPdfContentDigest,
       },
       (value) => {
         const result = normalizeResumePdfExport(value);
         if (
           result.projection_id !== projectionId ||
           result.artifact_digest !== expectedArtifactDigest ||
-          result.preview_document_digest !== expectedPreviewDocumentDigest
+          result.preview_document_digest !== expectedPreviewDocumentDigest ||
+          result.content_digest !== expectedPdfContentDigest
         ) {
           return protocolError("Résumé Rescue PDF export response identity");
         }

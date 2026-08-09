@@ -53,6 +53,10 @@ const MAX_JSON_RESUME_CANDIDATES: usize = 2_000;
 const MAX_RESUME_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RESUME_DOCX_EXPORT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RESUME_PDF_EXPORT_BYTES: usize = 10 * 1024 * 1024;
+const MAX_RESUME_PDF_PREVIEW_PAGES: usize = 20;
+const MAX_RESUME_PDF_PREVIEW_PAGE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RESUME_PDF_PREVIEW_TOTAL_BYTES: usize = 20 * 1024 * 1024;
+const MAX_RESUME_PDF_PREVIEW_DIMENSION: u64 = 2_048;
 const MAX_RESUME_DOCUMENT_VAULT_ITEMS: usize = 4;
 const MAX_RESUME_DOCUMENT_VAULT_BYTES: usize = 32 * 1024 * 1024;
 const RESUME_DOCUMENT_VAULT_TTL: Duration = Duration::from_secs(30 * 60);
@@ -440,6 +444,15 @@ pub(crate) struct ResumeRewriteNativeExportRequest {
     pub expected_preview_document_digest: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRewritePdfExportRequest {
+    pub version_id: String,
+    pub expected_artifact_digest: String,
+    pub expected_preview_document_digest: String,
+    pub expected_pdf_content_digest: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ResumeProvenanceRequest {
@@ -564,6 +577,14 @@ pub(crate) struct ResumePreviewRequest {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ResumePdfPreviewRequest {
+    pub projection_id: String,
+    pub expected_artifact_digest: String,
+    pub expected_preview_document_digest: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct ResumeExportHtmlRequest {
     pub projection_id: String,
     pub expected_document_digest: String,
@@ -633,6 +654,7 @@ pub(crate) struct ResumeExportPdfRequest {
     pub projection_id: String,
     pub expected_artifact_digest: String,
     pub expected_preview_document_digest: String,
+    pub expected_pdf_content_digest: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -759,6 +781,40 @@ struct ResumeNativeExportPayload {
 #[serde(deny_unknown_fields)]
 struct ResumeNativeExportResponse {
     export: ResumeNativeExportPayload,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResumePdfPreviewPagePayload {
+    page_number: u64,
+    width_pixels: u64,
+    height_pixels: u64,
+    media_type: String,
+    byte_count: u64,
+    content_digest: String,
+    content_base64: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResumePdfPreviewPayload {
+    schema_version: u64,
+    pdf_preview_version: u64,
+    projection_id: String,
+    artifact_digest: String,
+    preview_document_digest: String,
+    pdf_content_digest: String,
+    pdf_byte_count: u64,
+    renderer: String,
+    page_count: u64,
+    pages: Vec<ResumePdfPreviewPagePayload>,
+    action_capability: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResumePdfPreviewResponse {
+    pdf_preview: ResumePdfPreviewPayload,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1034,6 +1090,14 @@ pub async fn get_resume_rescue_rewrite_preview(
 }
 
 #[tauri::command]
+pub async fn get_resume_rescue_rewrite_pdf_preview(
+    request: ResumePdfPreviewRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_pdf_preview_request(&request)?;
+    get_resume_pdf_preview_with_operation(request, Operation::ResumeRescuePreviewRewritePdf).await
+}
+
+#[tauri::command]
 pub async fn get_resume_rescue_rewrite_json_export(
     request: ResumeRewriteVersionRequest,
 ) -> Result<Value, DesktopError> {
@@ -1092,15 +1156,17 @@ pub async fn export_resume_rescue_rewrite_docx(
 #[tauri::command]
 pub async fn export_resume_rescue_rewrite_pdf(
     app: AppHandle,
-    request: ResumeRewriteNativeExportRequest,
+    request: ResumeRewritePdfExportRequest,
 ) -> Result<Value, DesktopError> {
     validate_resume_identifier(&request.version_id)?;
     validate_resume_digest(&request.expected_artifact_digest)?;
     validate_resume_digest(&request.expected_preview_document_digest)?;
+    validate_resume_digest(&request.expected_pdf_content_digest)?;
     let export_request = ResumeExportPdfRequest {
         projection_id: request.version_id,
         expected_artifact_digest: request.expected_artifact_digest,
         expected_preview_document_digest: request.expected_preview_document_digest,
+        expected_pdf_content_digest: request.expected_pdf_content_digest,
     };
     tauri::async_runtime::spawn_blocking(move || {
         export_resume_rewrite_pdf_blocking(&app, export_request)
@@ -1170,6 +1236,14 @@ pub async fn get_resume_rescue_preview(
 ) -> Result<Value, DesktopError> {
     validate_resume_identifier(&request.projection_id)?;
     invoke(Operation::ResumeRescuePreview, &request).await
+}
+
+#[tauri::command]
+pub async fn get_resume_rescue_pdf_preview(
+    request: ResumePdfPreviewRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_pdf_preview_request(&request)?;
+    get_resume_pdf_preview_with_operation(request, Operation::ResumeRescuePreviewPdf).await
 }
 
 #[tauri::command]
@@ -1309,6 +1383,7 @@ pub async fn export_resume_rescue_pdf(
     validate_resume_identifier(&request.projection_id)?;
     validate_resume_digest(&request.expected_artifact_digest)?;
     validate_resume_digest(&request.expected_preview_document_digest)?;
+    validate_resume_digest(&request.expected_pdf_content_digest)?;
     tauri::async_runtime::spawn_blocking(move || export_resume_pdf_blocking(&app, request))
         .await
         .map_err(|_| {
@@ -1365,6 +1440,37 @@ async fn invoke<T: Serialize + ?Sized>(
 ) -> Result<Value, DesktopError> {
     let params = checked_value(request)?;
     bridge::call(operation, params).await
+}
+
+async fn get_resume_pdf_preview_with_operation(
+    request: ResumePdfPreviewRequest,
+    operation: Operation,
+) -> Result<Value, DesktopError> {
+    let params = if operation == Operation::ResumeRescuePreviewRewritePdf {
+        serde_json::json!({
+            "version_id": request.projection_id,
+            "expected_preview_document_digest": request.expected_preview_document_digest,
+        })
+    } else {
+        serde_json::json!({
+            "projection_id": request.projection_id,
+            "expected_preview_document_digest": request.expected_preview_document_digest,
+        })
+    };
+    let value = bridge::call(operation, params).await?;
+    let response: ResumePdfPreviewResponse = serde_json::from_value(value).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid Résumé Rescue PDF preview.",
+        )
+    })?;
+    validate_resume_pdf_preview(&response.pdf_preview, &request)?;
+    serde_json::to_value(response.pdf_preview).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid Résumé Rescue PDF preview.",
+        )
+    })
 }
 
 fn forget_candidate_blocking(
@@ -2487,6 +2593,10 @@ fn validate_resume_pdf_export(
             export.preview_document_digest.as_bytes(),
             request.expected_preview_document_digest.as_bytes(),
         )
+        || !constant_time_equal(
+            export.content_digest.as_bytes(),
+            request.expected_pdf_content_digest.as_bytes(),
+        )
         || validate_resume_digest(&export.content_digest).is_err()
     {
         return Err(invalid_pdf_export());
@@ -2521,6 +2631,80 @@ fn validate_resume_pdf_export(
         return Err(invalid_pdf_export());
     }
     Ok(content)
+}
+
+fn validate_resume_pdf_preview_request(
+    request: &ResumePdfPreviewRequest,
+) -> Result<(), DesktopError> {
+    validate_resume_identifier(&request.projection_id)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    validate_resume_digest(&request.expected_preview_document_digest)
+}
+
+fn validate_resume_pdf_preview(
+    preview: &ResumePdfPreviewPayload,
+    request: &ResumePdfPreviewRequest,
+) -> Result<(), DesktopError> {
+    let invalid = || {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid Résumé Rescue PDF preview.",
+        )
+    };
+    if preview.schema_version != 1
+        || preview.pdf_preview_version != 1
+        || preview.projection_id != request.projection_id
+        || preview.renderer != "pypdfium2-5.12.1-scale-1.5"
+        || preview.action_capability != "none"
+        || preview.page_count == 0
+        || preview.page_count as usize != preview.pages.len()
+        || preview.pages.len() > MAX_RESUME_PDF_PREVIEW_PAGES
+        || preview.pdf_byte_count == 0
+        || preview.pdf_byte_count > MAX_RESUME_PDF_EXPORT_BYTES as u64
+        || !constant_time_equal(
+            preview.artifact_digest.as_bytes(),
+            request.expected_artifact_digest.as_bytes(),
+        )
+        || !constant_time_equal(
+            preview.preview_document_digest.as_bytes(),
+            request.expected_preview_document_digest.as_bytes(),
+        )
+        || validate_resume_digest(&preview.pdf_content_digest).is_err()
+    {
+        return Err(invalid());
+    }
+
+    let maximum_encoded = MAX_RESUME_PDF_PREVIEW_PAGE_BYTES.div_ceil(3) * 4;
+    let mut total_bytes = 0_usize;
+    for (index, page) in preview.pages.iter().enumerate() {
+        if page.page_number != (index + 1) as u64
+            || page.width_pixels == 0
+            || page.width_pixels > MAX_RESUME_PDF_PREVIEW_DIMENSION
+            || page.height_pixels == 0
+            || page.height_pixels > MAX_RESUME_PDF_PREVIEW_DIMENSION
+            || page.media_type != "image/png"
+            || page.byte_count == 0
+            || page.byte_count > MAX_RESUME_PDF_PREVIEW_PAGE_BYTES as u64
+            || page.content_base64.len() > maximum_encoded
+            || validate_resume_digest(&page.content_digest).is_err()
+        {
+            return Err(invalid());
+        }
+        let content = base64::engine::general_purpose::STANDARD
+            .decode(page.content_base64.as_bytes())
+            .map_err(|_| invalid())?;
+        total_bytes = total_bytes.checked_add(content.len()).ok_or_else(invalid)?;
+        let digest = sha256_hex(&content);
+        if content.len() as u64 != page.byte_count
+            || total_bytes > MAX_RESUME_PDF_PREVIEW_TOTAL_BYTES
+            || !content.starts_with(b"\x89PNG\r\n\x1a\n")
+            || !content.ends_with(b"IEND\xaeB`\x82")
+            || !constant_time_equal(page.content_digest.as_bytes(), digest.as_bytes())
+        {
+            return Err(invalid());
+        }
+    }
+    Ok(())
 }
 
 fn validate_docx_archive(content: &[u8]) -> Result<(), DesktopError> {
@@ -4033,6 +4217,7 @@ mod tests {
             projection_id: "projection-1".to_owned(),
             expected_artifact_digest: "a".repeat(64),
             expected_preview_document_digest: "b".repeat(64),
+            expected_pdf_content_digest: sha256_hex(&content),
         };
         let mut export = pdf_export_fixture(&content, &request);
         assert_eq!(
@@ -4053,6 +4238,55 @@ mod tests {
         assert_eq!(
             validate_resume_pdf_export(&active_export, &request)
                 .expect_err("active PDF must fail")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+
+        let changed = b"%PDF-1.7\n1 0 obj<</Type/Catalog>>endobj\n% changed\n%%EOF\n".to_vec();
+        let changed_export = pdf_export_fixture(&changed, &request);
+        assert_eq!(
+            validate_resume_pdf_export(&changed_export, &request)
+                .expect_err("PDF bytes must remain bound to the reviewed preview")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+    }
+
+    #[test]
+    fn pdf_preview_is_closed_bounded_and_page_digest_bound() {
+        let request = ResumePdfPreviewRequest {
+            projection_id: "projection-1".to_owned(),
+            expected_artifact_digest: "a".repeat(64),
+            expected_preview_document_digest: "b".repeat(64),
+        };
+        let png = b"\x89PNG\r\n\x1a\nfixture-IEND\xaeB`\x82";
+        let mut preview = ResumePdfPreviewPayload {
+            schema_version: 1,
+            pdf_preview_version: 1,
+            projection_id: request.projection_id.clone(),
+            artifact_digest: request.expected_artifact_digest.clone(),
+            preview_document_digest: request.expected_preview_document_digest.clone(),
+            pdf_content_digest: "c".repeat(64),
+            pdf_byte_count: 1_234,
+            renderer: "pypdfium2-5.12.1-scale-1.5".to_owned(),
+            page_count: 1,
+            pages: vec![ResumePdfPreviewPagePayload {
+                page_number: 1,
+                width_pixels: 893,
+                height_pixels: 1_263,
+                media_type: "image/png".to_owned(),
+                byte_count: png.len() as u64,
+                content_digest: sha256_hex(png),
+                content_base64: base64::engine::general_purpose::STANDARD.encode(png),
+            }],
+            action_capability: "none".to_owned(),
+        };
+        validate_resume_pdf_preview(&preview, &request).expect("valid bounded preview");
+
+        preview.pages[0].content_digest = "d".repeat(64);
+        assert_eq!(
+            validate_resume_pdf_preview(&preview, &request)
+                .expect_err("page digest swap must fail")
                 .code,
             "BRIDGE_PROTOCOL_ERROR"
         );

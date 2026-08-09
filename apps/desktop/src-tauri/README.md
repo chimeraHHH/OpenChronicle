@@ -7,17 +7,17 @@ installation locations and never search `PATH`.
 
 `npm run tauri:bundle` builds a PyInstaller 6.22.0 one-file bridge for the
 current allowlisted macOS architecture, verifies the Mach-O architecture,
-smoke-tests protocol v14 in an isolated data root, writes a SHA-256 manifest,
+smoke-tests protocol v15 in an isolated data root, writes a SHA-256 manifest,
 and passes the target-suffixed binary to Tauri through
 `tauri.bundle.conf.json`. Generated binaries and manifests are ignored.
 The finalizer checks both Mach-O files, preserves the sidecar hash in local
 mode, verifies the complete signature tree, re-runs the bundled sidecar, and
-holds the actual app open for five seconds against a new isolated data root.
+waits up to 20 seconds for the actual app to become ready against a new isolated
+data root before requiring a stable running interval.
 It also drives the packaged bridge through reviewed JSON Resume admission,
-exact composition/preview, JSON/DOCX/PDF export, and DOCX extraction. Until the
-PDF engine is self-contained, the development manifest records its exact
-`EXPORT_UNAVAILABLE` result as `blocked_unbundled_engine`; every other bridge
-error remains fatal and `release_gate_passed` remains false.
+exact composition, digest-bound PDF page preview, JSON/DOCX/PDF export, and DOCX
+extraction. Every bridge error remains fatal and `release_gate_passed` remains
+false until the distribution checks below are complete.
 
 This development bundle is still not a release artifact. Its final local
 verification preserves PyInstaller's sidecar signature and ad-hoc signs only

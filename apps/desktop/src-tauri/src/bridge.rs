@@ -76,6 +76,7 @@ pub(crate) enum Operation {
     ResumeRescueReplaceOpportunity,
     ResumeRescueComposeExact,
     ResumeRescuePreview,
+    ResumeRescuePreviewPdf,
     ResumeRescueReviewJson,
     ResumeRescueAdmitJson,
     ResumeRescueExportJson,
@@ -89,6 +90,7 @@ pub(crate) enum Operation {
     ResumeRescueDecideRewrite,
     ResumeRescueRestoreRewrite,
     ResumeRescuePreviewRewrite,
+    ResumeRescuePreviewRewritePdf,
     ResumeRescueExportRewriteJson,
     ResumeRescueExportRewriteDocx,
     ResumeRescueExportRewritePdf,
@@ -127,6 +129,7 @@ impl Operation {
             Self::ResumeRescueReplaceOpportunity => "resume_rescue.replace_opportunity",
             Self::ResumeRescueComposeExact => "resume_rescue.compose_exact",
             Self::ResumeRescuePreview => "resume_rescue.preview",
+            Self::ResumeRescuePreviewPdf => "resume_rescue.preview_pdf",
             Self::ResumeRescueReviewJson => "resume_rescue.review_json",
             Self::ResumeRescueAdmitJson => "resume_rescue.admit_json",
             Self::ResumeRescueExportJson => "resume_rescue.export_json",
@@ -140,6 +143,7 @@ impl Operation {
             Self::ResumeRescueDecideRewrite => "resume_rescue.decide_rewrite",
             Self::ResumeRescueRestoreRewrite => "resume_rescue.restore_rewrite",
             Self::ResumeRescuePreviewRewrite => "resume_rescue.preview_rewrite",
+            Self::ResumeRescuePreviewRewritePdf => "resume_rescue.preview_rewrite_pdf",
             Self::ResumeRescueExportRewriteJson => "resume_rescue.export_rewrite_json",
             Self::ResumeRescueExportRewriteDocx => "resume_rescue.export_rewrite_docx",
             Self::ResumeRescueExportRewritePdf => "resume_rescue.export_rewrite_pdf",
@@ -155,8 +159,10 @@ impl Operation {
             | Self::ResumeRescueAdmitDocument
             | Self::ResumeRescueExportDocx
             | Self::ResumeRescueExportPdf
+            | Self::ResumeRescuePreviewPdf
             | Self::ResumeRescueExportRewriteDocx
-            | Self::ResumeRescueExportRewritePdf => DOCUMENT_BRIDGE_TIMEOUT,
+            | Self::ResumeRescueExportRewritePdf
+            | Self::ResumeRescuePreviewRewritePdf => DOCUMENT_BRIDGE_TIMEOUT,
             _ => BRIDGE_TIMEOUT,
         }
     }
@@ -606,6 +612,10 @@ mod tests {
             "resume_rescue.preview"
         );
         assert_eq!(
+            Operation::ResumeRescuePreviewPdf.as_str(),
+            "resume_rescue.preview_pdf"
+        );
+        assert_eq!(
             Operation::ResumeRescueReviewJson.as_str(),
             "resume_rescue.review_json"
         );
@@ -654,11 +664,23 @@ mod tests {
             "resume_rescue.export_rewrite_pdf"
         );
         assert_eq!(
+            Operation::ResumeRescuePreviewRewritePdf.as_str(),
+            "resume_rescue.preview_rewrite_pdf"
+        );
+        assert_eq!(
             Operation::ResumeRescueExportRewriteDocx.timeout(),
             DOCUMENT_BRIDGE_TIMEOUT
         );
         assert_eq!(
             Operation::ResumeRescueExportRewritePdf.timeout(),
+            DOCUMENT_BRIDGE_TIMEOUT
+        );
+        assert_eq!(
+            Operation::ResumeRescuePreviewPdf.timeout(),
+            DOCUMENT_BRIDGE_TIMEOUT
+        );
+        assert_eq!(
+            Operation::ResumeRescuePreviewRewritePdf.timeout(),
             DOCUMENT_BRIDGE_TIMEOUT
         );
         assert_eq!(Operation::ResumeRescueReviewJson.timeout(), BRIDGE_TIMEOUT);
@@ -691,21 +713,21 @@ mod tests {
 
     #[test]
     fn response_must_be_one_strict_versioned_line() {
-        let response = parse_response(b"{\"version\":14,\"ok\":true,\"result\":{}}\n")
+        let response = parse_response(b"{\"version\":15,\"ok\":true,\"result\":{}}\n")
             .expect("valid response");
         assert!(response.ok);
 
         assert!(
-            parse_response(b"{\"version\":14,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
+            parse_response(b"{\"version\":15,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
                 .is_err()
         );
         assert!(parse_response(b"{\"version\":2,\"ok\":true,\"result\":{}}\n").is_err());
         assert!(
-            parse_response(b"{\"version\":14,\"ok\":true,\"result\":{},\"unknown\":true}\n")
+            parse_response(b"{\"version\":15,\"ok\":true,\"result\":{},\"unknown\":true}\n")
                 .is_err()
         );
         assert!(parse_response(
-            b"{\"version\":14,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
+            b"{\"version\":15,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
         )
         .is_err());
     }
@@ -713,7 +735,7 @@ mod tests {
     #[test]
     fn backend_error_is_mapped_by_code_only() {
         let response = parse_response(
-            b"{\"version\":14,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
+            b"{\"version\":15,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
         )
         .expect("valid error envelope");
         let error = DesktopError::from_bridge(&response.error.expect("error").code);

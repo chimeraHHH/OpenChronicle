@@ -34,6 +34,7 @@ import {
   promptRescueJob,
   replyRescueJob,
   resumeOpportunity,
+  resumePdfPreview,
   resumeProfileVersion,
   resumePreview,
   resumeProjection,
@@ -196,6 +197,7 @@ describe("desktop bridge adapters", () => {
 
   it("binds supervised résumé proposals to one reviewed decision at a time", async () => {
     const rewrite = resumeRewriteJob();
+    const rewritePdfDigest = "7".repeat(64);
     tauri.invoke.mockResolvedValueOnce({
       ...resumeRescueState(),
       rewrite_enabled: true,
@@ -313,24 +315,55 @@ describe("desktop bridge adapters", () => {
       },
     });
 
+    const reviewedPdfPreview = resumePdfPreview({
+      projection_id: versionId,
+      artifact_digest: artifactDigest,
+      preview_document_digest: documentDigest,
+      pdf_content_digest: rewritePdfDigest,
+    });
+    tauri.invoke.mockResolvedValueOnce(reviewedPdfPreview);
+    expect(
+      await desktopApi.getResumeRewritePdfPreview(
+        versionId,
+        artifactDigest,
+        documentDigest,
+      ),
+    ).toEqual(reviewedPdfPreview);
+    expect(tauri.invoke).toHaveBeenLastCalledWith(
+      "get_resume_rescue_rewrite_pdf_preview",
+      {
+        request: {
+          projection_id: versionId,
+          expected_artifact_digest: artifactDigest,
+          expected_preview_document_digest: documentDigest,
+        },
+      },
+    );
+
     tauri.invoke.mockResolvedValueOnce({
       schema_version: 1,
       projection_id: versionId,
       artifact_digest: artifactDigest,
       preview_document_digest: documentDigest,
-      content_digest: "7".repeat(64),
+      content_digest: rewritePdfDigest,
       format: "pdf",
       file_name: "resume-reviewed.pdf",
       byte_count: 56_000,
       created: true,
       action_capability: "none",
     });
-    await desktopApi.exportResumeRewritePdf(versionId, artifactDigest, documentDigest);
+    await desktopApi.exportResumeRewritePdf(
+      versionId,
+      artifactDigest,
+      documentDigest,
+      rewritePdfDigest,
+    );
     expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_rewrite_pdf", {
       request: {
         version_id: versionId,
         expected_artifact_digest: artifactDigest,
         expected_preview_document_digest: documentDigest,
+        expected_pdf_content_digest: rewritePdfDigest,
       },
     });
   });
@@ -484,6 +517,7 @@ describe("desktop bridge adapters", () => {
       projection.id,
       projection.artifact_digest,
       preview.document_digest,
+      "f".repeat(64),
     );
     expect(exportedPdf).toMatchObject({
       file_name: "resume-projection-1.pdf",
@@ -493,6 +527,24 @@ describe("desktop bridge adapters", () => {
     expect(exportedPdf).not.toHaveProperty("content_base64");
     expect(exportedPdf).not.toHaveProperty("path");
     expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_pdf", {
+      request: {
+        projection_id: projection.id,
+        expected_artifact_digest: projection.artifact_digest,
+        expected_preview_document_digest: preview.document_digest,
+        expected_pdf_content_digest: "f".repeat(64),
+      },
+    });
+
+    const pdfPreview = resumePdfPreview();
+    tauri.invoke.mockResolvedValueOnce(pdfPreview);
+    expect(
+      await desktopApi.getResumePdfPreview(
+        projection.id,
+        projection.artifact_digest,
+        preview.document_digest,
+      ),
+    ).toEqual(pdfPreview);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("get_resume_rescue_pdf_preview", {
       request: {
         projection_id: projection.id,
         expected_artifact_digest: projection.artifact_digest,

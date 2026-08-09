@@ -38,6 +38,7 @@ import {
   replyRescueJob,
   replyRescueSummary,
   resumeOpportunity,
+  resumePdfPreview,
   resumeProfileVersion,
   resumePreview,
   resumeProjection,
@@ -112,6 +113,7 @@ function commandResult(command: string) {
     return { projection: resumeProjection(), created: true };
   }
   if (command === "get_resume_rescue_preview") return { preview: resumePreview() };
+  if (command === "get_resume_rescue_pdf_preview") return resumePdfPreview();
   if (command === "export_resume_rescue_html") {
     return {
       schema_version: 1,
@@ -208,10 +210,10 @@ describe("trusted console", () => {
     expect(screen.getByText(/manual_mapping_unverified/i)).toBeInTheDocument();
     expect(screen.getByText(/Action capability: none/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Open document preview" }));
-    const preview = await screen.findByTitle("Deterministic résumé document preview");
-    expect(preview).toHaveAttribute("sandbox", "");
-    expect(preview).toHaveAttribute("referrerpolicy", "no-referrer");
-    expect(preview).toHaveAttribute("srcdoc", expect.stringContaining("default-src 'none'"));
+    const preview = await screen.findByAltText("Résumé PDF page 1 of 1");
+    expect(preview).toHaveAttribute("src", expect.stringMatching(/^data:image\/png;base64,/));
+    expect(screen.getByText(/exact bytes used by Save new PDF file/i)).toBeInTheDocument();
+    expect(screen.queryByTitle("Deterministic résumé document preview")).not.toBeInTheDocument();
     expect(screen.getByText(/Document digest:/i)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save new PDF file" }));
     expect(await screen.findByText(/resume-projection-1\.pdf/i)).toBeInTheDocument();
@@ -220,6 +222,7 @@ describe("trusted console", () => {
         projection_id: resumeProjection().id,
         expected_artifact_digest: resumeProjection().artifact_digest,
         expected_preview_document_digest: resumePreview().document_digest,
+        expected_pdf_content_digest: resumePdfPreview().pdf_content_digest,
       },
     });
     await user.click(screen.getByRole("button", { name: "Save new DOCX file" }));
@@ -287,6 +290,15 @@ describe("trusted console", () => {
       if (command === "get_resume_rescue_rewrite_preview") {
         return { preview: reviewedPreview };
       }
+      if (command === "get_resume_rescue_rewrite_pdf_preview") {
+        return resumePdfPreview({
+          projection_id: reviewed.head!.id,
+          artifact_digest: reviewed.head!.artifact_digest,
+          preview_document_digest: reviewedPreview.document_digest,
+          pdf_content_digest: "8".repeat(64),
+          pdf_byte_count: 57_000,
+        });
+      }
       if (command === "export_resume_rescue_rewrite_pdf") {
         return {
           schema_version: 1,
@@ -343,7 +355,7 @@ describe("trusted console", () => {
     expect(screen.getAllByText("Current").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Preview reviewed version" }));
-    expect(await screen.findByRole("heading", { name: "Reviewed version preview" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "PDF preview" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Save new HTML file" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Save new PDF file" }));
     expect(await screen.findByText(/resume-reviewed-v1\.pdf/i)).toBeInTheDocument();
@@ -352,6 +364,7 @@ describe("trusted console", () => {
         version_id: reviewed.head!.id,
         expected_artifact_digest: reviewed.head!.artifact_digest,
         expected_preview_document_digest: reviewedPreview.document_digest,
+        expected_pdf_content_digest: "8".repeat(64),
       },
     });
 

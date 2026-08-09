@@ -885,12 +885,35 @@ select {
   margin-top: 1.4rem;
 }
 
-.resume-rescue__iframe {
-  width: 100%;
-  min-height: 820px;
-  background: white;
+.resume-rescue__pdf-pages {
+  display: grid;
+  gap: 1.25rem;
+  justify-items: center;
+  padding: 1.25rem;
+  overflow: auto;
+  background: var(--surface-soft);
   border: 1px solid var(--border);
   border-radius: 0.7rem;
+}
+
+.resume-rescue__pdf-page {
+  width: min(100%, 893px);
+  margin: 0;
+}
+
+.resume-rescue__pdf-page img {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: white;
+  box-shadow: 0 0.35rem 1rem rgb(0 0 0 / 14%);
+}
+
+.resume-rescue__pdf-page figcaption {
+  margin-top: 0.45rem;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
 }
 
 .resume-rescue__plain-text {

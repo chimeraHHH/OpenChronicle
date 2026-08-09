@@ -417,6 +417,30 @@ export interface ResumePreview {
   action_capability: "none";
 }
 
+export interface ResumePdfPreviewPage {
+  page_number: number;
+  width_pixels: number;
+  height_pixels: number;
+  media_type: "image/png";
+  byte_count: number;
+  content_digest: string;
+  content_base64: string;
+}
+
+export interface ResumePdfPreview {
+  schema_version: 1;
+  pdf_preview_version: 1;
+  projection_id: string;
+  artifact_digest: string;
+  preview_document_digest: string;
+  pdf_content_digest: string;
+  pdf_byte_count: number;
+  renderer: "pypdfium2-5.12.1-scale-1.5";
+  page_count: number;
+  pages: ResumePdfPreviewPage[];
+  action_capability: "none";
+}
+
 export interface ResumeHtmlExportResult {
   schema_version: 1;
   projection_id: string;

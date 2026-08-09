@@ -12,6 +12,7 @@ import type {
   ResumeFact,
   ResumeOpportunity,
   ResumeOwnership,
+  ResumePdfPreview,
   ResumeProfile,
   ResumeProfileVersion,
   ResumePreview,
@@ -81,6 +82,7 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   const [requirementText, setRequirementText] = useState("");
   const [requirements, setRequirements] = useState<ResumeRequirementRequest[]>([]);
   const [preview, setPreview] = useState<ResumePreview | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<ResumePdfPreview | null>(null);
   const [previewMode, setPreviewMode] = useState<"exact" | "rewrite">("exact");
   const [rewriteRemoteConsent, setRewriteRemoteConsent] = useState(false);
   const [jsonImport, setJsonImport] = useState<OpenedJsonResumeReview | null>(null);
@@ -668,15 +670,28 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   async function openPreview(projection: ResumeProjection) {
     clearMessages();
     setBusy(`preview:${projection.id}`);
+    setPreview(null);
+    setPdfPreview(null);
     try {
+      const semanticPreview = await api.getResumePreview(
+        projection.id,
+        projection.artifact_digest,
+      );
+      const exactPdfPreview = await api.getResumePdfPreview(
+        projection.id,
+        projection.artifact_digest,
+        semanticPreview.document_digest,
+      );
       setPreviewMode("exact");
-      setPreview(await api.getResumePreview(projection.id, projection.artifact_digest));
+      setPreview(semanticPreview);
+      setPdfPreview(exactPdfPreview);
       window.requestAnimationFrame(() =>
         document.getElementById("resume-document-preview")?.scrollIntoView({ block: "start" }),
       );
     } catch (reason: unknown) {
       setError(displayError(reason));
       setPreview(null);
+      setPdfPreview(null);
     } finally {
       setBusy("");
     }
@@ -729,7 +744,7 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   }
 
   async function exportPdfPreview() {
-    if (!preview) return;
+    if (!preview || !pdfPreview) return;
     clearMessages();
     setBusy("export-pdf");
     try {
@@ -739,11 +754,13 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
               preview.projection_id,
               preview.artifact_digest,
               preview.document_digest,
+              pdfPreview.pdf_content_digest,
             )
           : await api.exportResumePdf(
               preview.projection_id,
               preview.artifact_digest,
               preview.document_digest,
+              pdfPreview.pdf_content_digest,
             );
       setNotice(
         `Created ${result.file_name} (${result.byte_count} bytes). No existing file was replaced.`,
@@ -855,15 +872,28 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   async function openRewritePreview(version: ResumeRewriteVersion) {
     clearMessages();
     setBusy(`rewrite-preview:${version.id}`);
+    setPreview(null);
+    setPdfPreview(null);
     try {
+      const semanticPreview = await api.getResumeRewritePreview(
+        version.id,
+        version.artifact_digest,
+      );
+      const exactPdfPreview = await api.getResumeRewritePdfPreview(
+        version.id,
+        version.artifact_digest,
+        semanticPreview.document_digest,
+      );
       setPreviewMode("rewrite");
-      setPreview(await api.getResumeRewritePreview(version.id, version.artifact_digest));
+      setPreview(semanticPreview);
+      setPdfPreview(exactPdfPreview);
       window.requestAnimationFrame(() =>
         document.getElementById("resume-document-preview")?.scrollIntoView({ block: "start" }),
       );
     } catch (reason: unknown) {
       setError(displayError(reason));
       setPreview(null);
+      setPdfPreview(null);
     } finally {
       setBusy("");
     }
@@ -1941,36 +1971,47 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
         </section>
       ) : null}
 
-      {preview ? (
+      {preview && pdfPreview ? (
         <section className="settings-section resume-rescue__document" id="resume-document-preview">
           <div className="section-heading-row">
             <div>
               <p className="eyebrow">
                 {previewMode === "rewrite"
-                  ? "Sandboxed reviewed derivative"
-                  : "Sandboxed deterministic document"}
+                  ? "Exact reviewed derivative output"
+                  : "Exact deterministic output"}
               </p>
-              <h2>{previewMode === "rewrite" ? "Reviewed version preview" : "HTML preview"}</h2>
-              <p className="muted">Template {preview.template_id} · renderer v{preview.renderer_version}</p>
+              <h2>PDF preview</h2>
+              <p className="muted">
+                {pdfPreview.page_count} page{pdfPreview.page_count === 1 ? "" : "s"} · exact bytes
+                used by Save new PDF file
+              </p>
             </div>
             <div className="button-row">
-              <button className="button button--primary" disabled={Boolean(busy)} onClick={() => void exportPdfPreview()} type="button">{busy === "export-pdf" ? "Rendering…" : "Save new PDF file"}</button>
+              <button className="button button--primary" disabled={Boolean(busy) || !pdfPreview} onClick={() => void exportPdfPreview()} type="button">{busy === "export-pdf" ? "Saving…" : "Save new PDF file"}</button>
               <button className="button button--secondary" disabled={Boolean(busy)} onClick={() => void exportDocxPreview()} type="button">{busy === "export-docx" ? "Saving…" : "Save new DOCX file"}</button>
               {previewMode === "exact" ? (
                 <button className="button button--ghost" disabled={Boolean(busy)} onClick={() => void exportPreview()} type="button">{busy === "export" ? "Saving…" : "Save new HTML file"}</button>
               ) : null}
-              <button className="button button--ghost" onClick={() => setPreview(null)} type="button">Close preview</button>
+              <button className="button button--ghost" onClick={() => { setPreview(null); setPdfPreview(null); }} type="button">Close preview</button>
             </div>
           </div>
-          <iframe
-            className="resume-rescue__iframe"
-            referrerPolicy="no-referrer"
-            sandbox=""
-            srcDoc={preview.html}
-            title="Deterministic résumé document preview"
-          />
+          <div className="resume-rescue__pdf-pages" aria-label="Exact PDF preview pages">
+            {pdfPreview.pages.map((page) => (
+              <figure className="resume-rescue__pdf-page" key={page.content_digest}>
+                <img
+                  alt={`Résumé PDF page ${page.page_number} of ${pdfPreview.page_count}`}
+                  height={page.height_pixels}
+                  src={`data:image/png;base64,${page.content_base64}`}
+                  width={page.width_pixels}
+                />
+                <figcaption>Page {page.page_number} of {pdfPreview.page_count}</figcaption>
+              </figure>
+            ))}
+          </div>
           <details className="lineage-details">
-            <summary>Parser-order and digest review</summary>
+            <summary>Parser-order and immutable digest review</summary>
+            <p className="metadata-list--technical">PDF bytes: {pdfPreview.pdf_byte_count} · renderer: <UntrustedText>{pdfPreview.renderer}</UntrustedText></p>
+            <p className="metadata-list--technical">PDF content digest: <UntrustedText>{pdfPreview.pdf_content_digest}</UntrustedText></p>
             <p className="metadata-list--technical">Document digest: <UntrustedText>{preview.document_digest}</UntrustedText></p>
             <pre className="resume-rescue__plain-text"><UntrustedText>{preview.plain_text}</UntrustedText></pre>
           </details>

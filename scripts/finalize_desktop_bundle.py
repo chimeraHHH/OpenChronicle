@@ -213,28 +213,54 @@ def _resume_rescue_e2e(sidecar: Path) -> dict[str, Any]:
             {"projection_id": projection["id"]},
         )["export"]
         native_exports: dict[str, int] = {}
-        pdf_export = "passed"
+        pdf_content_digest = ""
         for source_format, magic in (("docx", b"PK"), ("pdf", b"%PDF")):
-            try:
-                exported = _bridge_request(
-                    sidecar,
-                    root,
-                    f"resume_rescue.export_{source_format}",
-                    {
-                        "projection_id": projection["id"],
-                        "expected_preview_document_digest": preview["document_digest"],
-                    },
-                    timeout=90,
-                )["export"]
-            except BridgeOperationError as exc:
-                if source_format != "pdf" or exc.code != "EXPORT_UNAVAILABLE":
-                    raise
-                pdf_export = "blocked_unbundled_engine"
-                continue
+            exported = _bridge_request(
+                sidecar,
+                root,
+                f"resume_rescue.export_{source_format}",
+                {
+                    "projection_id": projection["id"],
+                    "expected_preview_document_digest": preview["document_digest"],
+                },
+                timeout=90,
+            )["export"]
             content = base64.b64decode(exported["content_base64"], validate=True)
             if not content.startswith(magic) or exported["action_capability"] != "none":
                 raise RuntimeError("packaged native resume export is invalid")
             native_exports[source_format] = len(content)
+            if source_format == "pdf":
+                pdf_content_digest = exported["content_digest"]
+
+        pdf_preview = _bridge_request(
+            sidecar,
+            root,
+            "resume_rescue.preview_pdf",
+            {
+                "projection_id": projection["id"],
+                "expected_preview_document_digest": preview["document_digest"],
+            },
+            timeout=90,
+        )["pdf_preview"]
+        pdf_preview_bytes = 0
+        if (
+            pdf_preview["pdf_content_digest"] != pdf_content_digest
+            or pdf_preview["page_count"] != len(pdf_preview["pages"])
+            or pdf_preview["action_capability"] != "none"
+            or "content_base64" in pdf_preview
+            or "path" in pdf_preview
+        ):
+            raise RuntimeError("packaged PDF preview binding is invalid")
+        for index, page in enumerate(pdf_preview["pages"], start=1):
+            content = base64.b64decode(page["content_base64"], validate=True)
+            if (
+                page["page_number"] != index
+                or page["media_type"] != "image/png"
+                or not content.startswith(b"\x89PNG\r\n\x1a\n")
+                or not content.endswith(b"IEND\xaeB`\x82")
+            ):
+                raise RuntimeError("packaged PDF preview page is invalid")
+            pdf_preview_bytes += len(content)
 
         document = _resume_docx("Selected packaged document evidence")
         document_review = _bridge_request(
@@ -255,14 +281,16 @@ def _resume_rescue_e2e(sidecar: Path) -> dict[str, Any]:
         ):
             raise RuntimeError("packaged resume workflow output is invalid")
     return {
-        "passed": pdf_export == "passed",
+        "passed": True,
         "development_path_passed": True,
-        "operations": 10,
+        "operations": 11,
         "json_candidates": len(review["candidates"]),
         "selected_facts": len(facts),
         "docx_bytes": native_exports["docx"],
-        "pdf_export": pdf_export,
+        "pdf_export": "passed",
         "pdf_bytes": native_exports.get("pdf"),
+        "pdf_preview_pages": pdf_preview["page_count"],
+        "pdf_preview_bytes": pdf_preview_bytes,
         "document_candidates": len(document_review["candidates"]),
         "action_capability": "none",
     }
