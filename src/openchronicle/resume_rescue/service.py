@@ -12,6 +12,14 @@ from ..config import Config
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef
 from . import store
+from .json_resume import (
+    JsonResumeError,
+    JsonResumeExport,
+    JsonResumeImportReview,
+    admit_json_resume_candidates,
+    export_projection_json_resume,
+    parse_json_resume,
+)
 from .models import build_exact_artifact
 from .render import ResumePreview, render_preview
 
@@ -109,6 +117,62 @@ class ResumeRescueService:
     def list_profiles(self, *, limit: int = 50) -> list[store.ProfileVersion]:
         return store.list_current_profiles(self.conn, limit=limit)
 
+    def review_json_resume(self, source_text: str) -> JsonResumeImportReview:
+        """Parse an untrusted JSON Resume source without admitting any fact."""
+
+        self._require_enabled()
+        return parse_json_resume(source_text)
+
+    def admit_json_resume(
+        self,
+        *,
+        source_text: str,
+        expected_review_digest: str,
+        profile_id: str,
+        display_name: str,
+        locale: str,
+        selections: Sequence[dict[str, Any]],
+        expected_version: int | None = None,
+    ) -> tuple[store.ProfileVersion, bool]:
+        """Append explicitly reviewed JSON Resume facts to one profile version."""
+
+        self._require_enabled()
+        review = parse_json_resume(source_text)
+        if not self._valid_digest(expected_review_digest):
+            raise JsonResumeError("JSON Resume expected review digest is invalid")
+        if review.review_digest != expected_review_digest:
+            raise store.ResumeRescueConflict("JSON Resume review changed")
+        facts = admit_json_resume_candidates(
+            review,
+            list(selections),
+            reviewed_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+        )
+        current = store.get_current_profile(self.conn, profile_id)
+        if current is None:
+            existing_facts: list[dict[str, Any]] = []
+            conflicts: list[dict[str, Any]] = []
+        else:
+            if expected_version != current.version:
+                raise store.ResumeRescueConflict("resume profile changed")
+            if (
+                display_name != current.profile["display_name"]
+                or locale != current.profile["locale"]
+            ):
+                raise store.ResumeRescueConflict("resume profile identity changed")
+            existing_facts = list(current.profile["facts"])
+            conflicts = list(current.profile["conflicts"])
+        fact_ids = {fact["id"] for fact in existing_facts}
+        if any(fact["id"] in fact_ids for fact in facts):
+            raise JsonResumeError("JSON Resume fact id already exists")
+        return self.save_profile(
+            profile_id=profile_id,
+            display_name=display_name,
+            locale=locale,
+            facts=[*existing_facts, *facts],
+            conflicts=conflicts,
+            expected_version=expected_version,
+        )
+
     def get_opportunity(self, opportunity_id: str) -> store.OpportunitySnapshot | None:
         return store.get_opportunity(self.conn, opportunity_id)
 
@@ -163,6 +227,20 @@ class ResumeRescueService:
         if profile is None:
             raise store.ResumeRescueConflict("resume rescue profile changed")
         return render_preview(profile=profile, projection=projection)
+
+    def export_json_resume(self, projection_id: str) -> JsonResumeExport:
+        """Build a loss-explicit JSON Resume export from a current projection."""
+
+        self._require_enabled()
+        projection = self.get_projection(projection_id)
+        if projection is None:
+            raise store.ResumeRescueConflict("resume rescue projection changed")
+        profile = store.get_profile_version(
+            self.conn, projection.profile_id, projection.profile_version
+        )
+        if profile is None:
+            raise store.ResumeRescueConflict("resume rescue profile changed")
+        return export_projection_json_resume(profile=profile, projection=projection)
 
     def _projection_current(self, projection: store.ResumeProjection) -> bool:
         profile = store.get_current_profile(self.conn, projection.profile_id)
@@ -236,3 +314,11 @@ class ResumeRescueService:
         encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if len(encoded) > maximum:
             raise ValueError(f"resume rescue {label} exceeds configured limit")
+
+    @staticmethod
+    def _valid_digest(value: object) -> bool:
+        return (
+            isinstance(value, str)
+            and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value)
+        )

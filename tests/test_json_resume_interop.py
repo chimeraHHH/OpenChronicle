@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from openchronicle import config as config_mod
-from openchronicle.resume_rescue import ResumeRescueService
+from openchronicle.resume_rescue import ResumeRescueConflict, ResumeRescueService
 from openchronicle.resume_rescue.json_resume import (
     UPSTREAM_SCHEMA_COMMIT,
     JsonResumeError,
@@ -259,6 +259,185 @@ def test_json_resume_candidate_admission_binds_exact_review_source() -> None:
             ],
             reviewed_at="2026-08-09T12:30:00+08:00",
         )
+
+
+def test_json_resume_service_reparses_review_and_appends_selected_facts(ac_root: Path) -> None:
+    source = json.dumps(
+        {
+            "basics": {"name": "Ada Example", "summary": "Reliability engineer."},
+            "skills": [{"name": "Python", "keywords": ["SQLite"]}],
+        }
+    )
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, _cfg())
+        review = service.review_json_resume(source)
+        selected = [
+            next(item for item in review.candidates if item["suggested_section"] == section)
+            for section in ("summary", "skill")
+        ]
+        profile, created = service.admit_json_resume(
+            source_text=source,
+            expected_review_digest=review.review_digest,
+            profile_id="primary-profile",
+            display_name=review.display_name_candidate,
+            locale="en",
+            selections=[
+                {
+                    "candidate_id": candidate["id"],
+                    "fact_id": f"fact-imported-{index}",
+                    "section": candidate["suggested_section"],
+                    "confidentiality": "private" if index == 0 else "public",
+                    "ownership_scope": "individual",
+                }
+                for index, candidate in enumerate(selected)
+            ],
+        )
+
+        assert created is True
+        assert profile.version == 1
+        assert [fact["text"] for fact in profile.profile["facts"]] == [
+            "Reliability engineer.",
+            "Python | SQLite",
+        ]
+        provenance = profile.profile["facts"][0]["provenance"][0]
+        assert provenance["kind"] == "json_resume_field"
+        assert provenance["source_digest"] == review.source_digest
+        assert provenance["json_pointer"] == "/basics/summary"
+        assert len(provenance["value_digest"]) == 64
+        assert "Reliability engineer." not in json.dumps(provenance)
+
+        appended, changed = service.admit_json_resume(
+            source_text=source,
+            expected_review_digest=review.review_digest,
+            profile_id=profile.profile_id,
+            display_name=profile.profile["display_name"],
+            locale=profile.profile["locale"],
+            selections=[],
+            expected_version=profile.version,
+        )
+        assert changed is False
+        assert appended == profile
+
+
+def test_json_resume_service_fences_stale_or_conflicting_admission(ac_root: Path) -> None:
+    source = '{"basics":{"name":"Ada Example","summary":"Reviewed summary."}}'
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, _cfg())
+        initial, _ = service.save_profile(
+            profile_id="primary-profile",
+            display_name="Existing Name",
+            locale="en",
+            facts=[
+                _manual_fact("existing-fact", "summary", "Existing fact."),
+                _manual_fact("conflicting-fact", "summary", "Conflicting fact."),
+            ],
+            conflicts=[
+                {
+                    "id": "conflict-1",
+                    "fact_ids": ["existing-fact", "conflicting-fact"],
+                    "description": "Needs review.",
+                }
+            ],
+        )
+        review = service.review_json_resume(source)
+        candidate = review.candidates[0]
+        selection = {
+            "candidate_id": candidate["id"],
+            "fact_id": "imported-fact",
+            "section": "summary",
+            "confidentiality": "public",
+            "ownership_scope": "individual",
+        }
+
+        with pytest.raises(ResumeRescueConflict, match="review changed"):
+            service.admit_json_resume(
+                source_text=source.replace("Reviewed", "Changed"),
+                expected_review_digest=review.review_digest,
+                profile_id=initial.profile_id,
+                display_name="Existing Name",
+                locale="en",
+                selections=[selection],
+                expected_version=initial.version,
+            )
+        with pytest.raises(JsonResumeError, match="expected review digest"):
+            service.admit_json_resume(
+                source_text=source,
+                expected_review_digest="NOT-A-DIGEST",
+                profile_id=initial.profile_id,
+                display_name="Existing Name",
+                locale="en",
+                selections=[selection],
+                expected_version=initial.version,
+            )
+        with pytest.raises(ResumeRescueConflict, match="identity changed"):
+            service.admit_json_resume(
+                source_text=source,
+                expected_review_digest=review.review_digest,
+                profile_id=initial.profile_id,
+                display_name="Injected Rename",
+                locale="en",
+                selections=[selection],
+                expected_version=initial.version,
+            )
+
+        admitted, _ = service.admit_json_resume(
+            source_text=source,
+            expected_review_digest=review.review_digest,
+            profile_id=initial.profile_id,
+            display_name="Existing Name",
+            locale="en",
+            selections=[selection],
+            expected_version=initial.version,
+        )
+        assert admitted.version == 2
+        assert [fact["id"] for fact in admitted.profile["facts"]] == [
+            "existing-fact",
+            "conflicting-fact",
+            "imported-fact",
+        ]
+        assert admitted.profile["conflicts"] == initial.profile["conflicts"]
+        with pytest.raises(ResumeRescueConflict, match="profile changed"):
+            service.admit_json_resume(
+                source_text=source,
+                expected_review_digest=review.review_digest,
+                profile_id=initial.profile_id,
+                display_name="Existing Name",
+                locale="en",
+                selections=[selection | {"fact_id": "another-fact"}],
+                expected_version=initial.version,
+            )
+
+
+def test_json_resume_service_export_refetches_current_projection(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, _cfg())
+        profile, _ = service.save_profile(
+            profile_id="primary-profile",
+            display_name="Ada Example",
+            facts=[_manual_fact("fact-summary", "summary", "Engineer.")],
+        )
+        opportunity, _ = service.save_opportunity(
+            employer="Example Labs",
+            title="Engineer",
+            source_text="Build systems.",
+        )
+        projection, _ = service.compose_exact(
+            profile_id=profile.profile_id,
+            opportunity_id=opportunity.id,
+            sections=[{"kind": "summary", "fact_ids": ["fact-summary"]}],
+        )
+        exported = service.export_json_resume(projection.id)
+        assert exported.projection_id == projection.id
+        assert exported.document_digest == exported.to_dict()["document_digest"]
+
+        service.save_profile(
+            profile_id=profile.profile_id,
+            display_name="Ada Changed",
+            facts=profile.profile["facts"],
+            expected_version=profile.version,
+        )
+        with pytest.raises(ResumeRescueConflict, match="projection changed"):
+            service.export_json_resume(projection.id)
 
 
 def test_json_resume_projection_export_is_loss_explicit_and_round_trips_extension(
