@@ -63,10 +63,26 @@ export nor proves fidelity on another browser, OS, or font installation.
 
 ## Reviewed document ingress
 
-The `document-extraction/` contract freezes the next PDF/DOCX source boundary
-before implementation. Its 20 synthetic cases cover page/bounding-box and
+The `document-extraction/` contract freezes the implemented PDF/DOCX source
+boundary. Its 20 synthetic cases cover page/bounding-box and
 OOXML part/block provenance, uncertain reading order, image-only PDFs,
 encryption, corruption, byte/page/ZIP expansion limits, external
 relationships, active content, hostile instructions, digest tampering, and
 profile CAS races. Candidates are review-only and initially unselected; the
 contract grants no model, OCR, network, tool, upload, or application authority.
+
+## Supervised rewrite proposals
+
+The `rewrite/` contract freezes the first model-backed tailoring boundary after
+source, projection, import, render, and native export. Its 40 synthetic cases
+cover selected-fact-only egress, provider disclosure and remote opt-in,
+untrusted job/fact instructions, no-tool JSON output, exact fact/original-text
+and requirement binding, protected claim atoms, secret echo, provider failure,
+stale inputs and decisions, individual review, non-destructive versions, and
+denied profile mutation/upload/submission authority.
+
+Local verification is blocking, not advisory. The model emits proposal records
+only; a surviving proposal still requires an individual digest-bound user
+decision, and v1 has no apply-all. Human factual accuracy, preference, and
+target usefulness are later reported separately and cannot override the hard
+safety gates.

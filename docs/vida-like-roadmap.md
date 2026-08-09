@@ -283,13 +283,22 @@ privacy UX is validated on a signed macOS build.
   font embedding, in-bounds glyph boxes, layout, and page pixels pass, followed
   by manual review of all six PNG pages. The report explicitly does not claim
   PDF-byte determinism or portability to another engine/OS/font set.
-  Supervised no-tool rewriting and reviewed PDF/DOCX extraction remain open;
-  drafts and all send/submit authority remain later, separate capabilities.
+  Reviewed PDF/DOCX extraction is now complete through bounded isolated
+  parsers, exact candidate provenance, explicit selection, review-digest
+  replay, and profile CAS. Supervised no-tool rewriting remains open; its
+  current competitor/repository scout and frozen 40-case safety contract are
+  recorded in
+  [vida-resume-supervised-rewrite-scout-2026-08-09.md](vida-resume-supervised-rewrite-scout-2026-08-09.md).
+  Drafts and all send/submit authority remain later, separate capabilities.
   HTML export now uses a dedicated native command: it
   re-fetches the current document, digest-CAS checks the WebView request, opens
   the system save dialog, creates only a new private `.html` file, and never
-  exposes general filesystem write or overwrite authority. Native engine
-  packaging and digest-bound PDF/DOCX export remain open.
+  exposes general filesystem write or overwrite authority. A shared semantic
+  document tree now drives preview and native export. Digest-bound DOCX passes
+  pinned LibreOffice/Poppler visual QA, and guarded PDF passes the frozen
+  Chrome 151/Poppler production fixture on the audited development host.
+  Bundling or equivalently pinning the engine and fonts for distribution
+  remains open.
   The protocol-v10 JSON Resume slice now pins the canonical v1 schema,
   generates initially-unselected exact/composite import candidates, ledgers
   contact, reference, URL, unknown, and unmapped fields, and exports only the
@@ -299,8 +308,9 @@ privacy UX is validated on a signed macOS build.
   explicit candidate selection before admission. Export requires a visible
   loss-ledger review and uses a digest-bound native command that creates only a
   new private `.json` file without overwrite authority. Raw import bytes are
-  not copied into the profile store. Reviewed PDF/DOCX extraction remains the
-  next source-ingress milestone.
+  not copied into the profile store. The reviewed PDF/DOCX ingress slice now
+  applies the same initially-unselected review and profile-CAS boundary with
+  page/bounding-box or OOXML part/block provenance.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only
