@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "suite_id": "OC-Vida-Resume-Native-Export-v1",
+  "renderer_version": 1,
+  "template_id": "openchronicle-classic-v1",
+  "formats": ["pdf", "docx"],
+  "limits": {
+    "maximum_pdf_bytes": 10485760,
+    "maximum_docx_bytes": 4194304,
+    "maximum_docx_members": 100,
+    "maximum_docx_uncompressed_bytes": 8388608,
+    "renderer_timeout_seconds": 30
+  },
+  "pdf_engine": {
+    "kind": "google-chrome-headless",
+    "version": "Google Chrome 151.0.7922.77",
+    "executable_sha256": "696e4277196f9bc4d6655285f617efb068a84d4c7fc498948f10d8a4e03f9663",
+    "release_boundary": "development_only_until_bundled"
+  },
+  "docx_engine": {
+    "repository": "python-openxml/python-docx",
+    "commit": "e45454602b53e8e572b179ccf1c91093ec9f4ed7",
+    "version": "1.2.0",
+    "license": "MIT"
+  },
+  "comparators": [
+    {
+      "repository": "AmruthPillai/Reactive-Resume",
+      "commit": "ba1f46995067ac834ab90c64855393731625c4c6",
+      "pdf_dependency": "@react-pdf/renderer@^4.6.0",
+      "docx_dependency": "docx@^9.7.1",
+      "license": "MIT"
+    },
+    {
+      "repository": "MrBitBucket/reportlab-mirror",
+      "commit": "5e0a36e3face0f8ecd1ed03cc4791a84981bd8c5",
+      "version": "5.0.0",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "repository": "Kozea/WeasyPrint",
+      "commit": "32873118e8a70ceef87643775c247384d64798ea",
+      "release": "v69.0",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "repository": "typst/typst",
+      "commit": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "release": "v0.15.1",
+      "license": "Apache-2.0"
+    }
+  ],
+  "hard_gates": {
+    "one_semantic_tree": true,
+    "current_projection_refetched": true,
+    "reviewed_preview_digest_required": true,
+    "webview_document_bytes_forbidden": true,
+    "webview_path_forbidden": true,
+    "native_create_new_only": true,
+    "private_file_mode": true,
+    "output_digest_recomputed_in_rust": true,
+    "pdf_a4_and_text_order_verified": true,
+    "pdf_fonts_embedded": true,
+    "pdf_renderer_process_group_drained": true,
+    "docx_deterministic_zip": true,
+    "docx_external_relationships_forbidden": true,
+    "docx_active_content_forbidden": true,
+    "docx_exact_ordered_text_verified": true,
+    "action_capability": "none"
+  }
+}
