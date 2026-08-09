@@ -1,5 +1,11 @@
 """Evidence-backed, review-only Résumé Rescue workflow."""
 
+from .document_extract import (
+    DocumentExtractionError,
+    DocumentImportReview,
+    admit_document_candidates,
+    extract_document,
+)
 from .json_resume import (
     JsonResumeError,
     JsonResumeExport,
@@ -13,6 +19,8 @@ from .service import ResumeRescueService
 from .store import OpportunitySnapshot, ProfileVersion, ResumeProjection, ResumeRescueConflict
 
 __all__ = [
+    "DocumentExtractionError",
+    "DocumentImportReview",
     "OpportunitySnapshot",
     "ProfileVersion",
     "JsonResumeError",
@@ -22,7 +30,9 @@ __all__ = [
     "ResumePreview",
     "ResumeRescueConflict",
     "ResumeRescueService",
+    "admit_document_candidates",
     "admit_json_resume_candidates",
     "export_projection_json_resume",
+    "extract_document",
     "parse_json_resume",
 ]
