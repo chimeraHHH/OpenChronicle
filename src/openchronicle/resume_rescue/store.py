@@ -78,6 +78,39 @@ CREATE INDEX IF NOT EXISTS idx_resume_projections_profile
     ON resume_rescue_projections(profile_id, profile_version, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_resume_projections_opportunity
     ON resume_rescue_projections(opportunity_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS resume_rewrite_jobs (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued', 'leased', 'ready', 'failed')),
+    projection_id TEXT NOT NULL,
+    projection_artifact_digest TEXT NOT NULL,
+    projection_created_at TEXT NOT NULL,
+    provider_input_json TEXT NOT NULL,
+    provider_input_digest TEXT NOT NULL,
+    template_version INTEGER NOT NULL,
+    template_digest TEXT NOT NULL,
+    model_identity TEXT NOT NULL,
+    provider_location TEXT NOT NULL
+        CHECK (provider_location IN ('local', 'remote_or_unknown')),
+    remote_egress_authorized INTEGER NOT NULL
+        CHECK (remote_egress_authorized IN (0, 1)),
+    output_json TEXT NOT NULL DEFAULT '',
+    output_digest TEXT NOT NULL DEFAULT '',
+    error_code TEXT NOT NULL DEFAULT '',
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT,
+    lease_expires_at TEXT,
+    created_at TEXT NOT NULL,
+    created_at_us INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    row_digest TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resume_rewrite_queue
+    ON resume_rewrite_jobs(status, created_at_us, id);
+CREATE INDEX IF NOT EXISTS idx_resume_rewrite_recent
+    ON resume_rewrite_jobs(created_at_us DESC, id);
 """
 
 
@@ -131,6 +164,15 @@ class ResumeProjection:
     artifact: dict[str, Any]
     artifact_digest: str
     created_at: str
+
+    @property
+    def ref(self) -> EvidenceRef:
+        return EvidenceRef(
+            kind="resume_rescue",
+            id=self.id,
+            timestamp=self.created_at,
+            content_hash=self.artifact_digest,
+        )
 
 
 class ResumeRescueConflict(RuntimeError):
