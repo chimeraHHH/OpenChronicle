@@ -193,6 +193,16 @@ class PromptRescueConfig:
 
 
 @dataclass
+class ReplyRescueConfig:
+    # Explicitly enabled because a configured remote model receives conversation text.
+    enabled: bool = False
+    poll_seconds: int = 5
+    lease_seconds: int = 300
+    max_input_chars: int = 50_000
+    max_output_chars: int = 30_000
+
+
+@dataclass
 class SearchConfig:
     default_top_k: int = 5
     filter_superseded_by_default: bool = True
@@ -221,6 +231,7 @@ class Config:
     daily_wrap: DailyWrapConfig = field(default_factory=DailyWrapConfig)
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
     prompt_rescue: PromptRescueConfig = field(default_factory=PromptRescueConfig)
+    reply_rescue: ReplyRescueConfig = field(default_factory=ReplyRescueConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
@@ -285,6 +296,10 @@ def load(path: Path | None = None) -> Config:
             PromptRescueConfig,
             _as_dict(raw.get("prompt_rescue")),
         ),
+        reply_rescue=_build_dataclass(
+            ReplyRescueConfig,
+            _as_dict(raw.get("reply_rescue")),
+        ),
         search=_build_dataclass(SearchConfig, _as_dict(raw.get("search"))),
         mcp=_build_dataclass(MCPConfig, _as_dict(raw.get("mcp"))),
     )
@@ -327,6 +342,10 @@ api_key_env = "OPENAI_API_KEY"
 [models.prompt_rescue]
 # Explicit rough-prompt preparation. This stage has no tools. Enabling the
 # workflow may send exactly the reviewed manual input to this configured model.
+
+[models.reply_rescue]
+# Explicit reply preparation. This stage has no tools and cannot send. Enabling
+# it may send exactly the reviewed conversation source to this configured model.
 
 [capture]
 event_driven = true           # capture on window/app/typing events via mac-ax-watcher
@@ -412,6 +431,13 @@ poll_seconds = 5                # durable queued-job cadence (1..300)
 lease_seconds = 300             # minimum lease; auto-raised to provider call budget
 max_input_chars = 20000         # rough prompt plus declared context remains bounded
 max_output_chars = 30000        # improved prompt bound
+
+[reply_rescue]
+enabled = false                 # explicit opt-in; generated artifacts cannot send
+poll_seconds = 5                # durable queued-job cadence (1..300)
+lease_seconds = 300             # minimum lease; auto-raised to provider call budget
+max_input_chars = 50000         # reviewed conversation plus directions remains bounded
+max_output_chars = 30000        # prepared reply plus review ledger bound
 
 [search]
 default_top_k = 5

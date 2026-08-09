@@ -258,6 +258,10 @@ def availability(conn: sqlite3.Connection, ref: EvidenceRef) -> str:
         from ..prompt_rescue import store as prompt_rescue_store
 
         return "available" if prompt_rescue_store.get(conn, ref.id) else "missing"
+    if ref.kind == "reply_rescue_input":
+        from ..reply_rescue import store as reply_rescue_store
+
+        return "available" if reply_rescue_store.get(conn, ref.id) else "missing"
     return "unknown"
 
 
@@ -323,6 +327,11 @@ def current_content_hash(conn: sqlite3.Connection, ref: EvidenceRef) -> str | No
         from ..prompt_rescue import store as prompt_rescue_store
 
         row = prompt_rescue_store.get(conn, ref.id)
+        return row.source_digest if row is not None else None
+    if ref.kind == "reply_rescue_input":
+        from ..reply_rescue import store as reply_rescue_store
+
+        row = reply_rescue_store.get(conn, ref.id)
         return row.source_digest if row is not None else None
     return None
 
