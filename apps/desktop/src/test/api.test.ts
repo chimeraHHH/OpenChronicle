@@ -47,8 +47,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks reviewed document interoperability as bridge protocol v11", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(11);
+  it("tracks native DOCX export as bridge protocol v12", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(12);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -275,6 +275,50 @@ describe("desktop bridge adapters", () => {
         expected_document_digest: preview.document_digest,
       },
     });
+
+    tauri.invoke.mockResolvedValueOnce({
+      schema_version: 1,
+      projection_id: projection.id,
+      artifact_digest: projection.artifact_digest,
+      preview_document_digest: preview.document_digest,
+      content_digest: "e".repeat(64),
+      format: "docx",
+      file_name: "resume-projection-1.docx",
+      byte_count: 4_096,
+      created: true,
+      action_capability: "none",
+    });
+    const exportedDocx = await desktopApi.exportResumeDocx(
+      projection.id,
+      projection.artifact_digest,
+      preview.document_digest,
+    );
+    expect(exportedDocx).toMatchObject({
+      file_name: "resume-projection-1.docx",
+      content_digest: "e".repeat(64),
+      action_capability: "none",
+    });
+    expect(exportedDocx).not.toHaveProperty("content_base64");
+    expect(exportedDocx).not.toHaveProperty("path");
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_docx", {
+      request: {
+        projection_id: projection.id,
+        expected_artifact_digest: projection.artifact_digest,
+        expected_preview_document_digest: preview.document_digest,
+      },
+    });
+
+    tauri.invoke.mockResolvedValueOnce({
+      ...exportedDocx,
+      content_base64: "UEsDBA==",
+    });
+    await expect(
+      desktopApi.exportResumeDocx(
+        projection.id,
+        projection.artifact_digest,
+        preview.document_digest,
+      ),
+    ).rejects.toMatchObject({ code: "BRIDGE_PROTOCOL_ERROR" });
 
     tauri.invoke.mockResolvedValueOnce({
       preview: { ...resumePreview(), action_capability: "download" },

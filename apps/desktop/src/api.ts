@@ -32,6 +32,7 @@ import type {
   ReplyRescueStatus,
   ResumeConfidentiality,
   ResumeConflict,
+  ResumeDocxExportResult,
   ResumeFact,
   ResumeHtmlExportResult,
   ResumeJsonExportResult,
@@ -1433,6 +1434,54 @@ export function normalizeResumeHtmlExport(value: unknown): ResumeHtmlExportResul
   };
 }
 
+export function normalizeResumeDocxExport(value: unknown): ResumeDocxExportResult {
+  const raw = closedObject(
+    value,
+    [
+      "schema_version",
+      "projection_id",
+      "artifact_digest",
+      "preview_document_digest",
+      "content_digest",
+      "format",
+      "file_name",
+      "byte_count",
+      "created",
+      "action_capability",
+    ],
+    "Résumé Rescue DOCX export result",
+  );
+  const byteCount = numberValue(raw.byte_count, "Résumé Rescue DOCX byte count");
+  const fileName = stringValue(raw.file_name, "Résumé Rescue DOCX file name");
+  if (
+    numberValue(raw.schema_version, "Résumé Rescue DOCX schema") !== 1 ||
+    stringValue(raw.format, "Résumé Rescue DOCX format") !== "docx" ||
+    booleanValue(raw.created, "Résumé Rescue DOCX created state") !== true ||
+    stringValue(raw.action_capability, "Résumé Rescue DOCX action") !== "none" ||
+    !fileName.toLowerCase().endsWith(".docx") ||
+    !Number.isSafeInteger(byteCount) ||
+    byteCount < 1 ||
+    byteCount > 4 * 1024 * 1024
+  ) {
+    return protocolError("Résumé Rescue DOCX export contract");
+  }
+  return {
+    schema_version: 1,
+    projection_id: stringValue(raw.projection_id, "Résumé Rescue DOCX projection id"),
+    artifact_digest: resumeDigest(raw.artifact_digest, "Résumé Rescue DOCX artifact digest"),
+    preview_document_digest: resumeDigest(
+      raw.preview_document_digest,
+      "Résumé Rescue DOCX preview digest",
+    ),
+    content_digest: resumeDigest(raw.content_digest, "Résumé Rescue DOCX content digest"),
+    format: "docx",
+    file_name: fileName,
+    byte_count: byteCount,
+    created: true,
+    action_capability: "none",
+  };
+}
+
 export function normalizeOpenedJsonResumeReview(value: unknown): OpenedJsonResumeReview {
   const response = closedObject(
     value,
@@ -2711,6 +2760,30 @@ export const desktopApi = {
           result.document_digest !== expectedDocumentDigest
         ) {
           return protocolError("Résumé Rescue HTML export response identity");
+        }
+        return result;
+      },
+    ),
+  exportResumeDocx: (
+    projectionId: string,
+    expectedArtifactDigest: string,
+    expectedPreviewDocumentDigest: string,
+  ) =>
+    request(
+      "export_resume_rescue_docx",
+      {
+        projection_id: projectionId,
+        expected_artifact_digest: expectedArtifactDigest,
+        expected_preview_document_digest: expectedPreviewDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumeDocxExport(value);
+        if (
+          result.projection_id !== projectionId ||
+          result.artifact_digest !== expectedArtifactDigest ||
+          result.preview_document_digest !== expectedPreviewDocumentDigest
+        ) {
+          return protocolError("Résumé Rescue DOCX export response identity");
         }
         return result;
       },
