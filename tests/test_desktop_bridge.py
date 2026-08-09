@@ -37,6 +37,7 @@ from openchronicle.provenance.models import (
 )
 from openchronicle.reply_rescue import store as reply_rescue_store
 from openchronicle.resume_rescue.native_export import ResumeNativeExport
+from openchronicle.resume_rescue.pdf_export import PdfExportUnavailable
 from openchronicle.resume_rescue.service import ResumeRescueService
 from openchronicle.services.capture_control import PauseStateConflict, set_paused
 from openchronicle.services.evidence import EvidenceResolver
@@ -1041,6 +1042,30 @@ def test_resume_rescue_bridge_composes_exact_review_artifact_and_invalidates_sta
     assert pdf_export["format"] == "pdf"
     assert pdf_export["byte_count"] == len(pdf_bytes)
     assert pdf_export["action_capability"] == "none"
+
+    def unavailable_pdf_export(
+        _service: ResumeRescueService,
+        _projection_id: str,
+        *,
+        expected_preview_document_digest: str,
+    ) -> ResumeNativeExport:
+        assert expected_preview_document_digest == preview["document_digest"]
+        raise PdfExportUnavailable("private host detail")
+
+    monkeypatch.setattr(ResumeRescueService, "export_pdf", unavailable_pdf_export)
+    unavailable_pdf, unavailable_pdf_code = _request(
+        "resume_rescue.export_pdf",
+        {
+            "projection_id": projection["id"],
+            "expected_preview_document_digest": preview["document_digest"],
+        },
+    )
+    assert unavailable_pdf_code == 2
+    assert unavailable_pdf["error"] == {
+        "code": "EXPORT_UNAVAILABLE",
+        "message": "Pinned PDF export is unavailable on this development host.",
+    }
+    assert "private" not in json.dumps(unavailable_pdf)
 
     malformed_preview, malformed_preview_code = _request(
         "resume_rescue.preview",

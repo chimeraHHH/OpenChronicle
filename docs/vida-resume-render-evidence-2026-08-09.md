@@ -17,13 +17,13 @@ PDF export.
 - Fixture digest:
   `3d93931bb857f48e0524f332f2cd1b917ae6d790f4b5f056a6e90f8004a9d158`
 - Generated report SHA-256:
-  `ca3bc52b1cb37896be118df8b54e974d9c3047e4be316a02c6bd2af9496ab870`
+  `5c693d208ce8febf417077d5bfe320d70a87830934ac1466a35e530113d09b43`
 
 Command:
 
 ```bash
 uv run python -m openchronicle.evaluation.resume_render \
-  --output-dir tmp/pdfs/resume-render-chrome151-r5
+  --output-dir scratch/vida-resume-render-product-pdf-20260809
 ```
 
 The generated report returned `automated_status=passed` and intentionally
@@ -60,13 +60,20 @@ its Headless application loop alive. The audit treats the bounded “bytes
 written” acknowledgement plus PDF magic as output readiness, then sends TERM
 and KILL to only the still-owned process group before reaping its leader. Both
 runs of all four cases recorded `terminated_after_output_ready`; no renderer
-process remained. Product code does not invoke this audit process manager.
+process remained. The product PDF renderer and audit now share this owned-group
+implementation. A separate regression proves that a TERM-resistant,
+stdio-closed descendant is drained even after its direct leader exits cleanly.
 
 ## Boundary decision
 
-The local Chrome 151 render/parse/layout gate is **accepted** for continued
-development. It closes the planned local rendering experiment, not the product
-export milestone. PDF export remains unavailable until an exact engine is
-packaged, the native command re-fetches the current digest-bound projection,
-and equivalent packaged-app tests pass. Windows/Linux fidelity, accessibility
-tagging, additional templates, real résumé corpora, and DOCX remain unmeasured.
+The local Chrome 151 render/parse/layout gate is **accepted for the guarded
+development-host product path**. Python re-fetches the current digest-bound
+projection and validates the PDF with the pinned inspectors; Rust rechecks
+identity, size, SHA-256, passive structure, and creates only a new private file.
+The WebView receives no PDF bytes or filesystem path. The path fails closed
+with `EXPORT_UNAVAILABLE` when any engine or inspector pin differs.
+
+This is not yet a distributable PDF release claim. Packaging remains blocked
+until the engine and fonts are bundled or equivalently replaced and packaged
+app tests pass. Windows/Linux fidelity, accessibility tagging, additional
+templates, and real résumé corpus evaluation remain separate gates.

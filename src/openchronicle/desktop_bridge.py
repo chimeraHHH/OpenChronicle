@@ -28,6 +28,7 @@ from .reply_rescue import store as reply_rescue_store
 from .reply_rescue.service import ReplyRescueService
 from .reply_rescue.service import validate_config as validate_reply_rescue
 from .resume_rescue import store as resume_rescue_store
+from .resume_rescue.pdf_export import PdfExportUnavailable
 from .resume_rescue.service import ResumeRescueService
 from .services.capture_control import PauseStateConflict, set_paused
 from .services.context import ContextService
@@ -91,6 +92,11 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         return _error("VERSION_CONFLICT", "The Reply Rescue job changed."), 2
     except resume_rescue_store.ResumeRescueConflict:
         return _error("VERSION_CONFLICT", "The Résumé Rescue source changed."), 2
+    except PdfExportUnavailable:
+        return _error(
+            "EXPORT_UNAVAILABLE",
+            "Pinned PDF export is unavailable on this development host.",
+        ), 2
     except SelectionCaptureError as exc:
         return _selection_error(exc.code), 2
     except StalePurgePlan:

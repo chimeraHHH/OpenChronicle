@@ -53,6 +53,10 @@ _FORBIDDEN_PDF_TOKENS = (
 )
 
 
+class PdfExportUnavailable(NativeResumeExportError):
+    """The exact audited development PDF engine is unavailable or failed closed."""
+
+
 def render_pdf_export(
     tree: ResumeDocumentTree,
     *,
@@ -68,30 +72,30 @@ def render_pdf_export(
     preview = render_preview_tree(tree)
     if not hmac.compare_digest(preview.document_digest, preview_document_digest):
         raise NativeResumeExportError("native export preview binding changed")
-    chrome = _resolve_pinned_chrome(chrome_path)
-    commands = {name: _resolve_pinned_command(name) for name in POPPLER_VERSIONS}
+    try:
+        chrome = _resolve_pinned_chrome(chrome_path)
+        commands = {name: _resolve_pinned_command(name) for name in POPPLER_VERSIONS}
 
-    with tempfile.TemporaryDirectory(prefix="openchronicle-native-pdf-") as raw_directory:
-        directory = Path(raw_directory)
-        directory.chmod(0o700)
-        html_path = directory / "preview.html"
-        pdf_path = directory / "resume.pdf"
-        html_path.write_text(preview.html, encoding="utf-8")
-        html_path.chmod(0o600)
-        try:
+        with tempfile.TemporaryDirectory(prefix="openchronicle-native-pdf-") as raw_directory:
+            directory = Path(raw_directory)
+            directory.chmod(0o700)
+            html_path = directory / "preview.html"
+            pdf_path = directory / "resume.pdf"
+            html_path.write_text(preview.html, encoding="utf-8")
+            html_path.chmod(0o600)
             print_pdf(chrome, html_path, pdf_path, timeout=PDF_RENDER_TIMEOUT_SECONDS)
-        except PinnedPdfProcessError as exc:
-            raise NativeResumeExportError("pinned PDF renderer failed") from exc
-        if not pdf_path.is_file() or pdf_path.is_symlink():
-            raise NativeResumeExportError("pinned PDF renderer output is invalid")
-        pdf_path.chmod(0o600)
-        content = pdf_path.read_bytes()
-        _validate_pdf(
-            content,
-            tree=tree,
-            pdf_path=pdf_path,
-            commands=commands,
-        )
+            if not pdf_path.is_file() or pdf_path.is_symlink():
+                raise NativeResumeExportError("pinned PDF renderer output is invalid")
+            pdf_path.chmod(0o600)
+            content = pdf_path.read_bytes()
+            _validate_pdf(
+                content,
+                tree=tree,
+                pdf_path=pdf_path,
+                commands=commands,
+            )
+    except (NativeResumeExportError, PinnedPdfProcessError, OSError) as exc:
+        raise PdfExportUnavailable("pinned PDF export is unavailable") from exc
 
     return ResumeNativeExport(
         projection_id=tree.projection_id,

@@ -38,6 +38,10 @@ impl DesktopError {
                 "VERSION_CONFLICT",
                 "The record changed. Refresh before trying again.",
             ),
+            "EXPORT_UNAVAILABLE" => Self::new(
+                "EXPORT_UNAVAILABLE",
+                "Pinned PDF export is unavailable on this development host.",
+            ),
             "ACCESSIBILITY_REQUIRED" => Self::new(
                 "ACCESSIBILITY_REQUIRED",
                 "Accessibility permission is required to read the explicit selection.",
@@ -106,5 +110,9 @@ mod tests {
         let unverifiable = DesktopError::from_bridge("PURGE_CLOSURE_UNVERIFIABLE");
         assert_eq!(unverifiable.code, "PURGE_CLOSURE_UNVERIFIABLE");
         assert!(unverifiable.message.contains("safe forget"));
+
+        let unavailable = DesktopError::from_bridge("EXPORT_UNAVAILABLE");
+        assert_eq!(unavailable.code, "EXPORT_UNAVAILABLE");
+        assert!(unavailable.message.contains("development host"));
     }
 }
