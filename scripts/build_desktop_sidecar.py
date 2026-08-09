@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 BRIDGE_NAME = "openchronicle-desktop-bridge"
-PROTOCOL_VERSION = 14
+PROTOCOL_VERSION = 15
 PYINSTALLER_VERSION = "6.22.0"
 SUPPORTED_TARGETS = {
     ("Darwin", "arm64"): "aarch64-apple-darwin",

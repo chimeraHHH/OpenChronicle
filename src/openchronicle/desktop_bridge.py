@@ -44,7 +44,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 14
+PROTOCOL_VERSION = 15
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -194,6 +194,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "resume_rescue.replace_opportunity": _resume_rescue_replace_opportunity,
         "resume_rescue.compose_exact": _resume_rescue_compose_exact,
         "resume_rescue.preview": _resume_rescue_preview,
+        "resume_rescue.preview_pdf": _resume_rescue_preview_pdf,
         "resume_rescue.review_json": _resume_rescue_review_json,
         "resume_rescue.admit_json": _resume_rescue_admit_json,
         "resume_rescue.export_json": _resume_rescue_export_json,
@@ -207,6 +208,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "resume_rescue.decide_rewrite": _resume_rescue_decide_rewrite,
         "resume_rescue.restore_rewrite": _resume_rescue_restore_rewrite,
         "resume_rescue.preview_rewrite": _resume_rescue_preview_rewrite,
+        "resume_rescue.preview_rewrite_pdf": _resume_rescue_preview_rewrite_pdf,
         "resume_rescue.export_rewrite_json": _resume_rescue_export_rewrite_json,
         "resume_rescue.export_rewrite_docx": _resume_rescue_export_rewrite_docx,
         "resume_rescue.export_rewrite_pdf": _resume_rescue_export_rewrite_pdf,
@@ -569,6 +571,19 @@ def _resume_rescue_preview(params: dict[str, Any]) -> dict[str, Any]:
         return {"preview": preview.to_dict()}
 
 
+def _resume_rescue_preview_pdf(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"projection_id", "expected_preview_document_digest"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        preview = ResumeRescueService(conn, cfg).preview_pdf(
+            _bounded_string(params["projection_id"], 128, nonempty=True),
+            expected_preview_document_digest=_bounded_string(
+                params["expected_preview_document_digest"], 64, nonempty=True
+            ),
+        )
+        return {"pdf_preview": preview.to_dict()}
+
+
 def _resume_rescue_review_json(params: dict[str, Any]) -> dict[str, Any]:
     _fields(params, required={"source_text"})
     cfg = config_mod.load()
@@ -817,6 +832,17 @@ def _resume_rescue_preview_rewrite(params: dict[str, Any]) -> dict[str, Any]:
             _bounded_string(params["version_id"], 128, nonempty=True)
         )
         return {"preview": preview.to_dict()}
+
+
+def _resume_rescue_preview_rewrite_pdf(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"version_id", "expected_preview_document_digest"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, cfg)
+        version_id = _bounded_string(params["version_id"], 128, nonempty=True)
+        expected = _bounded_string(params["expected_preview_document_digest"], 64, nonempty=True)
+        preview = service.preview_rewrite_pdf(version_id, expected_preview_document_digest=expected)
+        return {"pdf_preview": preview.to_dict()}
 
 
 def _resume_rescue_export_rewrite_json(params: dict[str, Any]) -> dict[str, Any]:

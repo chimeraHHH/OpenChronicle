@@ -48,8 +48,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks supervised rewrite review as bridge protocol v14", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(14);
+  it("tracks digest-bound PDF preview as bridge protocol v15", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(15);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {

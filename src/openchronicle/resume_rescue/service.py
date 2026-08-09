@@ -9,7 +9,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..config import Config
 from ..privacy.egress import model_egress_lock
@@ -55,6 +55,9 @@ from .rewrite_generation import (
     provider_summary as rewrite_provider_summary,
 )
 
+if TYPE_CHECKING:
+    from .pdf_preview import ResumePdfPreview
+
 
 def render_pdf_export(
     tree: ResumeDocumentTree, *, preview_document_digest: str
@@ -64,6 +67,14 @@ def render_pdf_export(
     from .pdf_export import render_pdf_export as render
 
     return render(tree, preview_document_digest=preview_document_digest)
+
+
+def render_pdf_preview(exported: ResumeNativeExport) -> ResumePdfPreview:
+    """Import PDFium only for an actual PDF preview operation."""
+
+    from .pdf_preview import render_pdf_preview as render
+
+    return render(exported)
 
 
 class ResumeRescueService:
@@ -575,6 +586,17 @@ class ResumeRescueService:
             raise review_store.ResumeRewriteReviewConflict("resume rewrite preview changed")
         return render_pdf_export(tree, preview_document_digest=preview.document_digest)
 
+    def preview_rewrite_pdf(
+        self, version_id: str, *, expected_preview_document_digest: str
+    ) -> ResumePdfPreview:
+        """Render bounded PNG pages from the exact reviewed rewrite PDF bytes."""
+
+        exported = self.export_rewrite_pdf(
+            version_id,
+            expected_preview_document_digest=expected_preview_document_digest,
+        )
+        return render_pdf_preview(exported)
+
     def preview(self, projection_id: str) -> ResumePreview:
         projection = self.get_projection(projection_id)
         if projection is None:
@@ -639,6 +661,17 @@ class ResumeRescueService:
         if not hmac.compare_digest(preview.document_digest, expected_preview_document_digest):
             raise store.ResumeRescueConflict("resume rescue preview changed")
         return render_pdf_export(tree, preview_document_digest=preview.document_digest)
+
+    def preview_pdf(
+        self, projection_id: str, *, expected_preview_document_digest: str
+    ) -> ResumePdfPreview:
+        """Render bounded PNG pages from the exact current PDF export bytes."""
+
+        exported = self.export_pdf(
+            projection_id,
+            expected_preview_document_digest=expected_preview_document_digest,
+        )
+        return render_pdf_preview(exported)
 
     def _review_document_sources(
         self, version_id: str

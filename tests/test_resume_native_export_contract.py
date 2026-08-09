@@ -42,10 +42,12 @@ def test_native_export_contract_freezes_formats_references_and_hard_gates() -> N
     }
     assert {item["repository"] for item in manifest["comparators"]} == {
         "AmruthPillai/Reactive-Resume",
+        "akhil-dara/cvaurum",
         "Kozea/WeasyPrint",
         "MrBitBucket/reportlab-mirror",
         "py-pdf/fpdf2",
         "typst/typst",
+        "xitanggg/open-resume",
     }
     assert all(
         value is True for key, value in manifest["hard_gates"].items() if key != "action_capability"

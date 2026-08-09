@@ -39,6 +39,7 @@ from openchronicle.reply_rescue import store as reply_rescue_store
 from openchronicle.resume_rescue import rewrite_store as resume_rewrite_store
 from openchronicle.resume_rescue.native_export import ResumeNativeExport
 from openchronicle.resume_rescue.pdf_export import PdfExportUnavailable
+from openchronicle.resume_rescue.pdf_preview import ResumePdfPreview, ResumePdfPreviewPage
 from openchronicle.resume_rescue.service import ResumeRescueService
 from openchronicle.services.capture_control import PauseStateConflict, set_paused
 from openchronicle.services.evidence import EvidenceResolver
@@ -976,6 +977,53 @@ def test_resume_rescue_bridge_composes_exact_review_artifact_and_invalidates_sta
     assert preview["action_capability"] == "none"
     assert "<script" not in preview["html"].lower()
     assert fact["text"] in preview["plain_text"]
+
+    page_content = b"\x89PNG\r\n\x1a\nfixture-IEND\xaeB`\x82"
+    pdf_digest = "a" * 64
+
+    def fake_pdf_preview(
+        _service: ResumeRescueService,
+        projection_id: str,
+        *,
+        expected_preview_document_digest: str,
+    ) -> ResumePdfPreview:
+        assert projection_id == projection["id"]
+        assert expected_preview_document_digest == preview["document_digest"]
+        return ResumePdfPreview(
+            projection_id=projection["id"],
+            artifact_digest=projection["artifact_digest"],
+            preview_document_digest=preview["document_digest"],
+            pdf_content_digest=pdf_digest,
+            pdf_byte_count=1234,
+            pages=(
+                ResumePdfPreviewPage(
+                    page_number=1,
+                    width_pixels=893,
+                    height_pixels=1263,
+                    content=page_content,
+                    content_digest=hashlib.sha256(page_content).hexdigest(),
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(ResumeRescueService, "preview_pdf", fake_pdf_preview)
+    previewed_pdf, previewed_pdf_code = _request(
+        "resume_rescue.preview_pdf",
+        {
+            "projection_id": projection["id"],
+            "expected_preview_document_digest": preview["document_digest"],
+        },
+    )
+    assert previewed_pdf_code == 0
+    pdf_preview = previewed_pdf["result"]["pdf_preview"]
+    assert pdf_preview["projection_id"] == projection["id"]
+    assert pdf_preview["artifact_digest"] == projection["artifact_digest"]
+    assert pdf_preview["preview_document_digest"] == preview["document_digest"]
+    assert pdf_preview["pdf_content_digest"] == pdf_digest
+    assert pdf_preview["page_count"] == 1
+    assert (
+        base64.b64decode(pdf_preview["pages"][0]["content_base64"], validate=True) == page_content
+    )
 
     exported_docx, exported_docx_code = _request(
         "resume_rescue.export_docx",

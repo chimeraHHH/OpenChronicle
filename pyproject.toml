@@ -27,6 +27,7 @@ dependencies = [
     "httpx[socks]>=0.27",
     "tomli>=2.0; python_version < '3.11'",
     "pdfplumber>=0.11.10,<0.12",
+    "pypdfium2==5.12.1",
     "pypdf==6.15.0",
     "reportlab==5.0.0",
     "uharfbuzz==0.56.0",
