@@ -12,6 +12,7 @@ import { OverviewPage } from "./pages/OverviewPage";
 import { PrivacyPage } from "./pages/PrivacyPage";
 import { PromptRescuePage } from "./pages/PromptRescuePage";
 import { ReviewPage } from "./pages/ReviewPage";
+import { ReplyRescuePage } from "./pages/ReplyRescuePage";
 import { SuggestionsPage } from "./pages/SuggestionsPage";
 import { TimelinePage } from "./pages/TimelinePage";
 
@@ -146,6 +147,7 @@ export function App({ api = desktopApi }: AppProps) {
             : 0}
           suggestionCount={snapshot?.suggestions.length ?? 0}
           promptRescueCount={snapshot?.prompt_rescue.jobs.length ?? 0}
+          replyRescueCount={snapshot?.reply_rescue.jobs.length ?? 0}
         />
         <div className="workspace">
           <div aria-live="polite" className="sr-only" role="status">{announcement}</div>
@@ -199,6 +201,14 @@ export function App({ api = desktopApi }: AppProps) {
               daemonRunning={snapshot.daemon.state !== "stopped"}
               onChanged={refresh}
               rescue={snapshot.prompt_rescue}
+            />
+          ) : null}
+          {snapshot && page === "reply-rescue" ? (
+            <ReplyRescuePage
+              api={api}
+              daemonRunning={snapshot.daemon.state !== "stopped"}
+              onChanged={refresh}
+              rescue={snapshot.reply_rescue}
             />
           ) : null}
           {snapshot && page === "review" ? (

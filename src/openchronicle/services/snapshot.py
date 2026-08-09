@@ -18,6 +18,8 @@ from ..prompt_rescue.service import PromptRescueService
 from ..prompt_rescue.service import validate_config as validate_prompt_rescue
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef
+from ..reply_rescue.service import ReplyRescueService
+from ..reply_rescue.service import validate_config as validate_reply_rescue
 from ..services.context import ContextService
 from ..services.evidence import EvidenceResolver
 from ..services.memory import MemoryService
@@ -37,6 +39,7 @@ def build_snapshot(
     wrap_limit: int,
     suggestion_limit: int = 20,
     prompt_rescue_limit: int = 20,
+    reply_rescue_limit: int = 20,
 ) -> dict[str, Any]:
     """Return one bounded product snapshot without probing any model/provider."""
     # Resume only deletion plans the user previously authorized. This is a
@@ -48,13 +51,9 @@ def build_snapshot(
     pid = cli_mod._read_pid()
     paused = paths.paused_flag().exists()
     with capture_store.capture_store_lock():
-        indexed_capture_count = int(
-            conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0]
-        )
+        indexed_capture_count = int(conn.execute("SELECT COUNT(*) FROM captures").fetchone()[0])
         recent_captures = (
-            fts.recent_captures(conn, limit=indexed_capture_count)
-            if indexed_capture_count
-            else []
+            fts.recent_captures(conn, limit=indexed_capture_count) if indexed_capture_count else []
         )
         authorized_captures = [
             row for row in recent_captures if _capture_row_allowed(conn, cfg, row)
@@ -85,17 +84,11 @@ def build_snapshot(
             "archived_files": 0,
             "entries": 0,
         }
-        for file_row in fts.list_files(
-            conn, include_dormant=True, include_archived=True
-        ):
-            if candidate_store.is_tombstoned(
-                conn, kind="memory_file", artifact_id=file_row.path
-            ):
+        for file_row in fts.list_files(conn, include_dormant=True, include_archived=True):
+            if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=file_row.path):
                 continue
             try:
-                parsed = files_store.read_file(
-                    files_store.memory_path(file_row.path)
-                )
+                parsed = files_store.read_file(files_store.memory_path(file_row.path))
             except (FileNotFoundError, OSError, ValueError):
                 continue
             if not context.memory_file_metadata_allowed(parsed):
@@ -109,9 +102,7 @@ def build_snapshot(
                     artifact_id=entry.id,
                     path=parsed.path.name,
                 )
-                and context.memory_entry_allowed(
-                    path=parsed.path.name, entry=entry
-                )
+                and context.memory_entry_allowed(path=parsed.path.name, entry=entry)
             ]
             if not visible_entries:
                 continue
@@ -119,46 +110,30 @@ def build_snapshot(
             if status_key in memory_counts:
                 memory_counts[status_key] += 1
             memory_counts["entries"] += len(visible_entries)
-        raw_timeline_count = int(
-            conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
-        )
+        raw_timeline_count = int(conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0])
         visible_timeline = (
             [
                 block
-                for block in timeline_store.query_recent(
-                    conn, limit=raw_timeline_count
-                )
-                if context.evidence_allowed(
-                    EvidenceRef(kind="timeline_block", id=block.id)
-                )
+                for block in timeline_store.query_recent(conn, limit=raw_timeline_count)
+                if context.evidence_allowed(EvidenceRef(kind="timeline_block", id=block.id))
             ]
             if raw_timeline_count
             else []
         )
         timeline_count = len(visible_timeline)
-        timeline = (
-            visible_timeline[-timeline_limit:]
-            if timeline_limit
-            else []
-        )
+        timeline = visible_timeline[-timeline_limit:] if timeline_limit else []
         resolver = EvidenceResolver(conn, cfg)
-        all_candidate_rows = conn.execute(
-            "SELECT id, status FROM memory_candidates"
-        ).fetchall()
+        all_candidate_rows = conn.execute("SELECT id, status FROM memory_candidates").fetchall()
         visible_candidate_ids = {
             str(row["id"])
             for row in all_candidate_rows
-            if resolver.resolve(
-                EvidenceRef(kind="memory_candidate", id=str(row["id"]))
-            )["status"]
+            if resolver.resolve(EvidenceRef(kind="memory_candidate", id=str(row["id"])))["status"]
             == "current"
         }
         candidates = (
             [
                 candidate
-                for candidate in candidate_store.list_review_snapshot(
-                    conn, limit=1_000
-                )
+                for candidate in candidate_store.list_review_snapshot(conn, limit=1_000)
                 if candidate.id in visible_candidate_ids
             ][:candidate_limit]
             if candidate_limit
@@ -166,8 +141,7 @@ def build_snapshot(
         )
         candidate_counts = {
             status: sum(
-                str(row["status"]) == status
-                and str(row["id"]) in visible_candidate_ids
+                str(row["status"]) == status and str(row["id"]) in visible_candidate_ids
                 for row in all_candidate_rows
             )
             for status in candidate_store.VALID_STATUSES
@@ -192,11 +166,15 @@ def build_snapshot(
         validate_prompt_rescue(cfg)
         prompt_rescue_service = PromptRescueService(conn, cfg)
         prompt_rescue_jobs = (
-            prompt_rescue_service.list(limit=prompt_rescue_limit)
-            if prompt_rescue_limit
-            else []
+            prompt_rescue_service.list(limit=prompt_rescue_limit) if prompt_rescue_limit else []
         )
         prompt_rescue_provider = prompt_rescue_service.provider_summary()
+        validate_reply_rescue(cfg)
+        reply_rescue_service = ReplyRescueService(conn, cfg)
+        reply_rescue_jobs = (
+            reply_rescue_service.list(limit=reply_rescue_limit) if reply_rescue_limit else []
+        )
+        reply_rescue_provider = reply_rescue_service.provider_summary()
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -320,6 +298,33 @@ def build_snapshot(
                 for job in prompt_rescue_jobs
             ],
         },
+        "reply_rescue": {
+            "enabled": cfg.reply_rescue.enabled,
+            "provider": {
+                "model": str(reply_rescue_provider["model"])[:256],
+                "location": str(reply_rescue_provider["location"])[:50],
+            },
+            "jobs": [
+                {
+                    "id": str(job.id)[:128],
+                    "status": str(job.status)[:50],
+                    "source_kind": str(job.source_kind)[:50],
+                    "conversation_preview": " ".join(
+                        str(job.source.get("conversation_text") or "").split()
+                    )[:240],
+                    "identity_assurance": str(job.source.get("identity_assurance") or "")[:50],
+                    "model_identity": str(job.model_identity)[:256],
+                    "provider_location": str(job.provider_location)[:50],
+                    "output_edited": bool(job.output_edited),
+                    "error_code": str(job.error_code)[:50],
+                    "attempt_count": int(job.attempt_count),
+                    "created_at": str(job.created_at)[:100],
+                    "updated_at": str(job.updated_at)[:100],
+                    "version": int(job.version),
+                }
+                for job in reply_rescue_jobs
+            ],
+        },
         "generated_at": datetime.now().astimezone().isoformat(),
     }
 
@@ -332,17 +337,11 @@ def _session_allowed(conn, context: ContextService, session_id: str) -> bool:
         if dependent.kind != "memory_entry" or not dependent.path:
             continue
         try:
-            parsed = files_store.read_file(
-                files_store.memory_path(dependent.path)
-            )
+            parsed = files_store.read_file(files_store.memory_path(dependent.path))
         except (FileNotFoundError, OSError, ValueError):
             continue
-        entry = next(
-            (item for item in parsed.entries if item.id == dependent.id), None
-        )
-        if entry is not None and context.memory_entry_allowed(
-            path=dependent.path, entry=entry
-        ):
+        entry = next((item for item in parsed.entries if item.id == dependent.id), None)
+        if entry is not None and context.memory_entry_allowed(path=dependent.path, entry=entry):
             return True
     return False
 
@@ -371,25 +370,19 @@ def _capture_row_allowed(conn, cfg: Config, row) -> bool:
         not isinstance(row.id, str)
         or not row.id
         or Path(row.id).name != row.id
-        or candidate_store.is_tombstoned(
-            conn, kind="capture_file", artifact_id=f"{row.id}.json"
-        )
+        or candidate_store.is_tombstoned(conn, kind="capture_file", artifact_id=f"{row.id}.json")
     ):
         return False
     capture_path = paths.capture_buffer_dir() / f"{row.id}.json"
     if capture_path.is_symlink() or not capture_path.is_file():
         return False
     try:
-        data = json.loads(
-            capture_path.read_text(encoding="utf-8")
-        )
+        data = json.loads(capture_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
     if (
         not isinstance(data, dict)
-        or not privacy_policy.evaluate_stored_observation(
-            cfg.capture, observation=data
-        ).allowed
+        or not privacy_policy.evaluate_stored_observation(cfg.capture, observation=data).allowed
     ):
         return False
     meta = data.get("window_meta")
@@ -409,8 +402,7 @@ def _capture_row_allowed(conn, cfg: Config, row) -> bool:
         and row.focused_role == text(focused.get("role"))
         and row.focused_value == text(focused.get("value"))
         and row.url == text(data.get("url"))
-        and fts.get_capture_visible_text(conn, row.id)
-        == text(data.get("visible_text"))
+        and fts.get_capture_visible_text(conn, row.id) == text(data.get("visible_text"))
         and not candidate_store.is_tombstoned(
             conn, kind="capture_file", artifact_id=f"{row.id}.json"
         )

@@ -5,6 +5,7 @@ interface SidebarProps {
   reviewCount: number;
   suggestionCount: number;
   promptRescueCount: number;
+  replyRescueCount: number;
   onNavigate: (page: PageId) => void;
 }
 
@@ -12,6 +13,7 @@ const pages: Array<{ id: PageId; label: string; glyph: string }> = [
   { id: "overview", label: "Overview", glyph: "O" },
   { id: "suggestions", label: "Suggestions", glyph: "S" },
   { id: "prompt-rescue", label: "Prompt Rescue", glyph: "P" },
+  { id: "reply-rescue", label: "Reply Rescue", glyph: "R" },
   { id: "review", label: "Review", glyph: "R" },
   { id: "daily-wrap", label: "Daily Wrap", glyph: "D" },
   { id: "timeline", label: "Timeline", glyph: "T" },
@@ -23,6 +25,7 @@ export function Sidebar({
   reviewCount,
   suggestionCount,
   promptRescueCount,
+  replyRescueCount,
   onNavigate,
 }: SidebarProps) {
   return (
@@ -65,6 +68,14 @@ export function Sidebar({
                 aria-label={`${promptRescueCount} Prompt Rescue jobs`}
               >
                 {promptRescueCount}
+              </span>
+            ) : null}
+            {page.id === "reply-rescue" && replyRescueCount > 0 ? (
+              <span
+                className="sidebar__count"
+                aria-label={`${replyRescueCount} Reply Rescue jobs`}
+              >
+                {replyRescueCount}
               </span>
             ) : null}
           </button>

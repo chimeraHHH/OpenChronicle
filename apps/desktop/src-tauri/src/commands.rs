@@ -21,6 +21,12 @@ const MAX_PROMPT_RESCUE_INPUT_CHARS: usize = 20_000;
 const MAX_PROMPT_RESCUE_OUTPUT_CHARS: usize = 30_000;
 const MAX_PROMPT_RESCUE_CONTEXT_CHARS: usize = 500;
 const MAX_PROMPT_RESCUE_CONSTRAINTS: usize = 20;
+const MAX_REPLY_RESCUE_ITEMS: usize = 50;
+const MAX_REPLY_RESCUE_INPUT_CHARS: usize = 50_000;
+const MAX_REPLY_RESCUE_OUTPUT_CHARS: usize = 30_000;
+const MAX_REPLY_RESCUE_FIELD_CHARS: usize = 1_000;
+const MAX_REPLY_RESCUE_PARTICIPANTS: usize = 50;
+const MAX_REPLY_RESCUE_DIRECTIONS: usize = 20;
 const MAX_PROVENANCE_DEPTH: u8 = 8;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -36,6 +42,8 @@ pub(crate) struct SnapshotRequest {
     pub suggestion_limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_rescue_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_rescue_limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -154,6 +162,40 @@ pub(crate) struct PromptRescueEditRequest {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PromptRescueCasRequest {
+    pub job_id: String,
+    pub expected_version: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReplyRescueGetRequest {
+    pub job_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReplyRescueQueueRequest {
+    pub conversation_text: String,
+    pub participants: Vec<String>,
+    pub intended_recipients: Vec<String>,
+    pub reply_mode: String,
+    pub goal: String,
+    pub tone: String,
+    pub style_instructions: Vec<String>,
+    pub commitments: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReplyRescueEditRequest {
+    pub job_id: String,
+    pub expected_version: u64,
+    pub reply_body: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReplyRescueCasRequest {
     pub job_id: String,
     pub expected_version: u64,
 }
@@ -295,6 +337,48 @@ pub async fn delete_prompt_rescue(
             DesktopError::new(
                 "BRIDGE_UNAVAILABLE",
                 "The Prompt Rescue deletion worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
+pub async fn get_reply_rescue(request: ReplyRescueGetRequest) -> Result<Value, DesktopError> {
+    validate_reply_rescue_job_id(&request.job_id)?;
+    invoke(Operation::ReplyRescueGet, &request).await
+}
+
+#[tauri::command]
+pub async fn queue_reply_rescue(request: ReplyRescueQueueRequest) -> Result<Value, DesktopError> {
+    validate_reply_rescue_queue(&request)?;
+    invoke(Operation::ReplyRescueQueue, &request).await
+}
+
+#[tauri::command]
+pub async fn edit_reply_rescue(request: ReplyRescueEditRequest) -> Result<Value, DesktopError> {
+    validate_reply_rescue_job_id(&request.job_id)?;
+    validate_reply_rescue_version(request.expected_version)?;
+    validate_multiline_text(&request.reply_body, MAX_REPLY_RESCUE_OUTPUT_CHARS, false)?;
+    invoke(Operation::ReplyRescueEdit, &request).await
+}
+
+#[tauri::command]
+pub async fn retry_reply_rescue(request: ReplyRescueCasRequest) -> Result<Value, DesktopError> {
+    validate_reply_rescue_cas(&request)?;
+    invoke(Operation::ReplyRescueRetry, &request).await
+}
+
+#[tauri::command]
+pub async fn delete_reply_rescue(
+    app: AppHandle,
+    request: ReplyRescueCasRequest,
+) -> Result<Value, DesktopError> {
+    validate_reply_rescue_cas(&request)?;
+    tauri::async_runtime::spawn_blocking(move || delete_reply_rescue_blocking(&app, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The Reply Rescue deletion worker stopped unexpectedly.",
             )
         })?
 }
@@ -446,6 +530,38 @@ fn delete_prompt_rescue_blocking(
     bridge::call_blocking(Operation::PromptRescueDelete, params)
 }
 
+fn delete_reply_rescue_blocking(
+    app: &AppHandle,
+    request: ReplyRescueCasRequest,
+) -> Result<Value, DesktopError> {
+    let mut dialog = MessageDialog::new()
+        .set_description(
+            "This permanently deletes the local conversation source and prepared reply. It cannot be undone, and it does not change or send anything in another app.",
+        )
+        .set_title("Delete this Reply Rescue job?")
+        .set_level(MessageLevel::Warning)
+        .set_buttons(MessageButtons::OkCancelCustom(
+            "Delete Permanently".to_owned(),
+            "Cancel".to_owned(),
+        ));
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let confirmed = match dialog.show() {
+        MessageDialogResult::Ok | MessageDialogResult::Yes => true,
+        MessageDialogResult::Custom(label) => label == "Delete Permanently",
+        _ => false,
+    };
+    if !confirmed {
+        return Err(DesktopError::new(
+            "USER_CANCELLED",
+            "Reply Rescue deletion was cancelled.",
+        ));
+    }
+    let params = checked_value(&request)?;
+    bridge::call_blocking(Operation::ReplyRescueDelete, params)
+}
+
 fn checked_value<T: Serialize + ?Sized>(request: &T) -> Result<Value, DesktopError> {
     let encoded = serde_json::to_vec(request)
         .map_err(|_| DesktopError::invalid_request("The request could not be encoded."))?;
@@ -485,6 +601,9 @@ fn validate_snapshot(request: &SnapshotRequest) -> Result<(), DesktopError> {
         || request
             .prompt_rescue_limit
             .is_some_and(|limit| limit > MAX_PROMPT_RESCUE_ITEMS)
+        || request
+            .reply_rescue_limit
+            .is_some_and(|limit| limit > MAX_REPLY_RESCUE_ITEMS)
     {
         return Err(DesktopError::invalid_request(
             "A snapshot limit exceeds the allowed maximum.",
@@ -536,6 +655,92 @@ fn validate_prompt_rescue_version(value: u64) -> Result<(), DesktopError> {
     if value == 0 || value > 2_147_483_647 {
         return Err(DesktopError::invalid_request(
             "The Prompt Rescue version is invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_reply_rescue_queue(request: &ReplyRescueQueueRequest) -> Result<(), DesktopError> {
+    validate_multiline_text(
+        &request.conversation_text,
+        MAX_REPLY_RESCUE_INPUT_CHARS,
+        false,
+    )?;
+    for value in [&request.goal, &request.tone] {
+        validate_multiline_text(value, MAX_REPLY_RESCUE_FIELD_CHARS, true)?;
+    }
+    if !matches!(
+        request.reply_mode.as_str(),
+        "reply" | "reply_all" | "unspecified"
+    ) {
+        return Err(DesktopError::invalid_request(
+            "The Reply Rescue reply mode is invalid.",
+        ));
+    }
+    let groups = [
+        (
+            &request.participants,
+            MAX_REPLY_RESCUE_PARTICIPANTS,
+            "participants",
+        ),
+        (
+            &request.intended_recipients,
+            MAX_REPLY_RESCUE_PARTICIPANTS,
+            "recipients",
+        ),
+        (
+            &request.style_instructions,
+            MAX_REPLY_RESCUE_DIRECTIONS,
+            "style instructions",
+        ),
+        (
+            &request.commitments,
+            MAX_REPLY_RESCUE_DIRECTIONS,
+            "commitments",
+        ),
+    ];
+    for (values, maximum, _label) in groups {
+        if values.len() > maximum {
+            return Err(DesktopError::invalid_request(
+                "The Reply Rescue request has too many list values.",
+            ));
+        }
+        for value in values {
+            validate_multiline_text(value, MAX_REPLY_RESCUE_FIELD_CHARS, false)?;
+        }
+    }
+    let declared_chars = request.conversation_text.chars().count()
+        + request.goal.chars().count()
+        + request.tone.chars().count()
+        + request
+            .participants
+            .iter()
+            .chain(&request.intended_recipients)
+            .chain(&request.style_instructions)
+            .chain(&request.commitments)
+            .map(|value| value.chars().count())
+            .sum::<usize>();
+    if declared_chars > MAX_REPLY_RESCUE_INPUT_CHARS {
+        return Err(DesktopError::invalid_request(
+            "The Reply Rescue input exceeds the allowed size.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_reply_rescue_cas(request: &ReplyRescueCasRequest) -> Result<(), DesktopError> {
+    validate_reply_rescue_job_id(&request.job_id)?;
+    validate_reply_rescue_version(request.expected_version)
+}
+
+fn validate_reply_rescue_job_id(value: &str) -> Result<(), DesktopError> {
+    validate_bounded_text(value, MAX_CANDIDATE_ID_CHARS, false)
+}
+
+fn validate_reply_rescue_version(value: u64) -> Result<(), DesktopError> {
+    if value == 0 || value > 2_147_483_647 {
+        return Err(DesktopError::invalid_request(
+            "The Reply Rescue version is invalid.",
         ));
     }
     Ok(())
@@ -689,6 +894,7 @@ mod tests {
             wrap_limit: Some(MAX_WRAP_ITEMS),
             suggestion_limit: Some(MAX_SUGGESTION_ITEMS),
             prompt_rescue_limit: Some(MAX_PROMPT_RESCUE_ITEMS),
+            reply_rescue_limit: Some(MAX_REPLY_RESCUE_ITEMS),
         };
         assert!(validate_snapshot(&valid).is_ok());
 
@@ -728,6 +934,28 @@ mod tests {
         assert!(validate_prompt_rescue_version(2_147_483_648).is_err());
         assert!(validate_multiline_text("ready\nfor review", 30_000, false).is_ok());
         assert!(validate_multiline_text("hidden\0value", 30_000, false).is_err());
+    }
+
+    #[test]
+    fn reply_rescue_queue_and_cas_are_bounded() {
+        let request = ReplyRescueQueueRequest {
+            conversation_text: "Ana: Can you meet Tuesday at 10?".to_owned(),
+            participants: vec!["Ana".to_owned(), "Me".to_owned()],
+            intended_recipients: vec!["Ana".to_owned()],
+            reply_mode: "reply".to_owned(),
+            goal: "Confirm the time".to_owned(),
+            tone: "Warm".to_owned(),
+            style_instructions: vec!["Use a greeting".to_owned()],
+            commitments: vec!["Tuesday at 10 works".to_owned()],
+        };
+        assert!(validate_reply_rescue_queue(&request).is_ok());
+        let unsupported_mode = ReplyRescueQueueRequest {
+            reply_mode: "send_all".to_owned(),
+            ..request
+        };
+        assert!(validate_reply_rescue_queue(&unsupported_mode).is_err());
+        assert!(validate_reply_rescue_version(1).is_ok());
+        assert!(validate_reply_rescue_version(0).is_err());
     }
 
     #[test]

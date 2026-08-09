@@ -246,13 +246,22 @@ privacy UX is validated on a signed macOS build.
   and
   [vida-resume-rescue-scout-2026-08-09.md](vida-resume-rescue-scout-2026-08-09.md).
   Implementation starts with Reply Rescue's honestly labeled
-  `manual_conversation` prepared artifact; connector identities/drafts and all
-  send/submit authority remain later, separate capabilities.
+  `manual_conversation` prepared artifact. That first slice is now implemented:
+  a disabled-by-default supervised backend, immutable source/provenance digest,
+  strict no-tool artifact, lease/CAS lifecycle, sanitized failures, native-
+  confirmed delete, and desktop compose/review/edit/copy UI all preserve
+  `manual_unverified` identity assurance. Manual edits clear the generated
+  claim/answered-question ledger. Connector identities, exact selection reuse,
+  frozen adversarial evaluation, provider quality evidence, and Résumé Rescue
+  remain open; drafts and all send/submit authority remain later, separate
+  capabilities.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only
-implemented workflow is Work Resumption; the backend rejects unknown artifact
-fields and any `action_capability` other than `none`. Suggestions are disabled
+implemented proactive workflow is Work Resumption; Prompt Rescue and Reply
+Rescue are explicitly initiated preparation workflows. Their backends reject
+unknown artifact fields and any `action_capability` other than `none`.
+Suggestions are disabled
 by default, disappear when their evidence or policy authority changes, and a
 desktop “accept” transition records acknowledgement only. This is an
 implementation milestone, not a Stage 2 or Vida-parity completion claim.

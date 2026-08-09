@@ -34,9 +34,10 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v5** retains the
+The bridge protocol is versioned and allowlisted. Protocol **v6** retains the
 v2 immutable Daily Wrap projection, v3 side-effect-free suggestion review, and
-v4 manual Prompt Rescue surface, then adds a v5 exact-selection queue receipt.
+v4 manual Prompt Rescue surface and v5 exact-selection receipt, then adds v6
+manual-conversation Reply Rescue review.
 Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:
@@ -51,6 +52,8 @@ only:
 - Prompt Rescue manual-input and global-shortcut exact-selection queue,
   read/edit/retry/delete operations, and explicit clipboard copy in the
   WebView;
+- Reply Rescue manual-conversation queue, read/edit/retry/delete operations,
+  visible unverified-identity/recipient warnings, and explicit clipboard copy;
 - bounded provenance tracing and exact, policy-aware evidence resolution;
 - compare-and-set pause/resume for **new capture**.
 
@@ -79,6 +82,12 @@ submission, or any other external effect.
 - **Delete Prompt Rescue job** uses a native confirmation and version-bound
   delete to remove the local rough input, artifact, and provenance edge. It
   does not alter clipboard contents or another application.
+- **Copy reviewed reply** writes only the reviewed reply body to the shared
+  clipboard. It cannot create a provider draft, paste, address, or send it.
+- **Delete Reply Rescue job** uses a native confirmation and version-bound
+  delete to remove the local conversation, artifact, and provenance edge. It
+  does not alter any mailbox, provider draft, clipboard content, or external
+  application.
 - **Permanently forget** can remove the candidate, accepted/derived memory
   entries, and affected Daily Wraps. An unchanged candidate-created Markdown
   container is deleted when empty; if it contains surviving canonical entries,

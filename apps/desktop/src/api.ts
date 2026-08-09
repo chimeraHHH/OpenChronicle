@@ -17,6 +17,12 @@ import type {
   PromptRescueSelectionBinding,
   PromptRescueSourceKind,
   PromptRescueStatus,
+  ReplyRescueJob,
+  ReplyRescueJobSummary,
+  ReplyRescueOutput,
+  ReplyRescueProviderLocation,
+  ReplyRescueSource,
+  ReplyRescueStatus,
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
@@ -64,6 +70,16 @@ const promptRescueProviderLocations = new Set<PromptRescueProviderLocation>([
 const promptRescueSourceKinds = new Set<PromptRescueSourceKind>([
   "manual_paste",
   "macos_selection",
+]);
+const replyRescueStatuses = new Set<ReplyRescueStatus>([
+  "queued",
+  "leased",
+  "ready",
+  "failed",
+]);
+const replyRescueProviderLocations = new Set<ReplyRescueProviderLocation>([
+  "local",
+  "remote_or_unknown",
 ]);
 const wrapCategories: WrapCategory[] = [
   "completed",
@@ -487,6 +503,152 @@ function promptRescueJob(value: unknown): PromptRescueJob {
   };
 }
 
+function replyRescueStatus(value: unknown): ReplyRescueStatus {
+  return allowedString(value, replyRescueStatuses, "Reply Rescue status");
+}
+
+function replyRescueProviderLocation(value: unknown): ReplyRescueProviderLocation {
+  return allowedString(
+    value,
+    replyRescueProviderLocations,
+    "Reply Rescue provider location",
+  );
+}
+
+function replyRescueSource(value: unknown): ReplyRescueSource {
+  const raw = objectValue(value, "Reply Rescue source");
+  if (
+    numberValue(raw.schema_version, "Reply Rescue source schema") !== 1 ||
+    stringValue(raw.identity_assurance, "Reply Rescue identity assurance") !==
+      "manual_unverified"
+  ) {
+    return protocolError("Reply Rescue source contract");
+  }
+  const replyMode = stringValue(raw.reply_mode, "Reply Rescue reply mode");
+  if (replyMode !== "reply" && replyMode !== "reply_all" && replyMode !== "unspecified") {
+    return protocolError("Reply Rescue reply mode");
+  }
+  const conversationText = stringValue(
+    raw.conversation_text,
+    "Reply Rescue conversation",
+  );
+  if (!conversationText.trim()) return protocolError("Reply Rescue conversation");
+  return {
+    schema_version: 1,
+    identity_assurance: "manual_unverified",
+    conversation_text: conversationText,
+    participants: stringArray(raw.participants, "Reply Rescue participants"),
+    intended_recipients: stringArray(
+      raw.intended_recipients,
+      "Reply Rescue intended recipients",
+    ),
+    reply_mode: replyMode,
+    goal: stringValue(raw.goal, "Reply Rescue goal"),
+    tone: stringValue(raw.tone, "Reply Rescue tone"),
+    style_instructions: stringArray(
+      raw.style_instructions,
+      "Reply Rescue style instructions",
+    ),
+    commitments: stringArray(raw.commitments, "Reply Rescue commitments"),
+  };
+}
+
+function replyRescueOutput(value: unknown): ReplyRescueOutput | null {
+  if (value === null) return null;
+  const raw = objectValue(value, "Reply Rescue output");
+  if (
+    numberValue(raw.schema_version, "Reply Rescue schema version") !== 1 ||
+    stringValue(raw.workflow, "Reply Rescue workflow") !== "reply_rescue" ||
+    stringValue(raw.action_capability, "Reply Rescue action capability") !== "none"
+  ) {
+    return protocolError("Reply Rescue prepared-artifact contract");
+  }
+  const replyBody = stringValue(raw.reply_body, "Reply Rescue body");
+  if (!replyBody.trim()) return protocolError("Reply Rescue body");
+  const claims = arrayValue(raw.claims, "Reply Rescue claims").map((value) => {
+    const claim = objectValue(value, "Reply Rescue claim");
+    const rawSupport = stringValue(claim.support, "Reply Rescue claim support");
+    if (rawSupport !== "conversation" && rawSupport !== "user_direction") {
+      return protocolError("Reply Rescue claim support");
+    }
+    const support: "conversation" | "user_direction" = rawSupport;
+    return {
+      text: stringValue(claim.text, "Reply Rescue claim text"),
+      support,
+    };
+  });
+  return {
+    schema_version: 1,
+    workflow: "reply_rescue",
+    action_capability: "none",
+    reply_body: replyBody,
+    addressed_questions: stringArray(
+      raw.addressed_questions,
+      "Reply Rescue addressed questions",
+    ),
+    unresolved_questions: stringArray(
+      raw.unresolved_questions,
+      "Reply Rescue unresolved questions",
+    ),
+    assumptions: stringArray(raw.assumptions, "Reply Rescue assumptions"),
+    warnings: stringArray(raw.warnings, "Reply Rescue warnings"),
+    claims,
+  };
+}
+
+function replyRescueSummary(value: unknown): ReplyRescueJobSummary {
+  const raw = objectValue(value, "Reply Rescue summary");
+  if (
+    stringValue(raw.source_kind, "Reply Rescue source kind") !== "manual_conversation" ||
+    stringValue(raw.identity_assurance, "Reply Rescue identity assurance") !==
+      "manual_unverified"
+  ) {
+    return protocolError("Reply Rescue source assurance");
+  }
+  return {
+    id: stringValue(raw.id, "Reply Rescue id"),
+    status: replyRescueStatus(raw.status),
+    source_kind: "manual_conversation",
+    conversation_preview: stringValue(raw.conversation_preview, "Reply Rescue preview"),
+    identity_assurance: "manual_unverified",
+    model_identity: stringValue(raw.model_identity, "Reply Rescue model"),
+    provider_location: replyRescueProviderLocation(raw.provider_location),
+    output_edited: booleanValue(raw.output_edited, "Reply Rescue edited state"),
+    error_code: stringValue(raw.error_code, "Reply Rescue error code"),
+    attempt_count: numberValue(raw.attempt_count, "Reply Rescue attempt count"),
+    created_at: stringValue(raw.created_at, "Reply Rescue created time"),
+    updated_at: stringValue(raw.updated_at, "Reply Rescue updated time"),
+    version: numberValue(raw.version, "Reply Rescue version"),
+  };
+}
+
+function replyRescueJob(value: unknown): ReplyRescueJob {
+  const raw = objectValue(value, "Reply Rescue job");
+  if (stringValue(raw.source_kind, "Reply Rescue source kind") !== "manual_conversation") {
+    return protocolError("Reply Rescue source kind");
+  }
+  const status = replyRescueStatus(raw.status);
+  const output = replyRescueOutput(raw.output);
+  if ((status === "ready") !== (output !== null)) {
+    return protocolError("Reply Rescue output state");
+  }
+  return {
+    id: stringValue(raw.id, "Reply Rescue id"),
+    status,
+    source_kind: "manual_conversation",
+    source: replyRescueSource(raw.source),
+    model_identity: stringValue(raw.model_identity, "Reply Rescue model"),
+    provider_location: replyRescueProviderLocation(raw.provider_location),
+    output,
+    output_edited: booleanValue(raw.output_edited, "Reply Rescue edited state"),
+    error_code: stringValue(raw.error_code, "Reply Rescue error code"),
+    attempt_count: numberValue(raw.attempt_count, "Reply Rescue attempt count"),
+    created_at: stringValue(raw.created_at, "Reply Rescue created time"),
+    updated_at: stringValue(raw.updated_at, "Reply Rescue updated time"),
+    version: numberValue(raw.version, "Reply Rescue version"),
+  };
+}
+
 function privacySnapshot(raw: JsonRecord, dailyWrap: JsonRecord): PrivacySnapshot {
   return {
     allowed_bundle_ids: stringArray(raw.allowed_bundle_ids, "allowed bundle IDs"),
@@ -524,6 +686,11 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
   const promptRescueProvider = objectValue(
     promptRescue.provider,
     "Prompt Rescue provider",
+  );
+  const replyRescue = objectValue(raw.reply_rescue, "Reply Rescue snapshot");
+  const replyRescueProvider = objectValue(
+    replyRescue.provider,
+    "Reply Rescue provider",
   );
   const suggestions = arrayValue(raw.suggestions, "suggestion summaries").map(
     workResumptionSuggestion,
@@ -612,6 +779,16 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
       },
       jobs: arrayValue(promptRescue.jobs, "Prompt Rescue summaries").map(
         promptRescueSummary,
+      ),
+    },
+    reply_rescue: {
+      enabled: booleanValue(replyRescue.enabled, "Reply Rescue enabled state"),
+      provider: {
+        model: stringValue(replyRescueProvider.model, "Reply Rescue configured model"),
+        location: replyRescueProviderLocation(replyRescueProvider.location),
+      },
+      jobs: arrayValue(replyRescue.jobs, "Reply Rescue summaries").map(
+        replyRescueSummary,
       ),
     },
     timeline: arrayValue(raw.timeline, "timeline snapshot").map(timelineItem),
@@ -828,6 +1005,36 @@ export function normalizePromptRescueDelete(value: unknown): {
   };
 }
 
+export function normalizeReplyRescueJob(value: unknown): ReplyRescueJob {
+  const raw = objectValue(value, "Reply Rescue response");
+  return replyRescueJob(raw.job);
+}
+
+export function normalizeReplyRescueQueue(value: unknown): {
+  job: ReplyRescueJob;
+  created: boolean;
+} {
+  const raw = objectValue(value, "Reply Rescue queue response");
+  return {
+    job: replyRescueJob(raw.job),
+    created: booleanValue(raw.created, "Reply Rescue created state"),
+  };
+}
+
+export function normalizeReplyRescueDelete(value: unknown): {
+  job_id: string;
+  deleted: true;
+} {
+  const raw = objectValue(value, "Reply Rescue delete response");
+  if (booleanValue(raw.deleted, "Reply Rescue deleted state") !== true) {
+    return protocolError("Reply Rescue deleted state");
+  }
+  return {
+    job_id: stringValue(raw.job_id, "Reply Rescue deleted id"),
+    deleted: true,
+  };
+}
+
 async function request<T>(command: string, payload: object, normalize: (value: unknown) => T): Promise<T> {
   try {
     const value = await invoke<unknown>(command, { request: payload });
@@ -863,6 +1070,7 @@ export const desktopApi = {
         wrap_limit: 30,
         suggestion_limit: 50,
         prompt_rescue_limit: 50,
+        reply_rescue_limit: 50,
       },
       normalizeSnapshot,
     ),
@@ -1036,6 +1244,66 @@ export const desktopApi = {
       (value) => {
         const result = normalizePromptRescueDelete(value);
         if (result.job_id !== jobId) return protocolError("Prompt Rescue delete identity");
+        return result;
+      },
+    ),
+  getReplyRescue: (jobId: string) =>
+    request("get_reply_rescue", { job_id: jobId }, (value) => {
+      const job = normalizeReplyRescueJob(value);
+      if (job.id !== jobId) return protocolError("Reply Rescue response identity");
+      return job;
+    }),
+  queueReplyRescue: (input: {
+    conversationText: string;
+    participants: string[];
+    intendedRecipients: string[];
+    replyMode: "reply" | "reply_all" | "unspecified";
+    goal: string;
+    tone: string;
+    styleInstructions: string[];
+    commitments: string[];
+  }) =>
+    request(
+      "queue_reply_rescue",
+      {
+        conversation_text: input.conversationText,
+        participants: input.participants,
+        intended_recipients: input.intendedRecipients,
+        reply_mode: input.replyMode,
+        goal: input.goal,
+        tone: input.tone,
+        style_instructions: input.styleInstructions,
+        commitments: input.commitments,
+      },
+      normalizeReplyRescueQueue,
+    ),
+  editReplyRescue: (jobId: string, expectedVersion: number, replyBody: string) =>
+    request(
+      "edit_reply_rescue",
+      { job_id: jobId, expected_version: expectedVersion, reply_body: replyBody },
+      (value) => {
+        const job = normalizeReplyRescueJob(value);
+        if (job.id !== jobId) return protocolError("Reply Rescue mutation identity");
+        return job;
+      },
+    ),
+  retryReplyRescue: (jobId: string, expectedVersion: number) =>
+    request(
+      "retry_reply_rescue",
+      { job_id: jobId, expected_version: expectedVersion },
+      (value) => {
+        const job = normalizeReplyRescueJob(value);
+        if (job.id !== jobId) return protocolError("Reply Rescue mutation identity");
+        return job;
+      },
+    ),
+  deleteReplyRescue: (jobId: string, expectedVersion: number) =>
+    request(
+      "delete_reply_rescue",
+      { job_id: jobId, expected_version: expectedVersion },
+      (value) => {
+        const result = normalizeReplyRescueDelete(value);
+        if (result.job_id !== jobId) return protocolError("Reply Rescue delete identity");
         return result;
       },
     ),

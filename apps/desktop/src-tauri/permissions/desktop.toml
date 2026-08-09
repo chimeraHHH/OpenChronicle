@@ -9,6 +9,7 @@ permissions = [
   "allow-trace-provenance",
   "allow-resolve-evidence",
   "allow-get-prompt-rescue",
+  "allow-get-reply-rescue",
 ]
 
 [[set]]
@@ -25,4 +26,8 @@ permissions = [
   "allow-edit-prompt-rescue",
   "allow-retry-prompt-rescue",
   "allow-delete-prompt-rescue",
+  "allow-queue-reply-rescue",
+  "allow-edit-reply-rescue",
+  "allow-retry-reply-rescue",
+  "allow-delete-reply-rescue",
 ]

@@ -386,6 +386,29 @@ The frozen Prompt Rescue evaluator never invokes this model unless
 explicit runner records a complete raw corpus under the caller-selected path;
 keep it under `scratch/` until its contents and provider cost are reviewed.
 
+## `[reply_rescue]`
+
+```toml
+[reply_rescue]
+enabled = false          # opt in; the configured model receives reviewed conversation text
+poll_seconds = 5         # 1..300; durable queued-job cadence
+lease_seconds = 300      # 30..21600 minimum; raised to the model call budget
+max_input_chars = 50000  # bound over conversation plus all declared directions
+max_output_chars = 30000 # prepared reply plus review ledger
+```
+
+Reply Rescue starts disabled and its first source is explicitly labeled
+`manual_conversation` with `manual_unverified` identity assurance. A pasted
+excerpt cannot prove an account, thread, sender, or recipient. The user must
+declare participants, intended recipients, reply/reply-all mode, goal, tone,
+reviewed style instructions, and commitments. The supervised daemon calls
+`[models.reply_rescue]` in JSON mode with no tools and stores a strict no-action
+artifact containing the reply, question/warning lists, and a review claim
+ledger. The desktop can review, edit, copy, retry, or permanently delete it.
+There is no mailbox/OAuth access, provider draft creation, paste, or send
+command. Editing clears the generated claim/answered-question ledger so the old
+model analysis cannot appear to support newly edited text.
+
 ## `[search]`
 
 ```toml

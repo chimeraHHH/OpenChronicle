@@ -23,6 +23,8 @@ from .prompt_rescue.service import PromptRescueService
 from .prompt_rescue.service import validate_config as validate_prompt_rescue
 from .provenance import store as provenance_store
 from .provenance.models import EvidenceRef
+from .reply_rescue import store as reply_rescue_store
+from .reply_rescue.service import ReplyRescueService
 from .services.capture_control import PauseStateConflict, set_paused
 from .services.context import ContextService
 from .services.evidence import EvidenceResolver
@@ -33,7 +35,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 MAX_REQUEST_BYTES = 64 * 1024
 
 
@@ -80,6 +82,8 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         return _error("VERSION_CONFLICT", "The suggestion changed."), 2
     except prompt_rescue_store.PromptRescueConflict:
         return _error("VERSION_CONFLICT", "The Prompt Rescue job changed."), 2
+    except reply_rescue_store.ReplyRescueConflict:
+        return _error("VERSION_CONFLICT", "The Reply Rescue job changed."), 2
     except SelectionCaptureError as exc:
         return _selection_error(exc.code), 2
     except StalePurgePlan:
@@ -152,6 +156,11 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "prompt_rescue.edit": _prompt_rescue_edit,
         "prompt_rescue.retry": _prompt_rescue_retry,
         "prompt_rescue.delete": _prompt_rescue_delete,
+        "reply_rescue.get": _reply_rescue_get,
+        "reply_rescue.queue": _reply_rescue_queue,
+        "reply_rescue.edit": _reply_rescue_edit,
+        "reply_rescue.retry": _reply_rescue_retry,
+        "reply_rescue.delete": _reply_rescue_delete,
         "provenance.trace": _provenance_trace,
         "evidence.resolve": _evidence_resolve,
         "capture.set_paused": _capture_set_paused,
@@ -173,6 +182,7 @@ def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
             "wrap_limit",
             "suggestion_limit",
             "prompt_rescue_limit",
+            "reply_rescue_limit",
         },
     )
     timeline_limit = _bounded_int(params.get("timeline_limit", 12), 0, 24)
@@ -180,6 +190,7 @@ def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
     wrap_limit = _bounded_int(params.get("wrap_limit", 14), 0, 30)
     suggestion_limit = _bounded_int(params.get("suggestion_limit", 20), 0, 50)
     prompt_rescue_limit = _bounded_int(params.get("prompt_rescue_limit", 20), 0, 50)
+    reply_rescue_limit = _bounded_int(params.get("reply_rescue_limit", 20), 0, 50)
     cfg = config_mod.load()
     with fts.cursor() as conn:
         return build_snapshot(
@@ -190,6 +201,7 @@ def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
             wrap_limit=wrap_limit,
             suggestion_limit=suggestion_limit,
             prompt_rescue_limit=prompt_rescue_limit,
+            reply_rescue_limit=reply_rescue_limit,
         )
 
 
@@ -281,6 +293,87 @@ def _prompt_rescue_delete(params: dict[str, Any]) -> dict[str, Any]:
         return {"job_id": job_id, "deleted": True}
 
 
+def _reply_rescue_get(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"job_id"})
+    job_id = _bounded_string(params["job_id"], 128, nonempty=True)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job = ReplyRescueService(conn, cfg).get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return {"job": _reply_rescue_payload(job)}
+
+
+def _reply_rescue_queue(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={
+            "conversation_text",
+            "participants",
+            "intended_recipients",
+            "reply_mode",
+            "goal",
+            "tone",
+            "style_instructions",
+            "commitments",
+        },
+    )
+    conversation_text = _bounded_string(params["conversation_text"], 50_000, nonempty=True)
+    participants = _string_list(params["participants"], max_items=50, max_length=1_000)
+    intended_recipients = _string_list(
+        params["intended_recipients"], max_items=50, max_length=1_000
+    )
+    reply_mode = _bounded_string(params["reply_mode"], 20, nonempty=True)
+    goal = _bounded_string(params["goal"], 1_000, nonempty=False)
+    tone = _bounded_string(params["tone"], 1_000, nonempty=False)
+    style_instructions = _string_list(params["style_instructions"], max_items=20, max_length=1_000)
+    commitments = _string_list(params["commitments"], max_items=20, max_length=1_000)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job, created = ReplyRescueService(conn, cfg).queue_manual(
+            conversation_text=conversation_text,
+            participants=participants,
+            intended_recipients=intended_recipients,
+            reply_mode=reply_mode,
+            goal=goal,
+            tone=tone,
+            style_instructions=style_instructions,
+            commitments=commitments,
+        )
+        return {"job": _reply_rescue_payload(job), "created": created}
+
+
+def _reply_rescue_edit(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"job_id", "expected_version", "reply_body"})
+    job_id = _bounded_string(params["job_id"], 128, nonempty=True)
+    expected_version = _bounded_int(params["expected_version"], 1, 2_147_483_647)
+    reply_body = _bounded_string(params["reply_body"], 30_000, nonempty=True)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job = ReplyRescueService(conn, cfg).edit(
+            job_id,
+            expected_version=expected_version,
+            reply_body=reply_body,
+        )
+        return {"job": _reply_rescue_payload(job)}
+
+
+def _reply_rescue_retry(params: dict[str, Any]) -> dict[str, Any]:
+    job_id, expected_version = _reply_rescue_cas_params(params)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job = ReplyRescueService(conn, cfg).retry(job_id, expected_version=expected_version)
+        return {"job": _reply_rescue_payload(job)}
+
+
+def _reply_rescue_delete(params: dict[str, Any]) -> dict[str, Any]:
+    job_id, expected_version = _reply_rescue_cas_params(params)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        ReplyRescueService(conn, cfg).delete(job_id, expected_version=expected_version)
+        return {"job_id": job_id, "deleted": True}
+
+
 def _suggestion_transition(params: dict[str, Any]) -> dict[str, Any]:
     _fields(
         params,
@@ -307,9 +400,7 @@ def _candidate_get(params: dict[str, Any]) -> dict[str, Any]:
     candidate_id = _bounded_string(params["candidate_id"], 128, nonempty=True)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(
-            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
-        )
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
         service.resume_pending_purges()
         candidate = service.get_candidate(candidate_id)
         if candidate is None:
@@ -334,13 +425,9 @@ def _candidate_edit(params: dict[str, Any]) -> dict[str, Any]:
     tags = _string_list(params["tags"], max_items=100, max_length=100)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(
-            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
-        )
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
         service.resume_pending_purges()
-        _require_visible_subject(
-            conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id)
-        )
+        _require_visible_subject(conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id))
         updated = service.edit_candidate(
             candidate_id,
             expected_version=expected_version,
@@ -358,9 +445,7 @@ def _candidate_approve(params: dict[str, Any]) -> dict[str, Any]:
     candidate_id, expected_version = _candidate_cas_params(params)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(
-            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
-        )
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
         service.resume_pending_purges()
         approved = service.approve_candidate(candidate_id, expected_version=expected_version)
         return {"candidate": _candidate_payload(approved)}
@@ -373,13 +458,9 @@ def _candidate_reject(params: dict[str, Any]) -> dict[str, Any]:
     reason = _bounded_string(params.get("reason", ""), 1_000, nonempty=False)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(
-            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
-        )
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
         service.resume_pending_purges()
-        _require_visible_subject(
-            conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id)
-        )
+        _require_visible_subject(conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id))
         rejected = service.reject_candidate(
             candidate_id, expected_version=expected_version, reason=reason
         )
@@ -390,13 +471,9 @@ def _candidate_forget_preview(params: dict[str, Any]) -> dict[str, Any]:
     candidate_id, expected_version = _candidate_cas_params(params)
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(
-            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
-        )
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
         service.resume_pending_purges()
-        _require_visible_subject(
-            conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id)
-        )
+        _require_visible_subject(conn, cfg, EvidenceRef(kind="memory_candidate", id=candidate_id))
         return service.preview_purge_candidate(
             candidate_id, expected_version=expected_version
         ).to_dict()
@@ -411,9 +488,7 @@ def _candidate_forget_commit(params: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("invalid purge plan digest")
     cfg = config_mod.load()
     with fts.cursor() as conn:
-        service = MemoryService(
-            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
-        )
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
         result = service.purge_candidate(
             candidate_id,
             expected_version=expected_version,
@@ -492,6 +567,14 @@ def _candidate_cas_params(params: dict[str, Any]) -> tuple[str, int]:
 
 
 def _prompt_rescue_cas_params(params: dict[str, Any]) -> tuple[str, int]:
+    _fields(params, required={"job_id", "expected_version"})
+    return (
+        _bounded_string(params["job_id"], 128, nonempty=True),
+        _bounded_int(params["expected_version"], 1, 2_147_483_647),
+    )
+
+
+def _reply_rescue_cas_params(params: dict[str, Any]) -> tuple[str, int]:
     _fields(params, required={"job_id", "expected_version"})
     return (
         _bounded_string(params["job_id"], 128, nonempty=True),
@@ -604,9 +687,7 @@ def _bounded_prompt_rescue_output(output: dict[str, Any] | None) -> dict[str, An
         "assumptions": [
             str(value)[:1_000]
             for value in (
-                output.get("assumptions")
-                if isinstance(output.get("assumptions"), list)
-                else []
+                output.get("assumptions") if isinstance(output.get("assumptions"), list) else []
             )[:20]
         ],
         "missing_context": [
@@ -619,11 +700,72 @@ def _bounded_prompt_rescue_output(output: dict[str, Any] | None) -> dict[str, An
         ],
         "changes": [
             str(value)[:1_000]
-            for value in (
-                output.get("changes") if isinstance(output.get("changes"), list) else []
-            )[:20]
+            for value in (output.get("changes") if isinstance(output.get("changes"), list) else [])[
+                :20
+            ]
         ],
     }
+
+
+def _reply_rescue_payload(job) -> dict[str, Any]:
+    source = job.source if isinstance(job.source, dict) else {}
+    output = job.output if isinstance(job.output, dict) else None
+    return {
+        "id": str(job.id)[:128],
+        "status": str(job.status)[:50],
+        "source_kind": str(job.source_kind)[:50],
+        "source": {
+            "schema_version": int(source.get("schema_version") or 0),
+            "identity_assurance": str(source.get("identity_assurance") or "")[:50],
+            "conversation_text": str(source.get("conversation_text") or "")[:50_000],
+            "participants": _bounded_output_strings(source.get("participants"), 50),
+            "intended_recipients": _bounded_output_strings(source.get("intended_recipients"), 50),
+            "reply_mode": str(source.get("reply_mode") or "")[:20],
+            "goal": str(source.get("goal") or "")[:1_000],
+            "tone": str(source.get("tone") or "")[:1_000],
+            "style_instructions": _bounded_output_strings(source.get("style_instructions"), 20),
+            "commitments": _bounded_output_strings(source.get("commitments"), 20),
+        },
+        "model_identity": str(job.model_identity)[:256],
+        "provider_location": str(job.provider_location)[:50],
+        "output": _bounded_reply_rescue_output(output),
+        "output_edited": bool(job.output_edited),
+        "error_code": str(job.error_code)[:50],
+        "attempt_count": int(job.attempt_count),
+        "created_at": str(job.created_at)[:100],
+        "updated_at": str(job.updated_at)[:100],
+        "version": int(job.version),
+    }
+
+
+def _bounded_reply_rescue_output(output: dict[str, Any] | None) -> dict[str, Any] | None:
+    if output is None:
+        return None
+    claims = output.get("claims") if isinstance(output.get("claims"), list) else []
+    return {
+        "schema_version": int(output.get("schema_version") or 0),
+        "workflow": str(output.get("workflow") or "")[:50],
+        "action_capability": str(output.get("action_capability") or "")[:50],
+        "reply_body": str(output.get("reply_body") or "")[:30_000],
+        "addressed_questions": _bounded_output_strings(output.get("addressed_questions"), 30),
+        "unresolved_questions": _bounded_output_strings(output.get("unresolved_questions"), 30),
+        "assumptions": _bounded_output_strings(output.get("assumptions"), 30),
+        "warnings": _bounded_output_strings(output.get("warnings"), 30),
+        "claims": [
+            {
+                "text": str(value.get("text") or "")[:1_000],
+                "support": str(value.get("support") or "")[:50],
+            }
+            for value in claims[:50]
+            if isinstance(value, dict)
+        ],
+    }
+
+
+def _bounded_output_strings(value: object, maximum: int) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item)[:1_000] for item in value[:maximum]]
 
 
 def _wrap_payload(row) -> dict[str, Any]:
@@ -759,8 +901,7 @@ def _require_visible_subject(conn, cfg: config_mod.Config, ref: EvidenceRef) -> 
     if ref.kind == "suggestion":
         suggestion = suggestion_store.get(conn, ref.id)
         if suggestion is None or all(
-            item.id != ref.id
-            for item in SuggestionKernel(conn, cfg).list_visible(limit=1_000)
+            item.id != ref.id for item in SuggestionKernel(conn, cfg).list_visible(limit=1_000)
         ):
             raise KeyError(ref.id)
         return
@@ -769,14 +910,10 @@ def _require_visible_subject(conn, cfg: config_mod.Config, ref: EvidenceRef) -> 
         row = daily_wrap_store.get_by_id(conn, ref.path) if ref.path else None
         if (
             not ref.path
-            or candidate_store.is_tombstoned(
-                conn, kind="daily_wrap", artifact_id=ref.path
-            )
+            or candidate_store.is_tombstoned(conn, kind="daily_wrap", artifact_id=ref.path)
             or row is None
             or provenance_store.availability(conn, ref) != "available"
-            or not ContextService(conn, cfg).daily_wrap_allowed(
-                ref.path, expected_row=row
-            )
+            or not ContextService(conn, cfg).daily_wrap_allowed(ref.path, expected_row=row)
             or not ContextService(conn, cfg).evidence_allowed(ref)
         ):
             raise KeyError(ref.id)

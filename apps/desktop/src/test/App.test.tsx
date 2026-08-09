@@ -20,6 +20,8 @@ import {
   bridgeResolvedEvidence,
   bridgePromptRescueJob,
   bridgePromptRescueQueue,
+  bridgeReplyRescueJob,
+  bridgeReplyRescueQueue,
   bridgeSnapshot,
   bridgeSuggestionMutation,
   bridgeWrapGet,
@@ -30,6 +32,7 @@ import {
   provenanceTrace,
   promptRescueJob,
   promptRescueSummary,
+  replyRescueJob,
   resolvedEvidence,
   snapshot,
   suggestion,
@@ -62,6 +65,29 @@ function commandResult(command: string) {
   if (command === "delete_prompt_rescue") {
     return { job_id: "prompt-rescue-1", deleted: true };
   }
+  if (command === "get_reply_rescue") return bridgeReplyRescueJob();
+  if (command === "queue_reply_rescue") return bridgeReplyRescueQueue();
+  if (command === "edit_reply_rescue") {
+    return bridgeReplyRescueJob(
+      replyRescueJob({
+        version: 4,
+        output_edited: true,
+        output: {
+          ...replyRescueJob().output!,
+          addressed_questions: [],
+          claims: [],
+        },
+      }),
+    );
+  }
+  if (command === "retry_reply_rescue") {
+    return bridgeReplyRescueJob(
+      replyRescueJob({ status: "queued", output: null, version: 4 }),
+    );
+  }
+  if (command === "delete_reply_rescue") {
+    return { job_id: "reply-rescue-1", deleted: true };
+  }
   if (command === "edit_candidate" || command === "approve_candidate" || command === "reject_candidate") {
     return bridgeCandidateMutation();
   }
@@ -75,6 +101,31 @@ beforeEach(() => {
 });
 
 describe("trusted console", () => {
+  it("reviews and copies a manual reply without mailbox or send capability", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Reply Rescue/i }));
+    expect(await screen.findByRole("heading", { name: "Reply Rescue" })).toBeInTheDocument();
+    expect(screen.getByText(/Manual source has no thread identity/i)).toBeInTheDocument();
+    expect(screen.getByText(/no mailbox, provider-draft, paste, or send capability/i)).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("Ana: Can you meet Tuesday at 10?")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Copy reviewed reply" }));
+    expect(writeText).toHaveBeenCalledWith("Hi Ana, Tuesday at 10 works for me.");
+    expect(screen.getByText(/did not paste, draft, or send it/i)).toBeInTheDocument();
+    expect(
+      tauri.invoke.mock.calls.some(([command]) =>
+        String(command).includes("send") || String(command).includes("mailbox"),
+      ),
+    ).toBe(false);
+  });
+
   it("prepares explicit manual input and copies without paste or submit capability", async () => {
     const user = userEvent.setup();
     const writeText = vi.fn(async () => undefined);

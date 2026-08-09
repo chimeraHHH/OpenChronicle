@@ -20,6 +20,8 @@ import {
   bridgeSnapshot,
   bridgePromptRescueJob,
   bridgePromptRescueQueue,
+  bridgeReplyRescueJob,
+  bridgeReplyRescueQueue,
   bridgeSuggestionMutation,
   bridgeWrapGet,
   candidateDetail,
@@ -27,6 +29,7 @@ import {
   maliciousText,
   provenanceTrace,
   promptRescueJob,
+  replyRescueJob,
   suggestion,
   wrapDetail,
 } from "./fixtures";
@@ -36,8 +39,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks the exact-selection Prompt Rescue surface as bridge protocol v5", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(5);
+  it("tracks the review-only Reply Rescue surface as bridge protocol v6", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(6);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -52,6 +55,7 @@ describe("desktop bridge adapters", () => {
         wrap_limit: 30,
         suggestion_limit: 50,
         prompt_rescue_limit: 50,
+        reply_rescue_limit: 50,
       },
     });
     expect(result.daemon).toMatchObject({ state: "running", health: "healthy", pid: 1234 });
@@ -77,6 +81,65 @@ describe("desktop bridge adapters", () => {
     expect(result.prompt_rescue).toMatchObject({
       enabled: true,
       provider: { model: "ollama/test-local", location: "local" },
+    });
+    expect(result.reply_rescue).toMatchObject({
+      enabled: true,
+      provider: { model: "ollama/test-local", location: "local" },
+    });
+  });
+
+  it("queues a manual conversation and exposes only a no-action reply artifact", async () => {
+    tauri.invoke.mockResolvedValueOnce(bridgeReplyRescueQueue());
+    const queued = await desktopApi.queueReplyRescue({
+      conversationText: "Ana: Can you meet Tuesday at 10?",
+      participants: ["Ana", "Me"],
+      intendedRecipients: ["Ana"],
+      replyMode: "reply",
+      goal: "Confirm Tuesday at 10.",
+      tone: "Warm",
+      styleInstructions: ["Use a greeting."],
+      commitments: ["Tuesday at 10 works."],
+    });
+    expect(tauri.invoke).toHaveBeenCalledWith("queue_reply_rescue", {
+      request: {
+        conversation_text: "Ana: Can you meet Tuesday at 10?",
+        participants: ["Ana", "Me"],
+        intended_recipients: ["Ana"],
+        reply_mode: "reply",
+        goal: "Confirm Tuesday at 10.",
+        tone: "Warm",
+        style_instructions: ["Use a greeting."],
+        commitments: ["Tuesday at 10 works."],
+      },
+    });
+    expect(queued.job).toMatchObject({
+      source: { identity_assurance: "manual_unverified" },
+      output: { workflow: "reply_rescue", action_capability: "none" },
+    });
+
+    tauri.invoke.mockResolvedValueOnce(
+      bridgeReplyRescueJob(
+        replyRescueJob({
+          version: 4,
+          output_edited: true,
+          output: {
+            ...replyRescueJob().output!,
+            reply_body: "Reviewed edit",
+            addressed_questions: [],
+            claims: [],
+          },
+        }),
+      ),
+    );
+    const edited = await desktopApi.editReplyRescue("reply-rescue-1", 3, "Reviewed edit");
+    expect(edited).toMatchObject({ version: 4, output_edited: true });
+    expect(edited.output?.claims).toEqual([]);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("edit_reply_rescue", {
+      request: {
+        job_id: "reply-rescue-1",
+        expected_version: 3,
+        reply_body: "Reviewed edit",
+      },
     });
   });
 

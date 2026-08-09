@@ -7,6 +7,8 @@ import type {
   ForgetPreview,
   PromptRescueJob,
   PromptRescueJobSummary,
+  ReplyRescueJob,
+  ReplyRescueJobSummary,
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
@@ -208,6 +210,70 @@ export function promptRescueJob(
   };
 }
 
+export function replyRescueSummary(
+  overrides: Partial<ReplyRescueJobSummary> = {},
+): ReplyRescueJobSummary {
+  return {
+    id: "reply-rescue-1",
+    status: "ready",
+    source_kind: "manual_conversation",
+    conversation_preview: "Ana: Can you meet Tuesday at 10?",
+    identity_assurance: "manual_unverified",
+    model_identity: "ollama/test-local",
+    provider_location: "local",
+    output_edited: false,
+    error_code: "",
+    attempt_count: 1,
+    created_at: "2026-08-08T09:10:00+08:00",
+    updated_at: "2026-08-08T09:11:00+08:00",
+    version: 3,
+    ...overrides,
+  };
+}
+
+export function replyRescueJob(
+  overrides: Partial<ReplyRescueJob> = {},
+): ReplyRescueJob {
+  const summary = replyRescueSummary();
+  return {
+    id: summary.id,
+    status: summary.status,
+    source_kind: "manual_conversation",
+    source: {
+      schema_version: 1,
+      identity_assurance: "manual_unverified",
+      conversation_text: "Ana: Can you meet Tuesday at 10?",
+      participants: ["Ana", "Me"],
+      intended_recipients: ["Ana"],
+      reply_mode: "reply",
+      goal: "Confirm Tuesday at 10.",
+      tone: "Warm and concise",
+      style_instructions: ["Use a greeting."],
+      commitments: ["Tuesday at 10 works."],
+    },
+    model_identity: summary.model_identity,
+    provider_location: summary.provider_location,
+    output: {
+      schema_version: 1,
+      workflow: "reply_rescue",
+      action_capability: "none",
+      reply_body: "Hi Ana, Tuesday at 10 works for me.",
+      addressed_questions: ["Confirmed the proposed time."],
+      unresolved_questions: [],
+      assumptions: [],
+      warnings: ["Verify the recipient before copying."],
+      claims: [{ text: "Tuesday at 10 works.", support: "user_direction" }],
+    },
+    output_edited: summary.output_edited,
+    error_code: summary.error_code,
+    attempt_count: summary.attempt_count,
+    created_at: summary.created_at,
+    updated_at: summary.updated_at,
+    version: summary.version,
+    ...overrides,
+  };
+}
+
 export function snapshot(overrides: Partial<DesktopSnapshot> = {}): DesktopSnapshot {
   return {
     generated_at: "2026-08-08T10:00:00+08:00",
@@ -228,6 +294,11 @@ export function snapshot(overrides: Partial<DesktopSnapshot> = {}): DesktopSnaps
       enabled: true,
       provider: { model: "ollama/test-local", location: "local" },
       jobs: [promptRescueSummary()],
+    },
+    reply_rescue: {
+      enabled: true,
+      provider: { model: "ollama/test-local", location: "local" },
+      jobs: [replyRescueSummary()],
     },
     timeline: [
       {
@@ -402,6 +473,7 @@ export function bridgeSnapshot(value: DesktopSnapshot = snapshot()) {
     suggestions_enabled: value.suggestions_enabled,
     suggestions: value.suggestions,
     prompt_rescue: value.prompt_rescue,
+    reply_rescue: value.reply_rescue,
     generated_at: value.generated_at,
   };
 }
@@ -426,6 +498,14 @@ export function bridgePromptRescueJob(value: PromptRescueJob = promptRescueJob()
 
 export function bridgePromptRescueQueue(value: PromptRescueJob = promptRescueJob()) {
   return { job: { ...value, source_binding: value.source_binding ?? {} }, created: true };
+}
+
+export function bridgeReplyRescueJob(value: ReplyRescueJob = replyRescueJob()) {
+  return { job: value };
+}
+
+export function bridgeReplyRescueQueue(value: ReplyRescueJob = replyRescueJob()) {
+  return { job: value, created: true };
 }
 
 export function bridgeWrapGet(value: DailyWrap = wrapDetail()) {

@@ -2,15 +2,16 @@ export type PageId =
   | "overview"
   | "suggestions"
   | "prompt-rescue"
+  | "reply-rescue"
   | "review"
   | "daily-wrap"
   | "timeline"
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 5 adds exact macOS selection receipts
-// without adding paste, submit, or target-application capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 5 as const;
+// WebView result projection. Version 6 adds review-only Reply Rescue artifacts
+// without adding mailbox, draft, paste, or send capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 6 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -72,6 +73,70 @@ export interface PromptRescueSnapshot {
     location: PromptRescueProviderLocation;
   };
   jobs: PromptRescueJobSummary[];
+}
+
+export type ReplyRescueStatus = "queued" | "leased" | "ready" | "failed";
+export type ReplyRescueProviderLocation = "local" | "remote_or_unknown";
+
+export interface ReplyRescueSource {
+  schema_version: 1;
+  identity_assurance: "manual_unverified";
+  conversation_text: string;
+  participants: string[];
+  intended_recipients: string[];
+  reply_mode: "reply" | "reply_all" | "unspecified";
+  goal: string;
+  tone: string;
+  style_instructions: string[];
+  commitments: string[];
+}
+
+export interface ReplyRescueClaim {
+  text: string;
+  support: "conversation" | "user_direction";
+}
+
+export interface ReplyRescueOutput {
+  schema_version: 1;
+  workflow: "reply_rescue";
+  action_capability: "none";
+  reply_body: string;
+  addressed_questions: string[];
+  unresolved_questions: string[];
+  assumptions: string[];
+  warnings: string[];
+  claims: ReplyRescueClaim[];
+}
+
+export interface ReplyRescueJobSummary {
+  id: string;
+  status: ReplyRescueStatus;
+  source_kind: "manual_conversation";
+  conversation_preview: string;
+  identity_assurance: "manual_unverified";
+  model_identity: string;
+  provider_location: ReplyRescueProviderLocation;
+  output_edited: boolean;
+  error_code: string;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+  version: number;
+}
+
+export interface ReplyRescueJob
+  extends Omit<ReplyRescueJobSummary, "conversation_preview" | "identity_assurance"> {
+  source: ReplyRescueSource;
+  output: ReplyRescueOutput | null;
+}
+
+export interface ReplyRescueSnapshot {
+  enabled: boolean;
+  provider: {
+    model: string;
+    location: ReplyRescueProviderLocation;
+  };
+  jobs: ReplyRescueJobSummary[];
 }
 
 export type SuggestionStatus =
@@ -300,6 +365,7 @@ export interface DesktopSnapshot {
   suggestions_enabled: boolean;
   suggestions: Suggestion[];
   prompt_rescue: PromptRescueSnapshot;
+  reply_rescue: ReplyRescueSnapshot;
   timeline: TimelineItem[];
   privacy: PrivacySnapshot;
   permissions: PermissionState[];
