@@ -1,18 +1,21 @@
 use crate::bridge::{self, Operation, MAX_REQUEST_BYTES};
 use crate::error::DesktopError;
 use base64::Engine;
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader as XmlReader;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
-use std::io::{ErrorKind, Read, Write};
-use std::path::Path;
+use std::io::{Cursor, ErrorKind, Read, Write};
+use std::path::{Component, Path};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
+use zip::CompressionMethod;
 
 const MAX_CANDIDATE_ID_CHARS: usize = 128;
 const MAX_REFERENCE_ID_CHARS: usize = 512;
@@ -48,6 +51,7 @@ const MAX_RESUME_PRIORITY_CHARS: usize = 2_000;
 const MAX_JSON_RESUME_SOURCE_BYTES: usize = 500_000;
 const MAX_JSON_RESUME_CANDIDATES: usize = 2_000;
 const MAX_RESUME_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_RESUME_DOCX_EXPORT_BYTES: usize = 4 * 1024 * 1024;
 const MAX_RESUME_DOCUMENT_VAULT_ITEMS: usize = 4;
 const MAX_RESUME_DOCUMENT_VAULT_BYTES: usize = 32 * 1024 * 1024;
 const RESUME_DOCUMENT_VAULT_TTL: Duration = Duration::from_secs(30 * 60);
@@ -552,6 +556,14 @@ pub(crate) struct ResumeExportJsonRequest {
     pub expected_document_digest: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeExportDocxRequest {
+    pub projection_id: String,
+    pub expected_artifact_digest: String,
+    pub expected_preview_document_digest: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ForgetPreview {
     candidate_id: String,
@@ -651,6 +663,31 @@ struct ResumeDocumentImportReview {
 #[serde(deny_unknown_fields)]
 struct ResumeDocumentReviewResponse {
     review: ResumeDocumentImportReview,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResumeNativeDocxExportPayload {
+    schema_version: u64,
+    projection_id: String,
+    artifact_digest: String,
+    preview_document_digest: String,
+    renderer_version: u64,
+    native_export_version: u64,
+    template_id: String,
+    format: String,
+    media_type: String,
+    extension: String,
+    byte_count: u64,
+    content_digest: String,
+    action_capability: String,
+    content_base64: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResumeNativeDocxExportResponse {
+    export: ResumeNativeDocxExportPayload,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1035,6 +1072,24 @@ pub async fn export_resume_rescue_json(
 }
 
 #[tauri::command]
+pub async fn export_resume_rescue_docx(
+    app: AppHandle,
+    request: ResumeExportDocxRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.projection_id)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    validate_resume_digest(&request.expected_preview_document_digest)?;
+    tauri::async_runtime::spawn_blocking(move || export_resume_docx_blocking(&app, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The Résumé Rescue DOCX export worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
 pub async fn trace_provenance(request: TraceProvenanceRequest) -> Result<Value, DesktopError> {
     validate_kind(&request.kind)?;
     validate_reference_id(&request.artifact_id)?;
@@ -1411,6 +1466,68 @@ fn export_resume_json_blocking(
     }))
 }
 
+fn export_resume_docx_blocking(
+    app: &AppHandle,
+    request: ResumeExportDocxRequest,
+) -> Result<Value, DesktopError> {
+    let params = serde_json::json!({
+        "projection_id": request.projection_id,
+        "expected_preview_document_digest": request.expected_preview_document_digest,
+    });
+    let value = bridge::call_blocking(Operation::ResumeRescueExportDocx, params)?;
+    let response: ResumeNativeDocxExportResponse = serde_json::from_value(value).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid Résumé Rescue DOCX export.",
+        )
+    })?;
+    let content = validate_resume_docx_export(&response.export, &request)?;
+
+    let default_name = format!("resume-{}.docx", safe_export_stem(&request.projection_id));
+    let mut dialog = FileDialog::new()
+        .add_filter("Word document", &["docx"])
+        .set_can_create_directories(true)
+        .set_file_name(default_name)
+        .set_title("Export a new Résumé Rescue DOCX file");
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let path = dialog.save_file().ok_or_else(|| {
+        DesktopError::new("USER_CANCELLED", "Résumé Rescue DOCX export was cancelled.")
+    })?;
+    validate_resume_docx_path(&path)?;
+    write_new_docx_export(&path, &content)?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("resume.docx");
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "projection_id": request.projection_id,
+        "artifact_digest": request.expected_artifact_digest,
+        "preview_document_digest": request.expected_preview_document_digest,
+        "content_digest": response.export.content_digest,
+        "format": "docx",
+        "file_name": file_name,
+        "byte_count": content.len(),
+        "created": true,
+        "action_capability": "none",
+    }))
+}
+
+fn safe_export_stem(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 fn validate_resume_preview_for_export(
     preview: &ResumePreviewPayload,
     request: &ResumeExportHtmlRequest,
@@ -1692,6 +1809,56 @@ fn write_new_json_resume_export(path: &Path, content: &[u8]) -> Result<(), Deskt
     Ok(())
 }
 
+fn validate_resume_docx_path(path: &Path) -> Result<(), DesktopError> {
+    if !path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("docx"))
+    {
+        return Err(DesktopError::new(
+            "INVALID_EXPORT_PATH",
+            "Résumé Rescue DOCX exports require a .docx file name.",
+        ));
+    }
+    Ok(())
+}
+
+fn write_new_docx_export(path: &Path, content: &[u8]) -> Result<(), DesktopError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            DesktopError::new(
+                "EXPORT_EXISTS",
+                "The selected export path already exists; choose a new file name.",
+            )
+        } else {
+            DesktopError::new(
+                "EXPORT_FAILED",
+                "The Résumé Rescue DOCX file could not be created.",
+            )
+        }
+    })?;
+    if file
+        .write_all(content)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(DesktopError::new(
+            "EXPORT_FAILED",
+            "The Résumé Rescue DOCX file could not be written completely.",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_resume_json_admission(request: &ResumeAdmitJsonRequest) -> Result<(), DesktopError> {
     validate_json_resume_source_text(&request.source_text)?;
     validate_resume_digest(&request.expected_review_digest)?;
@@ -1857,6 +2024,157 @@ fn validate_resume_document_review(
         ));
     }
     Ok(())
+}
+
+fn validate_resume_docx_export(
+    export: &ResumeNativeDocxExportPayload,
+    request: &ResumeExportDocxRequest,
+) -> Result<Vec<u8>, DesktopError> {
+    let maximum_encoded = MAX_RESUME_DOCX_EXPORT_BYTES.div_ceil(3) * 4;
+    if export.schema_version != 1
+        || export.projection_id != request.projection_id
+        || export.renderer_version != 1
+        || export.native_export_version != 1
+        || export.template_id != "openchronicle-classic-v1"
+        || export.format != "docx"
+        || export.media_type
+            != "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        || export.extension != "docx"
+        || export.action_capability != "none"
+        || export.byte_count == 0
+        || export.byte_count > MAX_RESUME_DOCX_EXPORT_BYTES as u64
+        || export.content_base64.len() > maximum_encoded
+        || !constant_time_equal(
+            export.artifact_digest.as_bytes(),
+            request.expected_artifact_digest.as_bytes(),
+        )
+        || !constant_time_equal(
+            export.preview_document_digest.as_bytes(),
+            request.expected_preview_document_digest.as_bytes(),
+        )
+        || validate_resume_digest(&export.content_digest).is_err()
+    {
+        return Err(invalid_docx_export());
+    }
+    let content = base64::engine::general_purpose::STANDARD
+        .decode(export.content_base64.as_bytes())
+        .map_err(|_| invalid_docx_export())?;
+    let digest = sha256_hex(&content);
+    if content.len() as u64 != export.byte_count
+        || !content.starts_with(b"PK")
+        || !constant_time_equal(export.content_digest.as_bytes(), digest.as_bytes())
+    {
+        return Err(invalid_docx_export());
+    }
+    validate_docx_archive(&content)?;
+    Ok(content)
+}
+
+fn validate_docx_archive(content: &[u8]) -> Result<(), DesktopError> {
+    let mut package =
+        zip::ZipArchive::new(Cursor::new(content)).map_err(|_| invalid_docx_export())?;
+    if package.is_empty() || package.len() > 100 {
+        return Err(invalid_docx_export());
+    }
+    let mut names = Vec::with_capacity(package.len());
+    let mut seen = HashSet::new();
+    let mut expanded_bytes = 0_u64;
+    for index in 0..package.len() {
+        let mut member = package.by_index(index).map_err(|_| invalid_docx_export())?;
+        let name = member.name().to_owned();
+        let path = Path::new(&name);
+        let lowered = name.to_ascii_lowercase();
+        if name.is_empty()
+            || name.contains('\\')
+            || path.is_absolute()
+            || path.components().any(|part| {
+                matches!(
+                    part,
+                    Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                )
+            })
+            || member.is_dir()
+            || member.encrypted()
+            || !matches!(
+                member.compression(),
+                CompressionMethod::Stored | CompressionMethod::Deflated
+            )
+            || !seen.insert(name.clone())
+            || ["vbaproject", "activex/", "embeddings/", "oleobject"]
+                .iter()
+                .any(|marker| lowered.contains(marker))
+        {
+            return Err(invalid_docx_export());
+        }
+        expanded_bytes = expanded_bytes.saturating_add(member.size());
+        if expanded_bytes > 8 * 1024 * 1024 {
+            return Err(invalid_docx_export());
+        }
+        let member_size = member.size();
+        let mut value = Vec::with_capacity(member_size as usize);
+        member
+            .by_ref()
+            .take(member_size.saturating_add(1))
+            .read_to_end(&mut value)
+            .map_err(|_| invalid_docx_export())?;
+        if value.len() as u64 != member_size {
+            return Err(invalid_docx_export());
+        }
+        if name.ends_with(".xml") || name.ends_with(".rels") {
+            validate_docx_xml(&value, name.ends_with(".rels"))?;
+        }
+        names.push(name);
+    }
+    if names.windows(2).any(|pair| pair[0] >= pair[1])
+        || !seen.contains("[Content_Types].xml")
+        || !seen.contains("_rels/.rels")
+        || !seen.contains("word/document.xml")
+    {
+        return Err(invalid_docx_export());
+    }
+    Ok(())
+}
+
+fn validate_docx_xml(value: &[u8], relationships: bool) -> Result<(), DesktopError> {
+    let mut reader = XmlReader::from_reader(value);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                if relationships {
+                    validate_docx_relationship(&element)?;
+                }
+            }
+            Ok(Event::DocType(_) | Event::PI(_)) => return Err(invalid_docx_export()),
+            Ok(Event::Eof) => break,
+            Ok(_) => {}
+            Err(_) => return Err(invalid_docx_export()),
+        }
+        buffer.clear();
+    }
+    Ok(())
+}
+
+fn validate_docx_relationship(element: &BytesStart<'_>) -> Result<(), DesktopError> {
+    if element.local_name().as_ref() != b"Relationship" {
+        return Ok(());
+    }
+    for attribute in element.attributes().with_checks(true) {
+        let attribute = attribute.map_err(|_| invalid_docx_export())?;
+        if attribute.key.local_name().as_ref() == b"TargetMode"
+            && attribute.value.as_ref() == b"External"
+        {
+            return Err(invalid_docx_export());
+        }
+    }
+    Ok(())
+}
+
+fn invalid_docx_export() -> DesktopError {
+    DesktopError::new(
+        "BRIDGE_PROTOCOL_ERROR",
+        "The desktop bridge returned an invalid Résumé Rescue DOCX export.",
+    )
 }
 
 fn validate_json_resume_export(
@@ -3100,6 +3418,145 @@ mod tests {
                 0o600
             );
         }
+    }
+
+    #[test]
+    fn docx_export_is_identity_digest_and_archive_bound() {
+        let content = docx_fixture(false, false);
+        let digest = sha256_hex(&content);
+        let request = ResumeExportDocxRequest {
+            projection_id: "projection-1".to_owned(),
+            expected_artifact_digest: "a".repeat(64),
+            expected_preview_document_digest: "b".repeat(64),
+        };
+        let mut export = ResumeNativeDocxExportPayload {
+            schema_version: 1,
+            projection_id: request.projection_id.clone(),
+            artifact_digest: request.expected_artifact_digest.clone(),
+            preview_document_digest: request.expected_preview_document_digest.clone(),
+            renderer_version: 1,
+            native_export_version: 1,
+            template_id: "openchronicle-classic-v1".to_owned(),
+            format: "docx".to_owned(),
+            media_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                .to_owned(),
+            extension: "docx".to_owned(),
+            byte_count: content.len() as u64,
+            content_digest: digest,
+            action_capability: "none".to_owned(),
+            content_base64: base64::engine::general_purpose::STANDARD.encode(&content),
+        };
+        assert_eq!(
+            validate_resume_docx_export(&export, &request).expect("valid DOCX export"),
+            content
+        );
+
+        export.projection_id = "projection-swap".to_owned();
+        assert_eq!(
+            validate_resume_docx_export(&export, &request)
+                .expect_err("projection swap must fail")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+        export.projection_id = request.projection_id.clone();
+        export.content_base64.push('A');
+        assert!(validate_resume_docx_export(&export, &request).is_err());
+    }
+
+    #[test]
+    fn docx_archive_rejects_external_relationships_and_active_content() {
+        assert_eq!(
+            validate_docx_archive(&docx_fixture(true, false))
+                .expect_err("external target must fail")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+        assert_eq!(
+            validate_docx_archive(&docx_fixture(false, true))
+                .expect_err("macro payload must fail")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+    }
+
+    #[test]
+    fn docx_export_creates_private_file_without_overwriting() {
+        let directory = tempfile::tempdir().expect("temporary export directory");
+        let path = directory.path().join("reviewed-resume.docx");
+        let content = docx_fixture(false, false);
+        assert!(validate_resume_docx_path(&path).is_ok());
+        assert!(validate_resume_docx_path(&directory.path().join("resume.pdf")).is_err());
+
+        write_new_docx_export(&path, &content).expect("new DOCX export");
+        assert_eq!(std::fs::read(&path).expect("read DOCX export"), content);
+        assert_eq!(
+            write_new_docx_export(&path, b"replacement")
+                .expect_err("existing file must not be overwritten")
+                .code,
+            "EXPORT_EXISTS"
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("read preserved DOCX export"),
+            content
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(&path).expect("export metadata").mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    fn docx_fixture(external_relationship: bool, active_content: bool) -> Vec<u8> {
+        use zip::write::SimpleFileOptions;
+
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default()
+            .compression_method(CompressionMethod::Deflated)
+            .last_modified_time(zip::DateTime::default());
+        writer
+            .start_file("[Content_Types].xml", options)
+            .expect("content types member");
+        writer
+            .write_all(
+                br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#,
+            )
+            .expect("content types XML");
+        writer
+            .start_file("_rels/.rels", options)
+            .expect("relationships member");
+        let target_mode = if external_relationship {
+            r#" TargetMode="External""#
+        } else {
+            ""
+        };
+        writer
+            .write_all(
+                format!(
+                    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"{target_mode}/></Relationships>"#
+                )
+                .as_bytes(),
+            )
+            .expect("relationships XML");
+        writer
+            .start_file("word/document.xml", options)
+            .expect("document member");
+        writer
+            .write_all(
+                br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Reviewed fact</w:t></w:r></w:p></w:body></w:document>"#,
+            )
+            .expect("document XML");
+        if active_content {
+            writer
+                .start_file("word/vbaProject.bin", options)
+                .expect("macro member");
+            writer.write_all(b"macro").expect("macro fixture");
+        }
+        writer.finish().expect("finish DOCX fixture").into_inner()
     }
 
     fn json_resume_upstream_fixture() -> JsonResumeUpstreamSchema {

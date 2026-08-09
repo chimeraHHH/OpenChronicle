@@ -23,6 +23,8 @@ libc = "=0.2.189"
 sha2 = "=0.10.9"
 base64 = "=0.22.1"
 uuid = { version = "=1.24.0", features = ["v4"] }
+quick-xml = "=0.41.0"
+zip = { version = "=7.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 tauri-plugin-global-shortcut = "=2.3.2"
 
 [dev-dependencies]

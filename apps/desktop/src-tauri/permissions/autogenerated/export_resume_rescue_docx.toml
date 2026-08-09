@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-export-resume-rescue-docx"
+description = "Enables the export_resume_rescue_docx command without any pre-configured scope."
+commands.allow = ["export_resume_rescue_docx"]
+
+[[permission]]
+identifier = "deny-export-resume-rescue-docx"
+description = "Denies the export_resume_rescue_docx command without any pre-configured scope."
+commands.deny = ["export_resume_rescue_docx"]

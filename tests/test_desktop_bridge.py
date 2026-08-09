@@ -972,6 +972,34 @@ def test_resume_rescue_bridge_composes_exact_review_artifact_and_invalidates_sta
     assert "<script" not in preview["html"].lower()
     assert fact["text"] in preview["plain_text"]
 
+    exported_docx, exported_docx_code = _request(
+        "resume_rescue.export_docx",
+        {
+            "projection_id": projection["id"],
+            "expected_preview_document_digest": preview["document_digest"],
+        },
+    )
+    assert exported_docx_code == 0
+    docx_export = exported_docx["result"]["export"]
+    docx_bytes = base64.b64decode(docx_export.pop("content_base64"), validate=True)
+    assert docx_bytes.startswith(b"PK")
+    assert docx_export["projection_id"] == projection["id"]
+    assert docx_export["artifact_digest"] == projection["artifact_digest"]
+    assert docx_export["preview_document_digest"] == preview["document_digest"]
+    assert docx_export["format"] == "docx"
+    assert docx_export["byte_count"] == len(docx_bytes)
+    assert docx_export["action_capability"] == "none"
+
+    stale_docx, stale_docx_code = _request(
+        "resume_rescue.export_docx",
+        {
+            "projection_id": projection["id"],
+            "expected_preview_document_digest": "f" * 64,
+        },
+    )
+    assert stale_docx_code == 2
+    assert stale_docx["error"]["code"] == "VERSION_CONFLICT"
+
     malformed_preview, malformed_preview_code = _request(
         "resume_rescue.preview",
         {"projection_id": projection["id"], "unknown": True},
