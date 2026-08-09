@@ -7,6 +7,7 @@ mod tray;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(commands::ResumeDocumentVault::default())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -53,6 +54,8 @@ pub fn run() {
             commands::export_resume_rescue_html,
             commands::open_resume_rescue_json,
             commands::admit_resume_rescue_json,
+            commands::open_resume_rescue_document,
+            commands::admit_resume_rescue_document,
             commands::get_resume_rescue_json_export,
             commands::export_resume_rescue_json,
             commands::trace_provenance,

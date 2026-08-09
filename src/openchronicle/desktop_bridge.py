@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 import sys
@@ -38,8 +39,9 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 10
-MAX_REQUEST_BYTES = 2 * 1024 * 1024
+PROTOCOL_VERSION = 11
+MAX_REQUEST_BYTES = 12 * 1024 * 1024
+MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +130,7 @@ def main() -> None:
 
 def _decode_request(payload: bytes) -> dict[str, Any]:
     if len(payload) > MAX_REQUEST_BYTES:
-        raise BridgeError("REQUEST_TOO_LARGE", "The bridge request exceeds 2 MiB.")
+        raise BridgeError("REQUEST_TOO_LARGE", "The bridge request exceeds 12 MiB.")
     if not payload:
         raise BridgeError("INVALID_REQUEST", "A single JSON request is required.")
     try:
@@ -176,6 +178,8 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "resume_rescue.review_json": _resume_rescue_review_json,
         "resume_rescue.admit_json": _resume_rescue_admit_json,
         "resume_rescue.export_json": _resume_rescue_export_json,
+        "resume_rescue.review_document": _resume_rescue_review_document,
+        "resume_rescue.admit_document": _resume_rescue_admit_document,
         "provenance.trace": _provenance_trace,
         "evidence.resolve": _evidence_resolve,
         "capture.set_paused": _capture_set_paused,
@@ -519,6 +523,16 @@ def _resume_rescue_review_json(params: dict[str, Any]) -> dict[str, Any]:
         return {"review": review.to_dict()}
 
 
+def _resume_rescue_review_document(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"source_base64", "source_format"})
+    source = _resume_document_source(params["source_base64"])
+    source_format = _resume_document_format(params["source_format"])
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        review = ResumeRescueService(conn, cfg).review_document(source, source_format=source_format)
+        return {"review": review.to_dict()}
+
+
 def _resume_rescue_admit_json(params: dict[str, Any]) -> dict[str, Any]:
     _fields(
         params,
@@ -542,6 +556,43 @@ def _resume_rescue_admit_json(params: dict[str, Any]) -> dict[str, Any]:
     with fts.cursor() as conn:
         profile, created = ResumeRescueService(conn, cfg).admit_json_resume(
             source_text=_bounded_string(params["source_text"], 500_000, nonempty=True),
+            expected_review_digest=_bounded_string(
+                params["expected_review_digest"], 64, nonempty=True
+            ),
+            profile_id=_bounded_string(params["profile_id"], 128, nonempty=True),
+            display_name=_bounded_string(params["display_name"], 512, nonempty=True),
+            locale=_bounded_string(params["locale"], 64, nonempty=False),
+            selections=_object_list(params["selections"], 2_000),
+            expected_version=expected_version,
+        )
+        return {"profile": _resume_profile_payload(profile), "created": created}
+
+
+def _resume_rescue_admit_document(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={
+            "source_base64",
+            "source_format",
+            "expected_review_digest",
+            "profile_id",
+            "display_name",
+            "locale",
+            "selections",
+        },
+        optional={"expected_version"},
+    )
+    raw_expected_version = params.get("expected_version")
+    expected_version = (
+        _bounded_int(raw_expected_version, 0, 2_147_483_647)
+        if raw_expected_version is not None
+        else None
+    )
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        profile, created = ResumeRescueService(conn, cfg).admit_document(
+            source=_resume_document_source(params["source_base64"]),
+            source_format=_resume_document_format(params["source_format"]),
             expected_review_digest=_bounded_string(
                 params["expected_review_digest"], 64, nonempty=True
             ),
@@ -1225,6 +1276,25 @@ def _bounded_string(value: object, maximum: int, *, nonempty: bool) -> str:
     if nonempty and not value.strip():
         raise ValueError("non-empty string required")
     return value
+
+
+def _resume_document_source(value: object) -> bytes:
+    maximum_encoded = ((MAX_RESUME_DOCUMENT_BYTES + 2) // 3) * 4
+    encoded = _bounded_string(value, maximum_encoded, nonempty=True)
+    try:
+        source = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("invalid document source encoding") from exc
+    if not 1 <= len(source) <= MAX_RESUME_DOCUMENT_BYTES:
+        raise ValueError("invalid document source size")
+    return source
+
+
+def _resume_document_format(value: object) -> str:
+    source_format = _bounded_string(value, 8, nonempty=True)
+    if source_format not in {"pdf", "docx"}:
+        raise ValueError("unsupported document source format")
+    return source_format
 
 
 def _string_list(value: object, *, max_items: int, max_length: int) -> list[str]:

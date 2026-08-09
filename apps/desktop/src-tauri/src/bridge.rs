@@ -11,8 +11,8 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-pub(crate) const MAX_REQUEST_BYTES: usize = 2 * 1024 * 1024;
-const PROTOCOL_VERSION: u8 = 10;
+pub(crate) const MAX_REQUEST_BYTES: usize = 12 * 1024 * 1024;
+const PROTOCOL_VERSION: u8 = 11;
 // The largest allowlisted response is wrap.get: the Python bridge bounds five
 // categories to 100 items each and each item to 20 bounded references. Even if
 // every bounded character needs JSON's six-byte control-character escape, the
@@ -41,6 +41,7 @@ const MAX_DECLARED_BACKEND_RESPONSE_BYTES: usize =
         + MAX_JSON_STRUCTURE_BYTES;
 const MAX_STDERR_BYTES: usize = 32_768;
 const BRIDGE_TIMEOUT: Duration = Duration::from_secs(5);
+const DOCUMENT_BRIDGE_TIMEOUT: Duration = Duration::from_secs(40);
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
 #[cfg(debug_assertions)]
 const BRIDGE_OVERRIDE: &str = "OPENCHRONICLE_DESKTOP_BRIDGE";
@@ -78,6 +79,8 @@ pub(crate) enum Operation {
     ResumeRescueReviewJson,
     ResumeRescueAdmitJson,
     ResumeRescueExportJson,
+    ResumeRescueReviewDocument,
+    ResumeRescueAdmitDocument,
     ProvenanceTrace,
     EvidenceResolve,
     CaptureSetPaused,
@@ -116,9 +119,20 @@ impl Operation {
             Self::ResumeRescueReviewJson => "resume_rescue.review_json",
             Self::ResumeRescueAdmitJson => "resume_rescue.admit_json",
             Self::ResumeRescueExportJson => "resume_rescue.export_json",
+            Self::ResumeRescueReviewDocument => "resume_rescue.review_document",
+            Self::ResumeRescueAdmitDocument => "resume_rescue.admit_document",
             Self::ProvenanceTrace => "provenance.trace",
             Self::EvidenceResolve => "evidence.resolve",
             Self::CaptureSetPaused => "capture.set_paused",
+        }
+    }
+
+    fn timeout(self) -> Duration {
+        match self {
+            Self::ResumeRescueReviewDocument | Self::ResumeRescueAdmitDocument => {
+                DOCUMENT_BRIDGE_TIMEOUT
+            }
+            _ => BRIDGE_TIMEOUT,
         }
     }
 }
@@ -241,7 +255,7 @@ fn call_blocking_with_path(
     let output_reader = thread::spawn(move || read_capped(stdout, MAX_RESPONSE_BYTES));
     let error_reader = thread::spawn(move || read_capped(stderr, MAX_STDERR_BYTES));
 
-    let deadline = Instant::now() + BRIDGE_TIMEOUT;
+    let deadline = Instant::now() + operation.timeout();
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -578,6 +592,23 @@ mod tests {
             Operation::ResumeRescueExportJson.as_str(),
             "resume_rescue.export_json"
         );
+        assert_eq!(
+            Operation::ResumeRescueReviewDocument.as_str(),
+            "resume_rescue.review_document"
+        );
+        assert_eq!(
+            Operation::ResumeRescueAdmitDocument.as_str(),
+            "resume_rescue.admit_document"
+        );
+        assert_eq!(
+            Operation::ResumeRescueReviewDocument.timeout(),
+            DOCUMENT_BRIDGE_TIMEOUT
+        );
+        assert_eq!(
+            Operation::ResumeRescueAdmitDocument.timeout(),
+            DOCUMENT_BRIDGE_TIMEOUT
+        );
+        assert_eq!(Operation::ResumeRescueReviewJson.timeout(), BRIDGE_TIMEOUT);
     }
 
     #[test]
@@ -607,21 +638,21 @@ mod tests {
 
     #[test]
     fn response_must_be_one_strict_versioned_line() {
-        let response = parse_response(b"{\"version\":10,\"ok\":true,\"result\":{}}\n")
+        let response = parse_response(b"{\"version\":11,\"ok\":true,\"result\":{}}\n")
             .expect("valid response");
         assert!(response.ok);
 
         assert!(
-            parse_response(b"{\"version\":10,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
+            parse_response(b"{\"version\":11,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
                 .is_err()
         );
         assert!(parse_response(b"{\"version\":2,\"ok\":true,\"result\":{}}\n").is_err());
         assert!(
-            parse_response(b"{\"version\":10,\"ok\":true,\"result\":{},\"unknown\":true}\n")
+            parse_response(b"{\"version\":11,\"ok\":true,\"result\":{},\"unknown\":true}\n")
                 .is_err()
         );
         assert!(parse_response(
-            b"{\"version\":10,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
+            b"{\"version\":11,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
         )
         .is_err());
     }
@@ -629,7 +660,7 @@ mod tests {
     #[test]
     fn backend_error_is_mapped_by_code_only() {
         let response = parse_response(
-            b"{\"version\":10,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
+            b"{\"version\":11,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
         )
         .expect("valid error envelope");
         let error = DesktopError::from_bridge(&response.error.expect("error").code);

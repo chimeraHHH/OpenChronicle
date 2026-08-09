@@ -183,10 +183,16 @@
           "markdownDescription": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`\n- `allow-get-resume-rescue-preview`\n- `allow-get-resume-rescue-json-export`"
         },
         {
-          "description": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`\n- `allow-queue-prompt-rescue`\n- `allow-edit-prompt-rescue`\n- `allow-retry-prompt-rescue`\n- `allow-delete-prompt-rescue`\n- `allow-queue-reply-rescue`\n- `allow-edit-reply-rescue`\n- `allow-retry-reply-rescue`\n- `allow-delete-reply-rescue`\n- `allow-save-resume-rescue-profile`\n- `allow-save-resume-rescue-opportunity`\n- `allow-replace-resume-rescue-opportunity`\n- `allow-compose-resume-rescue-exact`\n- `allow-export-resume-rescue-html`\n- `allow-open-resume-rescue-json`\n- `allow-admit-resume-rescue-json`\n- `allow-export-resume-rescue-json`",
+          "description": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`\n- `allow-queue-prompt-rescue`\n- `allow-edit-prompt-rescue`\n- `allow-retry-prompt-rescue`\n- `allow-delete-prompt-rescue`\n- `allow-queue-reply-rescue`\n- `allow-edit-reply-rescue`\n- `allow-retry-reply-rescue`\n- `allow-delete-reply-rescue`\n- `allow-save-resume-rescue-profile`\n- `allow-save-resume-rescue-opportunity`\n- `allow-replace-resume-rescue-opportunity`\n- `allow-compose-resume-rescue-exact`\n- `allow-export-resume-rescue-html`\n- `allow-open-resume-rescue-json`\n- `allow-admit-resume-rescue-json`\n- `allow-export-resume-rescue-json`\n- `allow-open-resume-rescue-document`\n- `allow-admit-resume-rescue-document`",
           "type": "string",
           "const": "desktop-review",
-          "markdownDescription": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`\n- `allow-queue-prompt-rescue`\n- `allow-edit-prompt-rescue`\n- `allow-retry-prompt-rescue`\n- `allow-delete-prompt-rescue`\n- `allow-queue-reply-rescue`\n- `allow-edit-reply-rescue`\n- `allow-retry-reply-rescue`\n- `allow-delete-reply-rescue`\n- `allow-save-resume-rescue-profile`\n- `allow-save-resume-rescue-opportunity`\n- `allow-replace-resume-rescue-opportunity`\n- `allow-compose-resume-rescue-exact`\n- `allow-export-resume-rescue-html`\n- `allow-open-resume-rescue-json`\n- `allow-admit-resume-rescue-json`\n- `allow-export-resume-rescue-json`"
+          "markdownDescription": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`\n- `allow-queue-prompt-rescue`\n- `allow-edit-prompt-rescue`\n- `allow-retry-prompt-rescue`\n- `allow-delete-prompt-rescue`\n- `allow-queue-reply-rescue`\n- `allow-edit-reply-rescue`\n- `allow-retry-reply-rescue`\n- `allow-delete-reply-rescue`\n- `allow-save-resume-rescue-profile`\n- `allow-save-resume-rescue-opportunity`\n- `allow-replace-resume-rescue-opportunity`\n- `allow-compose-resume-rescue-exact`\n- `allow-export-resume-rescue-html`\n- `allow-open-resume-rescue-json`\n- `allow-admit-resume-rescue-json`\n- `allow-export-resume-rescue-json`\n- `allow-open-resume-rescue-document`\n- `allow-admit-resume-rescue-document`"
+        },
+        {
+          "description": "Enables the admit_resume_rescue_document command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-admit-resume-rescue-document",
+          "markdownDescription": "Enables the admit_resume_rescue_document command without any pre-configured scope."
         },
         {
           "description": "Enables the admit_resume_rescue_json command without any pre-configured scope.",
@@ -303,6 +309,12 @@
           "markdownDescription": "Enables the get_snapshot command without any pre-configured scope."
         },
         {
+          "description": "Enables the open_resume_rescue_document command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-resume-rescue-document",
+          "markdownDescription": "Enables the open_resume_rescue_document command without any pre-configured scope."
+        },
+        {
           "description": "Enables the open_resume_rescue_json command without any pre-configured scope.",
           "type": "string",
           "const": "allow-open-resume-rescue-json",
@@ -385,6 +397,12 @@
           "type": "string",
           "const": "allow-transition-suggestion",
           "markdownDescription": "Enables the transition_suggestion command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the admit_resume_rescue_document command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-admit-resume-rescue-document",
+          "markdownDescription": "Denies the admit_resume_rescue_document command without any pre-configured scope."
         },
         {
           "description": "Denies the admit_resume_rescue_json command without any pre-configured scope.",
@@ -499,6 +517,12 @@
           "type": "string",
           "const": "deny-get-snapshot",
           "markdownDescription": "Denies the get_snapshot command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_resume_rescue_document command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-resume-rescue-document",
+          "markdownDescription": "Denies the open_resume_rescue_document command without any pre-configured scope."
         },
         {
           "description": "Denies the open_resume_rescue_json command without any pre-configured scope.",

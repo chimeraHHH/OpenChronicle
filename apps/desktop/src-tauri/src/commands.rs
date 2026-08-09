@@ -1,14 +1,18 @@
 use crate::bridge::{self, Operation, MAX_REQUEST_BYTES};
 use crate::error::DesktopError;
+use base64::Engine;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
-use tauri::{AppHandle, Manager};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+use tauri::{AppHandle, Manager, State};
+use uuid::Uuid;
 
 const MAX_CANDIDATE_ID_CHARS: usize = 128;
 const MAX_REFERENCE_ID_CHARS: usize = 512;
@@ -43,7 +47,123 @@ const MAX_RESUME_REQUIREMENT_CHARS: usize = 5_000;
 const MAX_RESUME_PRIORITY_CHARS: usize = 2_000;
 const MAX_JSON_RESUME_SOURCE_BYTES: usize = 500_000;
 const MAX_JSON_RESUME_CANDIDATES: usize = 2_000;
+const MAX_RESUME_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_RESUME_DOCUMENT_VAULT_ITEMS: usize = 4;
+const MAX_RESUME_DOCUMENT_VAULT_BYTES: usize = 32 * 1024 * 1024;
+const RESUME_DOCUMENT_VAULT_TTL: Duration = Duration::from_secs(30 * 60);
 const MAX_PROVENANCE_DEPTH: u8 = 8;
+
+#[derive(Clone, Default)]
+pub(crate) struct ResumeDocumentVault {
+    entries: Arc<Mutex<HashMap<String, ResumeDocumentVaultEntry>>>,
+}
+
+#[derive(Clone)]
+struct ResumeDocumentVaultEntry {
+    source: Vec<u8>,
+    source_format: String,
+    source_digest: String,
+    review_digest: String,
+    created_at: Instant,
+    in_use: bool,
+}
+
+impl ResumeDocumentVault {
+    fn insert(
+        &self,
+        source: Vec<u8>,
+        source_format: String,
+        source_digest: String,
+        review_digest: String,
+    ) -> Result<String, DesktopError> {
+        let mut entries = self.entries.lock().map_err(|_| {
+            DesktopError::new(
+                "DOCUMENT_REVIEW_UNAVAILABLE",
+                "The local document review vault is unavailable.",
+            )
+        })?;
+        purge_expired_document_entries(&mut entries);
+        let retained_bytes = entries
+            .values()
+            .map(|entry| entry.source.len())
+            .sum::<usize>();
+        if entries.len() >= MAX_RESUME_DOCUMENT_VAULT_ITEMS
+            || retained_bytes.saturating_add(source.len()) > MAX_RESUME_DOCUMENT_VAULT_BYTES
+        {
+            return Err(DesktopError::new(
+                "DOCUMENT_REVIEW_LIMIT",
+                "Too many document reviews are open; finish one before opening another.",
+            ));
+        }
+        let token = Uuid::new_v4().simple().to_string();
+        entries.insert(
+            token.clone(),
+            ResumeDocumentVaultEntry {
+                source,
+                source_format,
+                source_digest,
+                review_digest,
+                created_at: Instant::now(),
+                in_use: false,
+            },
+        );
+        Ok(token)
+    }
+
+    fn begin(
+        &self,
+        token: &str,
+        expected_review_digest: &str,
+    ) -> Result<ResumeDocumentVaultEntry, DesktopError> {
+        let mut entries = self.entries.lock().map_err(|_| {
+            DesktopError::new(
+                "DOCUMENT_REVIEW_UNAVAILABLE",
+                "The local document review vault is unavailable.",
+            )
+        })?;
+        purge_expired_document_entries(&mut entries);
+        let entry = entries.get_mut(token).ok_or_else(|| {
+            DesktopError::new(
+                "DOCUMENT_REVIEW_EXPIRED",
+                "The document review expired; choose the source again.",
+            )
+        })?;
+        if entry.in_use
+            || !constant_time_equal(
+                entry.review_digest.as_bytes(),
+                expected_review_digest.as_bytes(),
+            )
+        {
+            return Err(DesktopError::new(
+                "DOCUMENT_REVIEW_CHANGED",
+                "The document review changed; review the source again.",
+            ));
+        }
+        entry.in_use = true;
+        Ok(entry.clone())
+    }
+
+    fn finish(&self, token: &str, source_digest: &str, consumed: bool) {
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        let matches = entries.get(token).is_some_and(|entry| {
+            constant_time_equal(entry.source_digest.as_bytes(), source_digest.as_bytes())
+        });
+        if !matches {
+            return;
+        }
+        if consumed {
+            entries.remove(token);
+        } else if let Some(entry) = entries.get_mut(token) {
+            entry.in_use = false;
+        }
+    }
+}
+
+fn purge_expired_document_entries(entries: &mut HashMap<String, ResumeDocumentVaultEntry>) {
+    entries.retain(|_, entry| entry.created_at.elapsed() <= RESUME_DOCUMENT_VAULT_TTL);
+}
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
@@ -379,6 +499,19 @@ pub(crate) struct ResumeAdmitJsonRequest {
     pub expected_version: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeAdmitDocumentRequest {
+    pub review_token: String,
+    pub expected_review_digest: String,
+    pub profile_id: String,
+    pub display_name: String,
+    pub locale: String,
+    pub selections: Vec<ResumeJsonSelectionRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<u64>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ResumeExportJsonRequest {
@@ -458,6 +591,33 @@ struct JsonResumeImportReview {
 #[serde(deny_unknown_fields)]
 struct JsonResumeReviewResponse {
     review: JsonResumeImportReview,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResumeDocumentExtractorBinding {
+    version: u64,
+    method: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResumeDocumentImportReview {
+    schema_version: u64,
+    format: String,
+    extractor: ResumeDocumentExtractorBinding,
+    source: JsonResumeSourceBinding,
+    candidates: Vec<Value>,
+    omissions: Vec<Value>,
+    warnings: Vec<Value>,
+    action_capability: String,
+    review_digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResumeDocumentReviewResponse {
+    review: ResumeDocumentImportReview,
 }
 
 #[derive(Debug, Deserialize)]
@@ -768,6 +928,39 @@ pub async fn admit_resume_rescue_json(
 }
 
 #[tauri::command]
+pub async fn open_resume_rescue_document(
+    app: AppHandle,
+    vault: State<'_, ResumeDocumentVault>,
+) -> Result<Value, DesktopError> {
+    let vault = vault.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || open_resume_document_blocking(&app, &vault))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The résumé document review worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
+pub async fn admit_resume_rescue_document(
+    vault: State<'_, ResumeDocumentVault>,
+    request: ResumeAdmitDocumentRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_document_admission(&request)?;
+    let vault = vault.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || admit_resume_document_blocking(&vault, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The résumé document admission worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
 pub async fn get_resume_rescue_json_export(
     request: ResumePreviewRequest,
 ) -> Result<Value, DesktopError> {
@@ -1053,6 +1246,66 @@ fn open_resume_json_blocking(app: &AppHandle) -> Result<Value, DesktopError> {
     }))
 }
 
+fn open_resume_document_blocking(
+    app: &AppHandle,
+    vault: &ResumeDocumentVault,
+) -> Result<Value, DesktopError> {
+    let mut dialog = FileDialog::new()
+        .add_filter("Résumé document", &["pdf", "docx"])
+        .set_title("Review a PDF or DOCX résumé");
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let path = dialog.pick_file().ok_or_else(|| {
+        DesktopError::new("USER_CANCELLED", "Résumé document import was cancelled.")
+    })?;
+    let (source, source_format) = read_resume_document_source(&path)?;
+    let source_digest = sha256_hex(&source);
+    let params = serde_json::json!({
+        "source_base64": base64::engine::general_purpose::STANDARD.encode(&source),
+        "source_format": source_format,
+    });
+    let value = bridge::call_blocking(Operation::ResumeRescueReviewDocument, params)?;
+    let response: ResumeDocumentReviewResponse = serde_json::from_value(value).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid résumé document review.",
+        )
+    })?;
+    validate_resume_document_review(
+        &response.review,
+        &source_format,
+        &source_digest,
+        source.len(),
+    )?;
+    let review_digest = response.review.review_digest.clone();
+    let review_token = vault.insert(source, source_format, source_digest, review_digest)?;
+    Ok(serde_json::json!({
+        "review_token": review_token,
+        "review": response.review,
+    }))
+}
+
+fn admit_resume_document_blocking(
+    vault: &ResumeDocumentVault,
+    request: ResumeAdmitDocumentRequest,
+) -> Result<Value, DesktopError> {
+    let entry = vault.begin(&request.review_token, &request.expected_review_digest)?;
+    let params = serde_json::json!({
+        "source_base64": base64::engine::general_purpose::STANDARD.encode(&entry.source),
+        "source_format": entry.source_format,
+        "expected_review_digest": request.expected_review_digest,
+        "profile_id": request.profile_id,
+        "display_name": request.display_name,
+        "locale": request.locale,
+        "selections": request.selections,
+        "expected_version": request.expected_version,
+    });
+    let result = bridge::call_blocking(Operation::ResumeRescueAdmitDocument, params);
+    vault.finish(&request.review_token, &entry.source_digest, result.is_ok());
+    result
+}
+
 fn export_resume_json_blocking(
     app: &AppHandle,
     request: ResumeExportJsonRequest,
@@ -1261,6 +1514,85 @@ fn read_json_resume_source(path: &Path) -> Result<String, DesktopError> {
     Ok(source)
 }
 
+fn read_resume_document_source(path: &Path) -> Result<(Vec<u8>, String), DesktopError> {
+    let source_format = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|value| matches!(value.as_str(), "pdf" | "docx"))
+        .ok_or_else(|| {
+            DesktopError::new(
+                "INVALID_IMPORT_PATH",
+                "Résumé document imports require a .pdf or .docx file.",
+            )
+        })?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if std::fs::symlink_metadata(path).is_err_or(|metadata| metadata.file_type().is_symlink()) {
+        return Err(DesktopError::new(
+            "INVALID_IMPORT_PATH",
+            "The selected résumé document is not a regular file.",
+        ));
+    }
+    let file = options.open(path).map_err(|_| {
+        DesktopError::new(
+            "IMPORT_FAILED",
+            "The selected résumé document could not be opened.",
+        )
+    })?;
+    let metadata = file.metadata().map_err(|_| {
+        DesktopError::new(
+            "IMPORT_FAILED",
+            "The selected résumé document could not be inspected.",
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(DesktopError::new(
+            "INVALID_IMPORT_PATH",
+            "The selected résumé document is not a regular file.",
+        ));
+    }
+    if metadata.len() == 0 || metadata.len() > MAX_RESUME_DOCUMENT_BYTES as u64 {
+        return Err(DesktopError::new(
+            "IMPORT_TOO_LARGE",
+            "The selected résumé document is empty or exceeds 8 MB.",
+        ));
+    }
+    let mut source = Vec::with_capacity(metadata.len() as usize);
+    file.take((MAX_RESUME_DOCUMENT_BYTES + 1) as u64)
+        .read_to_end(&mut source)
+        .map_err(|_| {
+            DesktopError::new(
+                "IMPORT_FAILED",
+                "The selected résumé document could not be read completely.",
+            )
+        })?;
+    if source.len() > MAX_RESUME_DOCUMENT_BYTES {
+        return Err(DesktopError::new(
+            "IMPORT_TOO_LARGE",
+            "The selected résumé document exceeds 8 MB.",
+        ));
+    }
+    let valid_signature = match source_format.as_str() {
+        "pdf" => source.starts_with(b"%PDF-"),
+        "docx" => source.starts_with(b"PK"),
+        _ => false,
+    };
+    if !valid_signature {
+        return Err(DesktopError::new(
+            "IMPORT_INVALID",
+            "The selected résumé document does not match its file type.",
+        ));
+    }
+    Ok((source, source_format))
+}
+
 fn validate_resume_json_path(path: &Path) -> Result<(), DesktopError> {
     if !path
         .extension()
@@ -1351,6 +1683,57 @@ fn validate_resume_json_admission(request: &ResumeAdmitJsonRequest) -> Result<()
     Ok(())
 }
 
+fn validate_resume_document_admission(
+    request: &ResumeAdmitDocumentRequest,
+) -> Result<(), DesktopError> {
+    if request.review_token.len() != 32
+        || !request
+            .review_token
+            .bytes()
+            .all(|value| value.is_ascii_hexdigit())
+    {
+        return Err(DesktopError::invalid_request(
+            "The résumé document review token is invalid.",
+        ));
+    }
+    validate_resume_digest(&request.expected_review_digest)?;
+    validate_resume_identifier(&request.profile_id)?;
+    validate_multiline_text(&request.display_name, 512, false)?;
+    validate_bounded_text(&request.locale, 64, true)?;
+    if request
+        .expected_version
+        .is_some_and(|version| version == 0 || version > 2_147_483_647)
+        || request.selections.len() > MAX_JSON_RESUME_CANDIDATES
+    {
+        return Err(DesktopError::invalid_request(
+            "The résumé document admission is too large or has an invalid version.",
+        ));
+    }
+    let mut candidates = HashSet::new();
+    let mut facts = HashSet::new();
+    for selection in &request.selections {
+        validate_resume_identifier(&selection.candidate_id)?;
+        validate_resume_identifier(&selection.fact_id)?;
+        if !candidates.insert(selection.candidate_id.as_str())
+            || !facts.insert(selection.fact_id.as_str())
+            || !valid_resume_section(&selection.section)
+            || !matches!(
+                selection.confidentiality.as_str(),
+                "public" | "private" | "confidential"
+            )
+            || !matches!(
+                selection.ownership_scope.as_str(),
+                "individual" | "shared" | "organization" | "unspecified"
+            )
+        {
+            return Err(DesktopError::invalid_request(
+                "A résumé document selection is invalid.",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_json_resume_source_text(source_text: &str) -> Result<(), DesktopError> {
     let bytes = source_text.as_bytes();
     if bytes.len() < 2 || bytes.len() > MAX_JSON_RESUME_SOURCE_BYTES || source_text.contains('\0') {
@@ -1386,6 +1769,37 @@ fn validate_json_resume_review(
         return Err(DesktopError::new(
             "BRIDGE_PROTOCOL_ERROR",
             "The desktop bridge returned an invalid JSON Resume review.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_resume_document_review(
+    review: &ResumeDocumentImportReview,
+    source_format: &str,
+    source_digest: &str,
+    source_bytes: usize,
+) -> Result<(), DesktopError> {
+    let expected_source_id = format!("resume-document-{}", &source_digest[..32]);
+    if review.schema_version != 1
+        || review.format != source_format
+        || review.extractor.version != 1
+        || validate_bounded_text(&review.extractor.method, 128, false).is_err()
+        || review.action_capability != "none"
+        || review.source.id != expected_source_id
+        || !constant_time_equal(review.source.digest.as_bytes(), source_digest.as_bytes())
+        || review.source.byte_count != source_bytes as u64
+        || review.candidates.len() > MAX_JSON_RESUME_CANDIDATES
+        || review.omissions.len() > 100
+        || review.warnings.len() > 20
+        || review.candidates.iter().any(|item| !item.is_object())
+        || review.omissions.iter().any(|item| !item.is_object())
+        || review.warnings.iter().any(|item| !item.is_object())
+        || validate_resume_digest(&review.review_digest).is_err()
+    {
+        return Err(DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid résumé document review.",
         ));
     }
     Ok(())
@@ -2388,6 +2802,189 @@ mod tests {
     }
 
     #[test]
+    fn resume_document_reader_checks_extension_signature_size_and_links() {
+        let directory = tempfile::tempdir().expect("temporary import directory");
+        let pdf = directory.path().join("resume.PDF");
+        std::fs::write(&pdf, b"%PDF-1.7\nfixture").expect("write PDF fixture");
+        assert_eq!(
+            read_resume_document_source(&pdf).expect("read PDF fixture"),
+            (b"%PDF-1.7\nfixture".to_vec(), "pdf".to_owned())
+        );
+
+        let docx = directory.path().join("resume.docx");
+        std::fs::write(&docx, b"PK\x03\x04fixture").expect("write DOCX fixture");
+        assert_eq!(
+            read_resume_document_source(&docx).expect("read DOCX fixture"),
+            (b"PK\x03\x04fixture".to_vec(), "docx".to_owned())
+        );
+
+        let wrong_extension = directory.path().join("resume.txt");
+        std::fs::write(&wrong_extension, b"%PDF-1.7").expect("write extension fixture");
+        assert_eq!(
+            read_resume_document_source(&wrong_extension)
+                .expect_err("wrong extension must fail")
+                .code,
+            "INVALID_IMPORT_PATH"
+        );
+
+        let wrong_signature = directory.path().join("resume.pdf");
+        std::fs::write(&wrong_signature, b"not a PDF").expect("write signature fixture");
+        assert_eq!(
+            read_resume_document_source(&wrong_signature)
+                .expect_err("wrong signature must fail")
+                .code,
+            "IMPORT_INVALID"
+        );
+
+        let oversized = directory.path().join("oversized.docx");
+        std::fs::write(&oversized, vec![b'x'; MAX_RESUME_DOCUMENT_BYTES + 1])
+            .expect("write oversized fixture");
+        assert_eq!(
+            read_resume_document_source(&oversized)
+                .expect_err("oversized document must fail")
+                .code,
+            "IMPORT_TOO_LARGE"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = directory.path().join("linked.pdf");
+            symlink(&pdf, &link).expect("create source link");
+            assert!(read_resume_document_source(&link).is_err());
+        }
+    }
+
+    #[test]
+    fn resume_document_admission_is_token_digest_and_selection_bounded() {
+        let selection = ResumeJsonSelectionRequest {
+            candidate_id: "candidate-1".to_owned(),
+            fact_id: "fact-1".to_owned(),
+            section: "experience".to_owned(),
+            confidentiality: "private".to_owned(),
+            ownership_scope: "individual".to_owned(),
+        };
+        let valid = ResumeAdmitDocumentRequest {
+            review_token: "a".repeat(32),
+            expected_review_digest: "b".repeat(64),
+            profile_id: "profile-1".to_owned(),
+            display_name: "Ada".to_owned(),
+            locale: "en-US".to_owned(),
+            selections: vec![selection],
+            expected_version: Some(1),
+        };
+        assert!(validate_resume_document_admission(&valid).is_ok());
+
+        let invalid_token = ResumeAdmitDocumentRequest {
+            review_token: "not-a-token".to_owned(),
+            selections: vec![],
+            ..valid
+        };
+        assert!(validate_resume_document_admission(&invalid_token).is_err());
+
+        let duplicated = ResumeAdmitDocumentRequest {
+            review_token: "c".repeat(32),
+            selections: vec![
+                ResumeJsonSelectionRequest {
+                    candidate_id: "candidate-1".to_owned(),
+                    fact_id: "fact-1".to_owned(),
+                    section: "summary".to_owned(),
+                    confidentiality: "public".to_owned(),
+                    ownership_scope: "individual".to_owned(),
+                },
+                ResumeJsonSelectionRequest {
+                    candidate_id: "candidate-1".to_owned(),
+                    fact_id: "fact-2".to_owned(),
+                    section: "skill".to_owned(),
+                    confidentiality: "public".to_owned(),
+                    ownership_scope: "individual".to_owned(),
+                },
+            ],
+            ..invalid_token
+        };
+        assert!(validate_resume_document_admission(&duplicated).is_err());
+    }
+
+    #[test]
+    fn resume_document_vault_prevents_replay_concurrency_and_digest_swap() {
+        let vault = ResumeDocumentVault::default();
+        let source = b"%PDF-fixture".to_vec();
+        let source_digest = sha256_hex(&source);
+        let review_digest = "a".repeat(64);
+        let token = vault
+            .insert(
+                source.clone(),
+                "pdf".to_owned(),
+                source_digest.clone(),
+                review_digest.clone(),
+            )
+            .expect("store document review");
+        assert_eq!(token.len(), 32);
+
+        assert_eq!(
+            vault
+                .begin(&token, &"b".repeat(64))
+                .err()
+                .expect("changed digest must fail")
+                .code,
+            "DOCUMENT_REVIEW_CHANGED"
+        );
+        let lease = vault
+            .begin(&token, &review_digest)
+            .expect("lease reviewed source");
+        assert_eq!(lease.source, source);
+        assert_eq!(
+            vault
+                .begin(&token, &review_digest)
+                .err()
+                .expect("concurrent lease must fail")
+                .code,
+            "DOCUMENT_REVIEW_CHANGED"
+        );
+
+        vault.finish(&token, &source_digest, false);
+        assert!(vault.begin(&token, &review_digest).is_ok());
+        vault.finish(&token, &source_digest, true);
+        assert_eq!(
+            vault
+                .begin(&token, &review_digest)
+                .err()
+                .expect("consumed token must not replay")
+                .code,
+            "DOCUMENT_REVIEW_EXPIRED"
+        );
+    }
+
+    #[test]
+    fn resume_document_review_is_bound_to_native_source() {
+        let source = b"%PDF-fixture";
+        let digest = sha256_hex(source);
+        let review = ResumeDocumentImportReview {
+            schema_version: 1,
+            format: "pdf".to_owned(),
+            extractor: ResumeDocumentExtractorBinding {
+                version: 1,
+                method: "pdfplumber-lines-v1".to_owned(),
+            },
+            source: JsonResumeSourceBinding {
+                id: format!("resume-document-{}", &digest[..32]),
+                digest: digest.clone(),
+                byte_count: source.len() as u64,
+            },
+            candidates: vec![serde_json::json!({"id": "candidate-1"})],
+            omissions: vec![],
+            warnings: vec![],
+            action_capability: "none".to_owned(),
+            review_digest: "a".repeat(64),
+        };
+        assert!(validate_resume_document_review(&review, "pdf", &digest, source.len()).is_ok());
+        assert!(validate_resume_document_review(&review, "docx", &digest, source.len()).is_err());
+        assert!(
+            validate_resume_document_review(&review, "pdf", &"b".repeat(64), source.len()).is_err()
+        );
+    }
+
+    #[test]
     fn json_resume_export_recomputes_digest_and_creates_private_file() {
         let json_text = "{\n  \"basics\": {\n    \"name\": \"Ada\"\n  }\n}\n";
         let digest = sha256_hex(json_text.as_bytes());
@@ -2531,7 +3128,9 @@ mod tests {
 
     #[test]
     fn request_size_is_measured_as_utf8_json() {
-        let request = serde_json::json!({"content": "界".repeat(700_000)});
+        let request = serde_json::json!({
+            "content": "界".repeat(MAX_REQUEST_BYTES / "界".len() + 1)
+        });
         assert_eq!(
             checked_value(&request)
                 .expect_err("UTF-8 request must exceed limit")

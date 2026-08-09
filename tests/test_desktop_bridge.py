@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import stat
 import subprocess
 import sys
+import zipfile
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 import pytest
 
@@ -51,6 +55,28 @@ def _request(operation: str, params: dict[str, object] | None = None) -> tuple[d
         separators=(",", ":"),
     ).encode()
     return handle_request_bytes(payload)
+
+
+def _resume_docx(*paragraphs: str) -> bytes:
+    content_types = (
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Override PartName="/word/document.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.'
+        'wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    body = "".join(
+        f"<w:p><w:r><w:t>{escape(paragraph)}</w:t></w:r></w:p>" for paragraph in paragraphs
+    )
+    document = (
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/'
+        f'wordprocessingml/2006/main"><w:body>{body}</w:body></w:document>'
+    )
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w") as package:
+        package.writestr("[Content_Types].xml", content_types)
+        package.writestr("word/document.xml", document)
+    return output.getvalue()
 
 
 def _sidecar_request(
@@ -1120,6 +1146,91 @@ def test_resume_rescue_json_bridge_supports_declared_source_size(
 
     assert exit_code == 0
     assert response["result"]["review"]["source"]["byte_count"] == len(source.encode())
+
+
+def test_resume_rescue_bridge_reviews_and_admits_document_bytes(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.resume_rescue.enabled = True
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    source = _resume_docx("Selected document evidence", "UNSELECTED_DOCUMENT_SECRET")
+    encoded = base64.b64encode(source).decode("ascii")
+
+    reviewed, reviewed_code = _request(
+        "resume_rescue.review_document",
+        {"source_base64": encoded, "source_format": "docx"},
+    )
+
+    assert reviewed_code == 0
+    review = reviewed["result"]["review"]
+    assert review["format"] == "docx"
+    assert review["action_capability"] == "none"
+    assert review["source"]["byte_count"] == len(source)
+    assert [candidate["text"] for candidate in review["candidates"]] == [
+        "Selected document evidence",
+        "UNSELECTED_DOCUMENT_SECRET",
+    ]
+    admitted, admitted_code = _request(
+        "resume_rescue.admit_document",
+        {
+            "source_base64": encoded,
+            "source_format": "docx",
+            "expected_review_digest": review["review_digest"],
+            "profile_id": "document-profile",
+            "display_name": "Ada Example",
+            "locale": "en-US",
+            "selections": [
+                {
+                    "candidate_id": review["candidates"][0]["id"],
+                    "fact_id": "document-fact-1",
+                    "section": "experience",
+                    "confidentiality": "private",
+                    "ownership_scope": "individual",
+                }
+            ],
+        },
+    )
+    assert admitted_code == 0
+    profile = admitted["result"]["profile"]
+    assert [fact["text"] for fact in profile["profile"]["facts"]] == ["Selected document evidence"]
+    assert profile["profile"]["facts"][0]["provenance"][0]["kind"] == "document_excerpt"
+    assert "UNSELECTED_DOCUMENT_SECRET" not in json.dumps(profile)
+
+    stale, stale_code = _request(
+        "resume_rescue.admit_document",
+        {
+            "source_base64": base64.b64encode(_resume_docx("Replacement")).decode("ascii"),
+            "source_format": "docx",
+            "expected_review_digest": review["review_digest"],
+            "profile_id": profile["id"],
+            "display_name": profile["profile"]["display_name"],
+            "locale": profile["profile"]["locale"],
+            "selections": [],
+            "expected_version": profile["version"],
+        },
+    )
+    assert stale_code == 2
+    assert stale["error"]["code"] == "VERSION_CONFLICT"
+
+
+def test_resume_document_bridge_rejects_encoding_format_and_unknown_fields(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.resume_rescue.enabled = True
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+
+    for params in (
+        {"source_base64": "***", "source_format": "docx"},
+        {"source_base64": "eA==", "source_format": "txt"},
+        {"source_base64": "eA==", "source_format": "docx", "path": "/tmp/private"},
+    ):
+        response, exit_code = _request("resume_rescue.review_document", params)
+        assert exit_code == 2
+        assert response["error"]["code"] == "INVALID_PARAMS"
 
 
 def test_resume_rescue_bridge_is_disabled_and_closed_by_default(
