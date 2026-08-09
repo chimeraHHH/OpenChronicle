@@ -36,8 +36,28 @@ def _payload(**updates) -> bytes:
     return json.dumps({"ok": True, "selection": selection}).encode()
 
 
-def _runner(stdout: bytes, *, returncode: int = 0):
-    def run(*_args, **_kwargs):
+def _window_payload(stdout: bytes) -> bytes:
+    defaults = json.loads(_payload())["selection"]
+    try:
+        selection = json.loads(stdout).get("selection", defaults)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        selection = defaults
+    window = {
+        "schema_version": 1,
+        "app_name": selection.get("app_name", defaults["app_name"]),
+        "bundle_id": selection.get("bundle_id", defaults["bundle_id"]),
+        "pid": selection.get("pid", defaults["pid"]),
+        "window_title": selection.get("window_title", defaults["window_title"]),
+    }
+    return json.dumps({"ok": True, "window": window}).encode()
+
+
+def _runner(stdout: bytes, *, returncode: int = 0, calls: list[list[str]] | None = None):
+    def run(args, **_kwargs):
+        if calls is not None:
+            calls.append(args)
+        if "--frontmost-window-metadata" in args:
+            return _BoundedProcessResult(returncode=0, stdout=_window_payload(stdout))
         return _BoundedProcessResult(returncode=returncode, stdout=stdout)
 
     return run
@@ -113,23 +133,44 @@ def test_selection_adapter_preserves_only_allowlisted_native_error_code() -> Non
 def test_selection_adapter_applies_window_and_url_policy() -> None:
     cfg = config_mod.Config()
     cfg.capture.excluded_bundle_ids = ["com.apple.notes"]
+    calls: list[list[str]] = []
     with pytest.raises(SelectionCaptureError) as excluded:
         capture_selection(
             cfg,
             helper_path=Path("/trusted/helper"),
-            process_runner=_runner(_payload()),
+            process_runner=_runner(_payload(), calls=calls),
         )
     assert excluded.value.code == "privacy_denied"
+    assert calls == [["/trusted/helper", "--frontmost-window-metadata"]]
 
     cfg.capture.excluded_bundle_ids = []
     cfg.capture.allowed_url_patterns = ["example.com"]
+    calls.clear()
     with pytest.raises(SelectionCaptureError) as url_policy:
         capture_selection(
             cfg,
             helper_path=Path("/trusted/helper"),
-            process_runner=_runner(_payload()),
+            process_runner=_runner(_payload(), calls=calls),
         )
     assert url_policy.value.code == "url_policy_unverifiable"
+    assert calls == []
+
+
+def test_selection_adapter_rejects_preflight_to_selection_focus_change() -> None:
+    selection = _payload(window_title="Changed before selection")
+
+    def changed_runner(args, **_kwargs):
+        if "--frontmost-window-metadata" in args:
+            return _BoundedProcessResult(returncode=0, stdout=_window_payload(_payload()))
+        return _BoundedProcessResult(returncode=0, stdout=selection)
+
+    with pytest.raises(SelectionCaptureError) as changed:
+        capture_selection(
+            config_mod.Config(),
+            helper_path=Path("/trusted/helper"),
+            process_runner=changed_runner,
+        )
+    assert changed.value.code == "focus_changed"
 
 
 def test_selection_adapter_never_accepts_own_desktop_selection() -> None:

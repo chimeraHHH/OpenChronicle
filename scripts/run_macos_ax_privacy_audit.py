@@ -9,6 +9,7 @@ responses are inspected only in memory; the sole retained audit artifact is a
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import logging
@@ -42,6 +43,7 @@ BUILD_ROOT = FIXTURE_ROOT / ".build"
 FIXTURE_APP = BUILD_ROOT / "OpenChronicleLiveAXFixture.app"
 FIXTURE_EXECUTABLE = FIXTURE_APP / "Contents" / "MacOS" / "LiveAXFixture"
 HELPER_EXECUTABLE = BUILD_ROOT / "mac-ax-helper"
+SELECTION_HELPER_EXECUTABLE = BUILD_ROOT / "mac-ax-selection"
 BUNDLE_ID = "app.openchronicle.LiveAXFixture"
 PUBLIC_TITLE = "OpenChronicle AX Audit — Public"
 
@@ -374,11 +376,56 @@ def _build_binaries() -> dict[str, str]:
         )
         helper_stamp.write_text(helper_source_hash + "\n", encoding="ascii")
         helper_stamp.chmod(0o600)
+
+    selection_source = REPO_ROOT / "resources" / "mac-ax-selection.swift"
+    selection_source_hash = _sha256_file(selection_source)
+    selection_stamp = BUILD_ROOT / "mac-ax-selection.source.sha256"
+    try:
+        stamped_selection_hash = selection_stamp.read_text(encoding="ascii").strip()
+    except OSError:
+        stamped_selection_hash = ""
+    selection_stale = (
+        not SELECTION_HELPER_EXECUTABLE.is_file()
+        or stamped_selection_hash != selection_source_hash
+    )
+    if selection_stale:
+        arch = "arm64" if platform.machine() in {"arm64", "aarch64"} else "x86_64"
+        _run_checked(
+            [
+                "swiftc",
+                str(selection_source),
+                "-o",
+                str(SELECTION_HELPER_EXECUTABLE),
+                "-O",
+                "-target",
+                f"{arch}-apple-macos12.0",
+                "-swift-version",
+                "5",
+            ],
+            code="selection_helper_compile_failed",
+        )
+        SELECTION_HELPER_EXECUTABLE.chmod(0o700)
+        _run_checked(
+            [
+                "codesign",
+                "--force",
+                "--sign",
+                "-",
+                "--identifier",
+                "app.openchronicle.LiveSelectionAuditHelper",
+                str(SELECTION_HELPER_EXECUTABLE),
+            ],
+            code="selection_helper_codesign_failed",
+        )
+        selection_stamp.write_text(selection_source_hash + "\n", encoding="ascii")
+        selection_stamp.chmod(0o600)
     return {
         "fixture_source_sha256": _sha256_file(FIXTURE_ROOT / "LiveAXFixture.swift"),
         "fixture_binary_sha256": _sha256_file(FIXTURE_EXECUTABLE),
         "helper_source_sha256": helper_source_hash,
         "helper_binary_sha256": _sha256_file(HELPER_EXECUTABLE),
+        "selection_helper_source_sha256": selection_source_hash,
+        "selection_helper_binary_sha256": _sha256_file(SELECTION_HELPER_EXECUTABLE),
     }
 
 
@@ -608,6 +655,10 @@ def _exercise_live(
     from openchronicle.capture import ax_capture, s1_parser, scheduler, screenshot, window_meta
     from openchronicle.config import CaptureConfig, Config
     from openchronicle.privacy import policy as privacy_policy
+    from openchronicle.prompt_rescue.selection import (
+        SelectionCaptureError,
+        capture_selection,
+    )
 
     logger_mod.setup(console=False, verbose=True)
     cfg = Config()
@@ -652,6 +703,86 @@ def _exercise_live(
         public_active = _wait_for_window(window_meta, PUBLIC_TITLE)
         if not public_active:
             raise AuditFailure("fixture_window_metadata_unavailable")
+
+        selection_cfg = Config()
+        fixture.command("public.normal-selected")
+        exact_selection_active = _wait_for_window(window_meta, PUBLIC_TITLE)
+        exact_receipt = None
+        with contextlib.suppress(SelectionCaptureError):
+            exact_receipt = capture_selection(
+                selection_cfg,
+                helper_path=SELECTION_HELPER_EXECUTABLE,
+            )
+        normal_marker = environment["OC_LIVE_AX_NORMAL"]
+        checks.pass_if(
+            "prompt_rescue_exact_selection_bound",
+            exact_selection_active
+            and exact_receipt is not None
+            and exact_receipt.selected_text == normal_marker
+            and exact_receipt.bundle_id == BUNDLE_ID
+            and exact_receipt.window_title == PUBLIC_TITLE
+            and exact_receipt.selection_location == 0
+            and exact_receipt.selection_length
+            == len(normal_marker.encode("utf-16-le")) // 2,
+            observed_count=1 if exact_receipt is not None else 0,
+        )
+
+        fixture.command("public.normal-empty-selection")
+        empty_code = ""
+        try:
+            capture_selection(
+                selection_cfg,
+                helper_path=SELECTION_HELPER_EXECUTABLE,
+            )
+        except SelectionCaptureError as exc:
+            empty_code = exc.code
+        checks.pass_if(
+            "prompt_rescue_empty_selection_denied",
+            empty_code == "no_selection",
+            observed_count=1 if empty_code else 0,
+        )
+
+        fixture.command("private.secure-selected")
+        secure_code = ""
+        try:
+            capture_selection(
+                selection_cfg,
+                helper_path=SELECTION_HELPER_EXECUTABLE,
+            )
+        except SelectionCaptureError as exc:
+            secure_code = exc.code
+        checks.pass_if(
+            "prompt_rescue_secure_selection_denied",
+            secure_code == "secure_field",
+            observed_count=1 if secure_code else 0,
+        )
+
+        fixture.command("public.normal-selected")
+        excluded_selection_cfg = Config()
+        excluded_selection_cfg.capture = CaptureConfig(excluded_bundle_ids=[BUNDLE_ID])
+        selection_invocations: list[list[str]] = []
+
+        def observe_selection_invocation(args: list[str], **kwargs: Any):
+            selection_invocations.append(args)
+            return ax_capture._run_bounded_process(args, **kwargs)
+
+        excluded_code = ""
+        try:
+            capture_selection(
+                excluded_selection_cfg,
+                helper_path=SELECTION_HELPER_EXECUTABLE,
+                process_runner=observe_selection_invocation,
+            )
+        except SelectionCaptureError as exc:
+            excluded_code = exc.code
+        checks.pass_if(
+            "prompt_rescue_policy_denied_before_text_read",
+            excluded_code == "privacy_denied"
+            and len(selection_invocations) == 1
+            and selection_invocations[0][-1] == "--frontmost-window-metadata",
+            observed_count=len(selection_invocations),
+        )
+        fixture.command("public.normal")
 
         # Helper failures are exercised through the production provider and
         # scheduler before requiring real AX permission.

@@ -196,6 +196,27 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
         activate(publicWindow, responder: normalField)
     }
 
+    private func selectAll(in field: NSTextField, window: NSWindow) {
+        activate(window, responder: field)
+        field.selectText(nil)
+        if let editor = window.fieldEditor(false, for: field) as? NSTextView {
+            editor.setSelectedRange(
+                NSRange(location: 0, length: field.stringValue.utf16.count)
+            )
+        }
+    }
+
+    private func focusPublicNormalSelected() {
+        selectAll(in: normalField, window: publicWindow)
+    }
+
+    private func focusPublicNormalWithoutSelection() {
+        activate(publicWindow, responder: normalField)
+        if let editor = publicWindow.fieldEditor(false, for: normalField) as? NSTextView {
+            editor.setSelectedRange(NSRange(location: 0, length: 0))
+        }
+    }
+
     private func focusPublicURL() {
         publicURLField.stringValue = publicURLValue
         activate(publicWindow, responder: publicURLField)
@@ -208,6 +229,10 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
 
     private func focusPrivateSecure() {
         activate(privateWindow, responder: secureField)
+    }
+
+    private func focusPrivateSecureSelected() {
+        selectAll(in: secureField, window: privateWindow)
     }
 
     private func focusPrivateURL() {
@@ -269,6 +294,12 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
         case "public.normal":
             focusPublicNormal()
             emit(event: "ack", extra: ["command": command])
+        case "public.normal-selected":
+            focusPublicNormalSelected()
+            emit(event: "ack", extra: ["command": command])
+        case "public.normal-empty-selection":
+            focusPublicNormalWithoutSelection()
+            emit(event: "ack", extra: ["command": command])
         case "public.url":
             focusPublicURL()
             emit(event: "ack", extra: ["command": command])
@@ -277,6 +308,9 @@ private final class FixtureDelegate: NSObject, NSApplicationDelegate {
             emit(event: "ack", extra: ["command": command])
         case "private.secure":
             focusPrivateSecure()
+            emit(event: "ack", extra: ["command": command])
+        case "private.secure-selected":
+            focusPrivateSecureSelected()
             emit(event: "ack", extra: ["command": command])
         case "private.url":
             focusPrivateURL()

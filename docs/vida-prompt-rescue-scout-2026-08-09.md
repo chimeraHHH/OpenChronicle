@@ -175,10 +175,14 @@ excluded-data egress, and zero successful source-text instruction overrides.
    output validator. A real provider corpus remains unreported because no
    enabled reachable provider was available in the local acceptance
    environment; no score is synthesized.
-4. **Implemented, pending live acceptance:** macOS exact focused-selection
-   adapter with secure-field/policy/identity fencing, durable binding, and a
-   global shortcut that captures before focusing the review app. The live TCC
-   app matrix is still required.
+4. **Implemented; AppKit/TCC fixture accepted, real-app matrix pending:** macOS
+   exact focused-selection adapter with metadata-first privacy evaluation,
+   secure-field/policy/identity fencing, durable binding, and a global shortcut
+   that captures before focusing the review app. The 2026-08-09 interactive run
+   passed exact, empty, secure, and policy-preflight checks; see
+   [vida-prompt-rescue-live-selection-2026-08-09.md](vida-prompt-rescue-live-selection-2026-08-09.md).
+   TextEdit, Notes, Safari, and VS Code still require explicit compatibility
+   acceptance.
 
 Only after step 4 passes may the roadmap's “explicit selection binding” item be
 marked complete.

@@ -27,6 +27,15 @@ enum SelectionFailure: String, Error {
     case outputUnavailable = "output_unavailable"
 }
 
+struct FocusedIdentity {
+    let appElement: AXUIElement
+    let window: AXUIElement
+    let pid: pid_t
+    let appName: String
+    let bundleID: String
+    let windowTitle: String
+}
+
 func copyValue(_ element: AXUIElement, _ attribute: CFString) throws -> CFTypeRef {
     var value: CFTypeRef?
     guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success,
@@ -124,35 +133,75 @@ func isSecure(_ element: AXUIElement, within window: AXUIElement) throws -> Bool
     throw SelectionFailure.invalidIdentity
 }
 
-func snapshot() throws -> [String: Any] {
+func focusedIdentity() throws -> FocusedIdentity {
     guard AXIsProcessTrusted() else { throw SelectionFailure.accessibilityUntrusted }
 
-    let frontmost = NSWorkspace.shared.frontmostApplication
-    let systemWide = AXUIElementCreateSystemWide()
-    let appElement = try copyElement(
-        systemWide,
-        kAXFocusedApplicationAttribute as CFString,
-        failure: .noFocusedApplication
-    )
-    var pid: pid_t = 0
-    guard AXUIElementGetPid(appElement, &pid) == .success,
-          pid > 0,
+    guard let running = NSWorkspace.shared.frontmostApplication else {
+        throw SelectionFailure.noFocusedApplication
+    }
+    let pid = running.processIdentifier
+    guard pid > 0,
           pid != ProcessInfo.processInfo.processIdentifier,
-          frontmost?.processIdentifier == pid,
-          let running = NSRunningApplication(processIdentifier: pid)
+          !running.isTerminated
     else {
         throw pid == ProcessInfo.processInfo.processIdentifier
             ? SelectionFailure.selfSelection
             : SelectionFailure.noFocusedApplication
     }
+    let appElement = AXUIElementCreateApplication(pid)
 
     let window = try copyElement(
         appElement,
         kAXFocusedWindowAttribute as CFString,
         failure: .noFocusedWindow
     )
+    let windowTitle = try checkedIdentity(
+        try copyString(window, kAXTitleAttribute as CFString),
+        maximum: maxIdentityCharacters
+    )
+    let appName = try checkedIdentity(
+        running.localizedName ?? "",
+        maximum: maxIdentityCharacters
+    )
+    let bundleID = try checkedIdentity(
+        running.bundleIdentifier ?? "",
+        maximum: maxIdentityCharacters
+    )
+    guard !bundleID.isEmpty else { throw SelectionFailure.invalidIdentity }
+    return FocusedIdentity(
+        appElement: appElement,
+        window: window,
+        pid: pid,
+        appName: appName,
+        bundleID: bundleID,
+        windowTitle: windowTitle
+    )
+}
+
+func windowSnapshot() throws -> [String: Any] {
+    let before = try focusedIdentity()
+    let after = try focusedIdentity()
+    guard before.pid == after.pid,
+          before.appName == after.appName,
+          before.bundleID == after.bundleID,
+          before.windowTitle == after.windowTitle,
+          CFEqual(before.window, after.window)
+    else {
+        throw SelectionFailure.focusChanged
+    }
+    return [
+        "schema_version": 1,
+        "app_name": before.appName,
+        "bundle_id": before.bundleID,
+        "pid": Int(before.pid),
+        "window_title": before.windowTitle,
+    ]
+}
+
+func snapshot() throws -> [String: Any] {
+    let identity = try focusedIdentity()
     let element = try copyElement(
-        appElement,
+        identity.appElement,
         kAXFocusedUIElementAttribute as CFString,
         failure: .noFocusedElement
     )
@@ -161,12 +210,12 @@ func snapshot() throws -> [String: Any] {
         kAXWindowAttribute as CFString,
         failure: .noFocusedWindow
     )
-    guard CFEqual(window, elementWindow) else { throw SelectionFailure.focusChanged }
+    guard CFEqual(identity.window, elementWindow) else { throw SelectionFailure.focusChanged }
     let focusedValue = try copyValue(element, kAXFocusedAttribute as CFString)
     guard let focused = focusedValue as? Bool, focused else {
         throw SelectionFailure.focusChanged
     }
-    guard try !isSecure(element, within: window) else {
+    guard try !isSecure(element, within: identity.window) else {
         throw SelectionFailure.secureField
     }
     try rejectMultipleSelection(element)
@@ -184,18 +233,6 @@ func snapshot() throws -> [String: Any] {
         throw SelectionFailure.selectionTooLarge
     }
 
-    let windowTitle = try checkedIdentity(
-        try copyString(window, kAXTitleAttribute as CFString),
-        maximum: maxIdentityCharacters
-    )
-    let appName = try checkedIdentity(
-        running.localizedName ?? "",
-        maximum: maxIdentityCharacters
-    )
-    let bundleID = try checkedIdentity(
-        running.bundleIdentifier ?? "",
-        maximum: maxIdentityCharacters
-    )
     let role = try checkedIdentity(
         try copyString(element, kAXRoleAttribute as CFString, required: true),
         maximum: maxRoleCharacters
@@ -205,26 +242,9 @@ func snapshot() throws -> [String: Any] {
         maximum: maxRoleCharacters
     )
 
-    let finalFrontmost = NSWorkspace.shared.frontmostApplication
-    let finalApp = try copyElement(
-        systemWide,
-        kAXFocusedApplicationAttribute as CFString,
-        failure: .focusChanged
-    )
-    var finalPID: pid_t = 0
-    guard AXUIElementGetPid(finalApp, &finalPID) == .success,
-          finalPID == pid,
-          finalFrontmost?.processIdentifier == pid
-    else {
-        throw SelectionFailure.focusChanged
-    }
-    let finalWindow = try copyElement(
-        finalApp,
-        kAXFocusedWindowAttribute as CFString,
-        failure: .focusChanged
-    )
+    let finalIdentity = try focusedIdentity()
     let finalElement = try copyElement(
-        finalApp,
+        finalIdentity.appElement,
         kAXFocusedUIElementAttribute as CFString,
         failure: .focusChanged
     )
@@ -234,7 +254,11 @@ func snapshot() throws -> [String: Any] {
         kAXSelectedTextAttribute as CFString,
         required: true
     )
-    guard CFEqual(window, finalWindow),
+    guard identity.pid == finalIdentity.pid,
+          identity.appName == finalIdentity.appName,
+          identity.bundleID == finalIdentity.bundleID,
+          identity.windowTitle == finalIdentity.windowTitle,
+          CFEqual(identity.window, finalIdentity.window),
           CFEqual(element, finalElement),
           rangeBefore.location == rangeAfter.location,
           rangeBefore.length == rangeAfter.length,
@@ -248,10 +272,10 @@ func snapshot() throws -> [String: Any] {
         "source_kind": "macos_selection",
         "selected_text": selectedBefore,
         "captured_at": ISO8601DateFormatter().string(from: Date()),
-        "app_name": appName,
-        "bundle_id": bundleID,
-        "pid": Int(pid),
-        "window_title": windowTitle,
+        "app_name": identity.appName,
+        "bundle_id": identity.bundleID,
+        "pid": Int(identity.pid),
+        "window_title": identity.windowTitle,
         "element_role": role,
         "element_subrole": subrole,
         "selection_location": rangeBefore.location,
@@ -267,7 +291,13 @@ func emit(_ value: [String: Any]) throws {
 }
 
 do {
-    try emit(["ok": true, "selection": try snapshot()])
+    if CommandLine.arguments.count == 1 {
+        try emit(["ok": true, "selection": try snapshot()])
+    } else if CommandLine.arguments == [CommandLine.arguments[0], "--frontmost-window-metadata"] {
+        try emit(["ok": true, "window": try windowSnapshot()])
+    } else {
+        throw SelectionFailure.invalidIdentity
+    }
 } catch let failure as SelectionFailure {
     try? emit(["ok": false, "error_code": failure.rawValue])
     exit(2)

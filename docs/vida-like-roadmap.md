@@ -225,15 +225,18 @@ privacy UX is validated on a signed macOS build.
   retry, and native-confirmed delete in the desktop shell. A global
   `Command-Shift-Space` path now captures a double-fenced `AXSelectedText`
   receipt before focusing OpenChronicle, persists its app/window/element/range
-  binding, and never falls back to clipboard or whole-field text. Live TCC
-  acceptance across the supported app matrix remains before this checkbox can
-  close.
+  binding, and never falls back to clipboard or whole-field text. A live signed
+  AppKit/TCC fixture now passes exact, empty, secure-field, and metadata-first
+  policy-denial checks; the scoped record is
+  [vida-prompt-rescue-live-selection-2026-08-09.md](vida-prompt-rescue-live-selection-2026-08-09.md).
+  TextEdit, Notes, Safari, and VS Code compatibility plus a reachable-provider
+  quality report remain before this checkbox can close.
   The frozen 17-case adversarial dataset, deterministic grader, and raw-input
   negative-control report now exist under `benchmarks/vida-prompt-rescue-v1`.
   Its explicit provider runner shares the production template, no-tool call,
   strict output validator, model/location disclosure, and closed failure codes.
   A reachable enabled provider is still required to publish a real comparison;
-  the next selection gate is live TCC/app-matrix acceptance.
+  the next selection gate is the real-application compatibility matrix.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
   send/submit capability.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.

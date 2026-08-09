@@ -68,6 +68,10 @@ schema and redaction invariants without claiming full live coverage.
   allowed-title window;
 - an `NSSecureTextField`, excluded title marker, and excluded URL-like marker in
   the denied window;
+- Prompt Rescue's production exact-selection adapter against an ordinary full
+  selection, an empty selection, and a selected `NSSecureTextField`;
+- the metadata-only Prompt Rescue privacy preflight, proving an excluded bundle
+  is denied before the helper's selected-text mode is invoked;
 - focused-window-only helper output versus explicit all-window output;
 - the native complete-tree receipt required by active URL policy;
 - 48 rapid focus changes across both windows and all four controls;
@@ -154,6 +158,9 @@ codesign --force --sign - \
   not correspondence between the typed URL and a loaded document;
 - revoking Accessibility permission during an already-running helper call is
   not automated;
+- real Notes, TextEdit, Safari, and VS Code selection behavior remains a
+  separate manual compatibility matrix; this fixture proves the AppKit/TCC
+  boundary without touching user documents;
 - a complete run still requires an interactive macOS session whose TCC and
   Automation permissions allow both AX access and active-window metadata; a
   locked/loginwindow session correctly produces an `incomplete` report.

@@ -18,7 +18,8 @@ from ..privacy import policy as privacy_policy
 
 _MAX_OUTPUT_BYTES = 128 * 1024 + 1
 _MAX_STDERR_BYTES = 16 * 1024
-_TIMEOUT_SECONDS = 3.0
+_TIMEOUT_SECONDS = 2.0
+_WINDOW_KEYS = frozenset({"schema_version", "app_name", "bundle_id", "pid", "window_title"})
 _SELECTION_KEYS = frozenset(
     {
         "schema_version",
@@ -90,6 +91,14 @@ class SelectionReceipt:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class _WindowReceipt:
+    app_name: str
+    bundle_id: str
+    pid: int
+    window_title: str
+
+
 def capture_selection(
     cfg: Config,
     *,
@@ -97,11 +106,60 @@ def capture_selection(
     process_runner: Callable[..., _BoundedProcessResult] = _run_bounded_process,
 ) -> SelectionReceipt:
     """Capture one stable selection and apply current window privacy policy."""
+    if privacy_policy.has_url_policy(cfg.capture):
+        # This adapter deliberately does not inspect neighboring browser
+        # controls, so URL policy cannot be proven without reading any text.
+        raise SelectionCaptureError("url_policy_unverifiable")
     helper = helper_path or _resolve_helper_path()
     if helper is None:
         raise SelectionCaptureError("helper_unavailable")
+
+    window = _parse_window_receipt(
+        _invoke_helper(
+            helper,
+            ["--frontmost-window-metadata"],
+            process_runner=process_runner,
+        )
+    )
+    decision = privacy_policy.evaluate_window(
+        cfg.capture,
+        app_name=window.app_name,
+        bundle_id=window.bundle_id,
+        window_title=window.window_title,
+    )
+    if not decision.allowed:
+        raise SelectionCaptureError("privacy_denied")
+    if window.bundle_id.casefold() == "app.openchronicle.desktop":
+        raise SelectionCaptureError("self_selection")
+
+    receipt = _parse_receipt(_invoke_helper(helper, [], process_runner=process_runner))
+    if (
+        receipt.app_name != window.app_name
+        or receipt.bundle_id != window.bundle_id
+        or receipt.pid != window.pid
+        or receipt.window_title != window.window_title
+    ):
+        raise SelectionCaptureError("focus_changed")
+
+    decision = privacy_policy.evaluate_window(
+        cfg.capture,
+        app_name=receipt.app_name,
+        bundle_id=receipt.bundle_id,
+        window_title=receipt.window_title,
+    )
+    if not decision.allowed:
+        raise SelectionCaptureError("privacy_denied")
+    return receipt
+
+
+def _invoke_helper(
+    helper: Path,
+    arguments: list[str],
+    *,
+    process_runner: Callable[..., _BoundedProcessResult],
+) -> dict[str, Any]:
     result = process_runner(
-        [str(helper)],
+        [str(helper), *arguments],
         timeout=_TIMEOUT_SECONDS,
         stdout_limit=_MAX_OUTPUT_BYTES,
         stderr_limit=_MAX_STDERR_BYTES,
@@ -114,23 +172,7 @@ def capture_selection(
     if result.returncode != 0:
         code = payload.get("error_code") if isinstance(payload, dict) else None
         raise SelectionCaptureError(code if code in _HELPER_ERRORS else "helper_failed")
-    receipt = _parse_receipt(payload)
-
-    decision = privacy_policy.evaluate_window(
-        cfg.capture,
-        app_name=receipt.app_name,
-        bundle_id=receipt.bundle_id,
-        window_title=receipt.window_title,
-    )
-    if not decision.allowed:
-        raise SelectionCaptureError("privacy_denied")
-    if privacy_policy.has_url_policy(cfg.capture):
-        # The exact-selection helper deliberately does not read neighboring
-        # browser controls, so it cannot prove the active URL against a policy.
-        raise SelectionCaptureError("url_policy_unverifiable")
-    if receipt.bundle_id.casefold() == "app.openchronicle.desktop":
-        raise SelectionCaptureError("self_selection")
-    return receipt
+    return payload
 
 
 def prepare_selection_helper() -> Path | None:
@@ -198,6 +240,22 @@ def _parse_receipt(payload: dict[str, Any]) -> SelectionReceipt:
         element_subrole=_text(raw.get("element_subrole"), 128, nonempty=False),
         selection_location=selection_location,
         selection_length=selection_length,
+    )
+
+
+def _parse_window_receipt(payload: dict[str, Any]) -> _WindowReceipt:
+    if set(payload) != {"ok", "window"} or payload.get("ok") is not True:
+        raise SelectionCaptureError("helper_invalid_output")
+    raw = payload["window"]
+    if not isinstance(raw, dict) or set(raw) != _WINDOW_KEYS:
+        raise SelectionCaptureError("helper_invalid_output")
+    if raw.get("schema_version") != 1:
+        raise SelectionCaptureError("helper_invalid_output")
+    return _WindowReceipt(
+        app_name=_text(raw.get("app_name"), 512, nonempty=False),
+        bundle_id=_text(raw.get("bundle_id"), 512, nonempty=True),
+        pid=_integer(raw.get("pid"), 1, 2_147_483_647),
+        window_title=_text(raw.get("window_title"), 512, nonempty=False),
     )
 
 
