@@ -9,6 +9,11 @@ import type {
   DesktopSnapshot,
   EvidenceRef,
   ForgetPreview,
+  JsonResumeExport,
+  JsonResumeImportReview,
+  JsonResumeSelection,
+  JsonResumeUpstreamSchema,
+  OpenedJsonResumeReview,
   PrivacySnapshot,
   PromptRescueJob,
   PromptRescueJobSummary,
@@ -28,6 +33,7 @@ import type {
   ResumeConflict,
   ResumeFact,
   ResumeHtmlExportResult,
+  ResumeJsonExportResult,
   ResumeOpportunity,
   ResumeOpportunitySource,
   ResumeOwnership,
@@ -126,6 +132,11 @@ const resumeOwnerships = new Set<ResumeOwnership>([
   "organization",
   "unspecified",
 ]);
+const jsonResumeMappings = new Set([
+  "exact_field",
+  "deterministic_composite",
+  "openchronicle_extension_exact",
+] as const);
 const wrapCategories: WrapCategory[] = [
   "completed",
   "progressed",
@@ -767,6 +778,26 @@ function resumePositiveInteger(value: unknown, detail: string): number {
   return result;
 }
 
+function jsonResumeUpstream(value: unknown): JsonResumeUpstreamSchema {
+  const raw = closedObject(
+    value,
+    ["version", "commit", "url"],
+    "JSON Resume upstream schema",
+  );
+  const version = stringValue(raw.version, "JSON Resume upstream version");
+  const commit = stringValue(raw.commit, "JSON Resume upstream commit");
+  const url = stringValue(raw.url, "JSON Resume upstream URL");
+  if (
+    version !== "v1.0.0" ||
+    commit !== "272929d51b450dbd5a0d242af24c60252904f405" ||
+    url !==
+      "https://raw.githubusercontent.com/jsonresume/jsonresume.org/272929d51b450dbd5a0d242af24c60252904f405/packages/schema/schema.json"
+  ) {
+    return protocolError("JSON Resume upstream schema binding");
+  }
+  return { version, commit, url };
+}
+
 function resumeSection(value: unknown): ResumeSectionKind {
   return allowedString(value, resumeSections, "Résumé Rescue section");
 }
@@ -827,6 +858,40 @@ function resumeProvenance(value: unknown): ResumeProvenance {
       memory_id: stringValue(raw.memory_id, "résumé memory id"),
       memory_path: stringValue(raw.memory_path, "résumé memory path"),
       memory_digest: resumeDigest(raw.memory_digest, "résumé memory digest"),
+    };
+  }
+  if (kind === "json_resume_field") {
+    const raw = closedObject(
+      value,
+      [
+        "kind",
+        "reviewed_at",
+        "source_id",
+        "source_digest",
+        "json_pointer",
+        "value_digest",
+        "mapping",
+        "upstream_schema_version",
+      ],
+      "JSON Resume provenance",
+    );
+    const mapping = allowedString(
+      raw.mapping,
+      jsonResumeMappings,
+      "JSON Resume mapping",
+    );
+    if (stringValue(raw.upstream_schema_version, "JSON Resume schema version") !== "v1.0.0") {
+      return protocolError("JSON Resume schema version");
+    }
+    return {
+      kind,
+      reviewed_at: stringValue(raw.reviewed_at, "résumé review time"),
+      source_id: stringValue(raw.source_id, "JSON Resume source id"),
+      source_digest: resumeDigest(raw.source_digest, "JSON Resume source digest"),
+      json_pointer: stringValue(raw.json_pointer, "JSON Resume pointer"),
+      value_digest: resumeDigest(raw.value_digest, "JSON Resume value digest"),
+      mapping,
+      upstream_schema_version: "v1.0.0",
     };
   }
   return protocolError("Résumé Rescue provenance kind");
@@ -1356,6 +1421,207 @@ export function normalizeResumeHtmlExport(value: unknown): ResumeHtmlExportResul
   };
 }
 
+export function normalizeOpenedJsonResumeReview(value: unknown): OpenedJsonResumeReview {
+  const response = closedObject(
+    value,
+    ["source_text", "review"],
+    "opened JSON Resume review",
+  );
+  const sourceText = stringValue(response.source_text, "JSON Resume source text");
+  const raw = closedObject(
+    response.review,
+    [
+      "schema_version",
+      "format",
+      "upstream_schema",
+      "source",
+      "display_name_candidate",
+      "candidates",
+      "omissions",
+      "unknown_fields",
+      "warnings",
+      "action_capability",
+      "review_digest",
+    ],
+    "JSON Resume review",
+  );
+  const source = closedObject(
+    raw.source,
+    ["id", "digest", "byte_count"],
+    "JSON Resume source binding",
+  );
+  const sourceByteCount = numberValue(source.byte_count, "JSON Resume source byte count");
+  if (
+    numberValue(raw.schema_version, "JSON Resume review schema") !== 1 ||
+    stringValue(raw.format, "JSON Resume review format") !== "json_resume_v1" ||
+    stringValue(raw.action_capability, "JSON Resume review action") !== "none" ||
+    !Number.isSafeInteger(sourceByteCount) ||
+    sourceByteCount !== new TextEncoder().encode(sourceText).length ||
+    sourceByteCount > 500_000
+  ) {
+    return protocolError("JSON Resume review contract");
+  }
+  const candidates = arrayValue(raw.candidates, "JSON Resume candidates").map((value) => {
+    const candidate = closedObject(
+      value,
+      [
+        "id",
+        "suggested_section",
+        "suggested_text",
+        "mapping",
+        "source_fields",
+        "review_status",
+      ],
+      "JSON Resume candidate",
+    );
+    const reviewStatus = stringValue(candidate.review_status, "JSON Resume review status");
+    if (reviewStatus !== "unreviewed") return protocolError("JSON Resume review status");
+    return {
+      id: stringValue(candidate.id, "JSON Resume candidate id"),
+      suggested_section: resumeSection(candidate.suggested_section),
+      suggested_text: stringValue(candidate.suggested_text, "JSON Resume candidate text"),
+      mapping: allowedString(candidate.mapping, jsonResumeMappings, "JSON Resume mapping"),
+      source_fields: arrayValue(candidate.source_fields, "JSON Resume source fields").map(
+        (value) => {
+          const field = closedObject(
+            value,
+            ["pointer", "value"],
+            "JSON Resume source field",
+          );
+          return {
+            pointer: stringValue(field.pointer, "JSON Resume source pointer"),
+            value: stringValue(field.value, "JSON Resume source value"),
+          };
+        },
+      ),
+      review_status: "unreviewed" as const,
+    };
+  });
+  const omissions = arrayValue(raw.omissions, "JSON Resume omissions").map((value) => {
+    const omission = closedObject(
+      value,
+      ["pointer", "reason", "value_digest"],
+      "JSON Resume omission",
+    );
+    return {
+      pointer: stringValue(omission.pointer, "JSON Resume omission pointer"),
+      reason: stringValue(omission.reason, "JSON Resume omission reason"),
+      value_digest: resumeDigest(omission.value_digest, "JSON Resume omission digest"),
+    };
+  });
+  const review: JsonResumeImportReview = {
+    schema_version: 1,
+    format: "json_resume_v1",
+    upstream_schema: jsonResumeUpstream(raw.upstream_schema),
+    source: {
+      id: stringValue(source.id, "JSON Resume source id"),
+      digest: resumeDigest(source.digest, "JSON Resume source digest"),
+      byte_count: sourceByteCount,
+    },
+    display_name_candidate: stringValue(
+      raw.display_name_candidate,
+      "JSON Resume display name candidate",
+    ),
+    candidates,
+    omissions,
+    unknown_fields: stringArray(raw.unknown_fields, "JSON Resume unknown fields"),
+    warnings: stringArray(raw.warnings, "JSON Resume warnings"),
+    action_capability: "none",
+    review_digest: resumeDigest(raw.review_digest, "JSON Resume review digest"),
+  };
+  return { source_text: sourceText, review };
+}
+
+export function normalizeJsonResumeExport(value: unknown): JsonResumeExport {
+  const response = closedObject(value, ["export"], "JSON Resume export response");
+  const raw = closedObject(
+    response.export,
+    [
+      "schema_version",
+      "format",
+      "upstream_schema",
+      "projection_binding",
+      "profile_binding",
+      "document",
+      "json_text",
+      "document_digest",
+      "interoperability_losses",
+      "warnings",
+      "action_capability",
+    ],
+    "JSON Resume export",
+  );
+  if (
+    numberValue(raw.schema_version, "JSON Resume export schema") !== 1 ||
+    stringValue(raw.format, "JSON Resume export format") !== "json_resume_v1" ||
+    stringValue(raw.action_capability, "JSON Resume export action") !== "none"
+  ) {
+    return protocolError("JSON Resume export contract");
+  }
+  const projectionBinding = closedObject(
+    raw.projection_binding,
+    ["id", "artifact_digest"],
+    "JSON Resume projection binding",
+  );
+  const profileBinding = closedObject(
+    raw.profile_binding,
+    ["id", "version", "digest"],
+    "JSON Resume profile binding",
+  );
+  const document = objectValue(raw.document, "JSON Resume document");
+  const jsonText = stringValue(raw.json_text, "JSON Resume text");
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return protocolError("JSON Resume text");
+  }
+  if (JSON.stringify(parsed) !== JSON.stringify(document)) {
+    return protocolError("JSON Resume document binding");
+  }
+  return {
+    schema_version: 1,
+    format: "json_resume_v1",
+    upstream_schema: jsonResumeUpstream(raw.upstream_schema),
+    projection_binding: {
+      id: stringValue(projectionBinding.id, "JSON Resume projection id"),
+      artifact_digest: resumeDigest(
+        projectionBinding.artifact_digest,
+        "JSON Resume artifact digest",
+      ),
+    },
+    profile_binding: {
+      id: stringValue(profileBinding.id, "JSON Resume profile id"),
+      version: resumePositiveInteger(profileBinding.version, "JSON Resume profile version"),
+      digest: resumeDigest(profileBinding.digest, "JSON Resume profile digest"),
+    },
+    document,
+    json_text: jsonText,
+    document_digest: resumeDigest(raw.document_digest, "JSON Resume document digest"),
+    interoperability_losses: arrayValue(
+      raw.interoperability_losses,
+      "JSON Resume interoperability losses",
+    ).map((value) => {
+      const loss = closedObject(
+        value,
+        ["fact_id", "section", "reason"],
+        "JSON Resume interoperability loss",
+      );
+      return {
+        fact_id: stringValue(loss.fact_id, "JSON Resume loss fact"),
+        section: resumeSection(loss.section),
+        reason: stringValue(loss.reason, "JSON Resume loss reason"),
+      };
+    }),
+    warnings: stringArray(raw.warnings, "JSON Resume export warnings"),
+    action_capability: "none",
+  };
+}
+
+export function normalizeResumeJsonExportResult(value: unknown): ResumeJsonExportResult {
+  return normalizeResumeHtmlExport(value);
+}
+
 function privacySnapshot(raw: JsonRecord, dailyWrap: JsonRecord): PrivacySnapshot {
   return {
     allowed_bundle_ids: stringArray(raw.allowed_bundle_ids, "allowed bundle IDs"),
@@ -1767,6 +2033,33 @@ async function request<T>(command: string, payload: object, normalize: (value: u
   }
 }
 
+async function requestWithoutPayload<T>(
+  command: string,
+  normalize: (value: unknown) => T,
+): Promise<T> {
+  try {
+    return normalize(await invoke<unknown>(command));
+  } catch (error: unknown) {
+    if (error instanceof DesktopApiError) throw error;
+    if (typeof error === "object" && error !== null) {
+      const value = error as Record<string, unknown>;
+      const nested = value.error;
+      if (typeof nested === "object" && nested !== null) {
+        const detail = nested as Record<string, unknown>;
+        throw new DesktopApiError(
+          String(detail.code ?? "desktop_error"),
+          String(detail.message ?? "The local service rejected the request."),
+        );
+      }
+      throw new DesktopApiError(
+        String(value.code ?? "desktop_error"),
+        String(value.message ?? "The local service rejected the request."),
+      );
+    }
+    throw new DesktopApiError("desktop_error", String(error));
+  }
+}
+
 export const desktopApi = {
   snapshot: () =>
     request(
@@ -2123,6 +2416,65 @@ export const desktopApi = {
           result.document_digest !== expectedDocumentDigest
         ) {
           return protocolError("Résumé Rescue HTML export response identity");
+        }
+        return result;
+      },
+    ),
+  openResumeJson: () =>
+    requestWithoutPayload("open_resume_rescue_json", normalizeOpenedJsonResumeReview),
+  admitResumeJson: (
+    sourceText: string,
+    expectedReviewDigest: string,
+    profileId: string,
+    displayName: string,
+    locale: string,
+    selections: JsonResumeSelection[],
+    expectedVersion?: number,
+  ) =>
+    request(
+      "admit_resume_rescue_json",
+      {
+        source_text: sourceText,
+        expected_review_digest: expectedReviewDigest,
+        profile_id: profileId,
+        display_name: displayName,
+        locale,
+        selections,
+        ...(expectedVersion === undefined ? {} : { expected_version: expectedVersion }),
+      },
+      (value) => {
+        const result = normalizeResumeProfileMutation(value);
+        if (result.profile.id !== profileId) {
+          return protocolError("JSON Resume admitted profile identity");
+        }
+        return result;
+      },
+    ),
+  getResumeJsonExport: (projectionId: string, expectedArtifactDigest: string) =>
+    request("get_resume_rescue_json_export", { projection_id: projectionId }, (value) => {
+      const result = normalizeJsonResumeExport(value);
+      if (
+        result.projection_binding.id !== projectionId ||
+        result.projection_binding.artifact_digest !== expectedArtifactDigest
+      ) {
+        return protocolError("JSON Resume export identity");
+      }
+      return result;
+    }),
+  exportResumeJson: (projectionId: string, expectedDocumentDigest: string) =>
+    request(
+      "export_resume_rescue_json",
+      {
+        projection_id: projectionId,
+        expected_document_digest: expectedDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumeJsonExportResult(value);
+        if (
+          result.projection_id !== projectionId ||
+          result.document_digest !== expectedDocumentDigest
+        ) {
+          return protocolError("JSON Resume file export identity");
         }
         return result;
       },

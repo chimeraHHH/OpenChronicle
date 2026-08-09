@@ -38,8 +38,8 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 9
-MAX_REQUEST_BYTES = 64 * 1024
+PROTOCOL_VERSION = 10
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,7 +128,7 @@ def main() -> None:
 
 def _decode_request(payload: bytes) -> dict[str, Any]:
     if len(payload) > MAX_REQUEST_BYTES:
-        raise BridgeError("REQUEST_TOO_LARGE", "The bridge request exceeds 64 KiB.")
+        raise BridgeError("REQUEST_TOO_LARGE", "The bridge request exceeds 2 MiB.")
     if not payload:
         raise BridgeError("INVALID_REQUEST", "A single JSON request is required.")
     try:
@@ -173,6 +173,9 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "resume_rescue.replace_opportunity": _resume_rescue_replace_opportunity,
         "resume_rescue.compose_exact": _resume_rescue_compose_exact,
         "resume_rescue.preview": _resume_rescue_preview,
+        "resume_rescue.review_json": _resume_rescue_review_json,
+        "resume_rescue.admit_json": _resume_rescue_admit_json,
+        "resume_rescue.export_json": _resume_rescue_export_json,
         "provenance.trace": _provenance_trace,
         "evidence.resolve": _evidence_resolve,
         "capture.set_paused": _capture_set_paused,
@@ -504,6 +507,61 @@ def _resume_rescue_preview(params: dict[str, Any]) -> dict[str, Any]:
             _bounded_string(params["projection_id"], 128, nonempty=True)
         )
         return {"preview": preview.to_dict()}
+
+
+def _resume_rescue_review_json(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"source_text"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        review = ResumeRescueService(conn, cfg).review_json_resume(
+            _bounded_string(params["source_text"], 500_000, nonempty=True)
+        )
+        return {"review": review.to_dict()}
+
+
+def _resume_rescue_admit_json(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={
+            "source_text",
+            "expected_review_digest",
+            "profile_id",
+            "display_name",
+            "locale",
+            "selections",
+        },
+        optional={"expected_version"},
+    )
+    raw_expected_version = params.get("expected_version")
+    expected_version = (
+        _bounded_int(raw_expected_version, 0, 2_147_483_647)
+        if raw_expected_version is not None
+        else None
+    )
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        profile, created = ResumeRescueService(conn, cfg).admit_json_resume(
+            source_text=_bounded_string(params["source_text"], 500_000, nonempty=True),
+            expected_review_digest=_bounded_string(
+                params["expected_review_digest"], 64, nonempty=True
+            ),
+            profile_id=_bounded_string(params["profile_id"], 128, nonempty=True),
+            display_name=_bounded_string(params["display_name"], 512, nonempty=True),
+            locale=_bounded_string(params["locale"], 64, nonempty=False),
+            selections=_object_list(params["selections"], 2_000),
+            expected_version=expected_version,
+        )
+        return {"profile": _resume_profile_payload(profile), "created": created}
+
+
+def _resume_rescue_export_json(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"projection_id"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        exported = ResumeRescueService(conn, cfg).export_json_resume(
+            _bounded_string(params["projection_id"], 128, nonempty=True)
+        )
+        return {"export": exported.to_dict()}
 
 
 def _resume_opportunity_params(params: dict[str, Any], *, replacing: bool) -> dict[str, Any]:

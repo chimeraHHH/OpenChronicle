@@ -5,6 +5,8 @@ import type {
   DailyWrapSummary,
   DesktopSnapshot,
   ForgetPreview,
+  JsonResumeExport,
+  OpenedJsonResumeReview,
   PromptRescueJob,
   PromptRescueJobSummary,
   ReplyRescueJob,
@@ -423,6 +425,89 @@ export function resumePreview(): ResumePreview {
     plain_text:
       "Ada Example\n\nEXPERIENCE\n- Reduced API p95 latency by 40% after profiling the query path.\n",
     document_digest: "d".repeat(64),
+    action_capability: "none",
+  };
+}
+
+export function openedJsonResumeReview(): OpenedJsonResumeReview {
+  const source_text = '{"basics":{"name":"Ada Example","summary":"Engineer."}}';
+  return {
+    source_text,
+    review: {
+      schema_version: 1,
+      format: "json_resume_v1",
+      upstream_schema: {
+        version: "v1.0.0",
+        commit: "272929d51b450dbd5a0d242af24c60252904f405",
+        url: "https://raw.githubusercontent.com/jsonresume/jsonresume.org/272929d51b450dbd5a0d242af24c60252904f405/packages/schema/schema.json",
+      },
+      source: {
+        id: "json-resume-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        digest: "e".repeat(64),
+        byte_count: source_text.length,
+      },
+      display_name_candidate: "Ada Example",
+      candidates: [
+        {
+          id: "json-resume-candidate-eeeeeeeeeeee-0001",
+          suggested_section: "summary",
+          suggested_text: "Engineer.",
+          mapping: "exact_field",
+          source_fields: [{ pointer: "/basics/summary", value: "Engineer." }],
+          review_status: "unreviewed",
+        },
+      ],
+      omissions: [
+        {
+          pointer: "/basics/email",
+          reason: "contact_email_not_admitted",
+          value_digest: "f".repeat(64),
+        },
+      ],
+      unknown_fields: [],
+      warnings: ["No candidate enters the master profile until explicitly admitted."],
+      action_capability: "none",
+      review_digest: "a".repeat(64),
+    },
+  };
+}
+
+export function jsonResumeExport(): JsonResumeExport {
+  const projection = resumeProjection();
+  const profile = resumeProfileVersion();
+  const document = {
+    $schema:
+      "https://raw.githubusercontent.com/jsonresume/jsonresume.org/272929d51b450dbd5a0d242af24c60252904f405/packages/schema/schema.json",
+    basics: { name: "Ada Example" },
+  };
+  return {
+    schema_version: 1,
+    format: "json_resume_v1",
+    upstream_schema: {
+      version: "v1.0.0",
+      commit: "272929d51b450dbd5a0d242af24c60252904f405",
+      url: "https://raw.githubusercontent.com/jsonresume/jsonresume.org/272929d51b450dbd5a0d242af24c60252904f405/packages/schema/schema.json",
+    },
+    projection_binding: {
+      id: projection.id,
+      artifact_digest: projection.artifact_digest,
+    },
+    profile_binding: {
+      id: profile.id,
+      version: profile.version,
+      digest: profile.digest,
+    },
+    document,
+    json_text: `${JSON.stringify(document, null, 2)}\n`,
+    document_digest: "9".repeat(64),
+    interoperability_losses: [
+      {
+        fact_id: "fact-api",
+        section: "experience",
+        reason: "no_safe_flat_fact_mapping_in_standard_schema",
+      },
+    ],
+    warnings: ["Review the interoperability loss ledger before export."],
     action_capability: "none",
   };
 }

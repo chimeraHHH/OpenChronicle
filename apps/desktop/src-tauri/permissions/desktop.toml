@@ -12,6 +12,7 @@ permissions = [
   "allow-get-reply-rescue",
   "allow-get-resume-rescue-state",
   "allow-get-resume-rescue-preview",
+  "allow-get-resume-rescue-json-export",
 ]
 
 [[set]]
@@ -37,4 +38,7 @@ permissions = [
   "allow-replace-resume-rescue-opportunity",
   "allow-compose-resume-rescue-exact",
   "allow-export-resume-rescue-html",
+  "allow-open-resume-rescue-json",
+  "allow-admit-resume-rescue-json",
+  "allow-export-resume-rescue-json",
 ]

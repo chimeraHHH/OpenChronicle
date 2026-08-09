@@ -26,7 +26,9 @@ import {
   bridgeWrapGet,
   candidateDetail,
   forgetPreview,
+  jsonResumeExport,
   maliciousText,
+  openedJsonResumeReview,
   provenanceTrace,
   promptRescueJob,
   replyRescueJob,
@@ -44,8 +46,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks deterministic Résumé Rescue preview as bridge protocol v9", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(9);
+  it("tracks reviewed JSON Resume interoperability as bridge protocol v10", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(10);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -278,6 +280,119 @@ describe("desktop bridge adapters", () => {
     });
     await expect(
       desktopApi.getResumePreview(projection.id, projection.artifact_digest),
+    ).rejects.toMatchObject({ code: "BRIDGE_PROTOCOL_ERROR" });
+  });
+
+  it("reviews JSON Resume before admission and previews losses before native export", async () => {
+    const opened = openedJsonResumeReview();
+    tauri.invoke.mockResolvedValueOnce(opened);
+
+    const review = await desktopApi.openResumeJson();
+
+    expect(review.review.candidates[0]).toMatchObject({
+      suggested_text: "Engineer.",
+      review_status: "unreviewed",
+    });
+    expect(tauri.invoke).toHaveBeenLastCalledWith("open_resume_rescue_json");
+
+    const profile = resumeProfileVersion();
+    const admittedProfile = {
+      ...profile,
+      profile: {
+        ...profile.profile,
+        facts: [
+          {
+            id: "fact-json-summary",
+            section: "summary",
+            text: "Engineer.",
+            confidentiality: "public",
+            ownership_scope: "individual",
+            provenance: [
+              {
+                kind: "json_resume_field",
+                reviewed_at: "2026-08-09T12:00:00.000000+00:00",
+                source_id: opened.review.source.id,
+                source_digest: opened.review.source.digest,
+                json_pointer: "/basics/summary",
+                value_digest: "7".repeat(64),
+                mapping: "exact_field",
+                upstream_schema_version: "v1.0.0",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    tauri.invoke.mockResolvedValueOnce({ profile: admittedProfile, created: true });
+    const selection = {
+      candidate_id: opened.review.candidates[0]!.id,
+      fact_id: "fact-json-summary",
+      section: "summary" as const,
+      confidentiality: "public" as const,
+      ownership_scope: "individual" as const,
+    };
+    const admitted = await desktopApi.admitResumeJson(
+      opened.source_text,
+      opened.review.review_digest,
+      profile.id,
+      profile.profile.display_name,
+      profile.profile.locale,
+      [selection],
+      profile.version,
+    );
+    expect(admitted.profile.profile.facts[0]?.provenance[0]?.kind).toBe(
+      "json_resume_field",
+    );
+    expect(tauri.invoke).toHaveBeenLastCalledWith("admit_resume_rescue_json", {
+      request: {
+        source_text: opened.source_text,
+        expected_review_digest: opened.review.review_digest,
+        profile_id: profile.id,
+        display_name: profile.profile.display_name,
+        locale: profile.profile.locale,
+        selections: [selection],
+        expected_version: profile.version,
+      },
+    });
+
+    const exported = jsonResumeExport();
+    tauri.invoke.mockResolvedValueOnce({ export: exported });
+    const preview = await desktopApi.getResumeJsonExport(
+      exported.projection_binding.id,
+      exported.projection_binding.artifact_digest,
+    );
+    expect(preview.interoperability_losses).toHaveLength(1);
+    expect(preview.action_capability).toBe("none");
+
+    tauri.invoke.mockResolvedValueOnce({
+      schema_version: 1,
+      projection_id: exported.projection_binding.id,
+      document_digest: exported.document_digest,
+      file_name: "resume-projection-1.json",
+      byte_count: exported.json_text.length,
+      created: true,
+      action_capability: "none",
+    });
+    const saved = await desktopApi.exportResumeJson(
+      exported.projection_binding.id,
+      exported.document_digest,
+    );
+    expect(saved.file_name).toBe("resume-projection-1.json");
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_json", {
+      request: {
+        projection_id: exported.projection_binding.id,
+        expected_document_digest: exported.document_digest,
+      },
+    });
+
+    tauri.invoke.mockResolvedValueOnce({
+      export: { ...exported, action_capability: "upload" },
+    });
+    await expect(
+      desktopApi.getResumeJsonExport(
+        exported.projection_binding.id,
+        exported.projection_binding.artifact_digest,
+      ),
     ).rejects.toMatchObject({ code: "BRIDGE_PROTOCOL_ERROR" });
   });
 

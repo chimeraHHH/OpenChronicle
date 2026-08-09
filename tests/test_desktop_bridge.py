@@ -992,6 +992,136 @@ def test_resume_rescue_bridge_composes_exact_review_artifact_and_invalidates_sta
     assert stale["error"]["code"] == "VERSION_CONFLICT"
 
 
+def test_resume_rescue_bridge_reviews_admits_and_exports_json_resume(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.resume_rescue.enabled = True
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    source = json.dumps(
+        {
+            "basics": {"name": "Ada Example", "summary": "Reliability engineer."},
+            "skills": [{"name": "Python", "keywords": ["SQLite"]}],
+        }
+    )
+
+    reviewed, reviewed_code = _request("resume_rescue.review_json", {"source_text": source})
+    assert reviewed_code == 0
+    review = reviewed["result"]["review"]
+    assert review["format"] == "json_resume_v1"
+    assert review["action_capability"] == "none"
+    assert review["display_name_candidate"] == "Ada Example"
+    assert len(review["review_digest"]) == 64
+    assert all(candidate["review_status"] == "unreviewed" for candidate in review["candidates"])
+    selections = [
+        {
+            "candidate_id": candidate["id"],
+            "fact_id": f"json-fact-{index}",
+            "section": candidate["suggested_section"],
+            "confidentiality": "public",
+            "ownership_scope": "individual",
+        }
+        for index, candidate in enumerate(review["candidates"])
+    ]
+    admitted, admitted_code = _request(
+        "resume_rescue.admit_json",
+        {
+            "source_text": source,
+            "expected_review_digest": review["review_digest"],
+            "profile_id": "json-profile",
+            "display_name": review["display_name_candidate"],
+            "locale": "en-US",
+            "selections": selections,
+        },
+    )
+    assert admitted_code == 0
+    profile = admitted["result"]["profile"]
+    assert admitted["result"]["created"] is True
+    assert len(profile["profile"]["facts"]) == len(selections)
+    assert all(
+        fact["provenance"][0]["kind"] == "json_resume_field" for fact in profile["profile"]["facts"]
+    )
+
+    stale, stale_code = _request(
+        "resume_rescue.admit_json",
+        {
+            "source_text": source.replace("Reliability", "Changed"),
+            "expected_review_digest": review["review_digest"],
+            "profile_id": profile["id"],
+            "display_name": profile["profile"]["display_name"],
+            "locale": profile["profile"]["locale"],
+            "selections": [],
+            "expected_version": profile["version"],
+        },
+    )
+    assert stale_code == 2
+    assert stale["error"]["code"] == "VERSION_CONFLICT"
+
+    opportunity, opportunity_code = _request(
+        "resume_rescue.save_opportunity",
+        {
+            "employer": "Example Labs",
+            "title": "Engineer",
+            "source_text": "Build reliable services.",
+            "source_url": "",
+            "priorities": [],
+            "locale": "en-US",
+        },
+    )
+    assert opportunity_code == 0
+    facts = profile["profile"]["facts"]
+    sections = [
+        {
+            "kind": section,
+            "fact_ids": [fact["id"] for fact in facts if fact["section"] == section],
+        }
+        for section in dict.fromkeys(fact["section"] for fact in facts)
+    ]
+    composed, composed_code = _request(
+        "resume_rescue.compose_exact",
+        {
+            "profile_id": profile["id"],
+            "opportunity_id": opportunity["result"]["opportunity"]["id"],
+            "sections": sections,
+            "requirements": [],
+        },
+    )
+    assert composed_code == 0
+    exported, exported_code = _request(
+        "resume_rescue.export_json",
+        {"projection_id": composed["result"]["projection"]["id"]},
+    )
+    assert exported_code == 0
+    export = exported["result"]["export"]
+    assert export["format"] == "json_resume_v1"
+    assert export["action_capability"] == "none"
+    assert json.loads(export["json_text"]) == export["document"]
+    assert len(export["document_digest"]) == 64
+
+
+def test_resume_rescue_json_bridge_supports_declared_source_size(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.resume_rescue.enabled = True
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    source = json.dumps(
+        {
+            "basics": {"name": "Ada", "summary": "Reviewed."},
+            "largeExtensionA": "a" * 40_000,
+            "largeExtensionB": "b" * 40_000,
+        }
+    )
+    assert len(source.encode()) > 64 * 1024
+
+    response, exit_code = _request("resume_rescue.review_json", {"source_text": source})
+
+    assert exit_code == 0
+    assert response["result"]["review"]["source"]["byte_count"] == len(source.encode())
+
+
 def test_resume_rescue_bridge_is_disabled_and_closed_by_default(
     ac_root: Path,
     monkeypatch: pytest.MonkeyPatch,

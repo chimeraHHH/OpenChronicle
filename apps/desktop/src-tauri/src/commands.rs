@@ -3,9 +3,10 @@ use crate::error::DesktopError;
 use rfd::{FileDialog, MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::OpenOptions;
-use std::io::{ErrorKind, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::Path;
 use tauri::{AppHandle, Manager};
 
@@ -40,6 +41,8 @@ const MAX_RESUME_FACT_TEXT_CHARS: usize = 8_000;
 const MAX_RESUME_OPPORTUNITY_CHARS: usize = 50_000;
 const MAX_RESUME_REQUIREMENT_CHARS: usize = 5_000;
 const MAX_RESUME_PRIORITY_CHARS: usize = 2_000;
+const MAX_JSON_RESUME_SOURCE_BYTES: usize = 500_000;
+const MAX_JSON_RESUME_CANDIDATES: usize = 2_000;
 const MAX_PROVENANCE_DEPTH: u8 = 8;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -246,6 +249,15 @@ pub(crate) enum ResumeProvenanceRequest {
         memory_path: String,
         memory_digest: String,
     },
+    JsonResumeField {
+        reviewed_at: String,
+        source_id: String,
+        source_digest: String,
+        json_pointer: String,
+        value_digest: String,
+        mapping: String,
+        upstream_schema_version: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -344,6 +356,36 @@ pub(crate) struct ResumeExportHtmlRequest {
     pub expected_document_digest: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeJsonSelectionRequest {
+    pub candidate_id: String,
+    pub fact_id: String,
+    pub section: String,
+    pub confidentiality: String,
+    pub ownership_scope: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeAdmitJsonRequest {
+    pub source_text: String,
+    pub expected_review_digest: String,
+    pub profile_id: String,
+    pub display_name: String,
+    pub locale: String,
+    pub selections: Vec<ResumeJsonSelectionRequest>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeExportJsonRequest {
+    pub projection_id: String,
+    pub expected_document_digest: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ForgetPreview {
     candidate_id: String,
@@ -378,6 +420,81 @@ struct ResumePreviewPayload {
     plain_text: String,
     document_digest: String,
     action_capability: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonResumeUpstreamSchema {
+    version: String,
+    commit: String,
+    url: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonResumeSourceBinding {
+    id: String,
+    digest: String,
+    byte_count: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct JsonResumeImportReview {
+    schema_version: u64,
+    format: String,
+    upstream_schema: JsonResumeUpstreamSchema,
+    source: JsonResumeSourceBinding,
+    display_name_candidate: String,
+    candidates: Vec<Value>,
+    omissions: Vec<Value>,
+    unknown_fields: Vec<String>,
+    warnings: Vec<String>,
+    action_capability: String,
+    review_digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JsonResumeReviewResponse {
+    review: JsonResumeImportReview,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JsonResumeProjectionBinding {
+    id: String,
+    artifact_digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JsonResumeProfileBinding {
+    id: String,
+    version: u64,
+    digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JsonResumeExportPayload {
+    schema_version: u64,
+    format: String,
+    upstream_schema: JsonResumeUpstreamSchema,
+    projection_binding: JsonResumeProjectionBinding,
+    profile_binding: JsonResumeProfileBinding,
+    document: Value,
+    json_text: String,
+    document_digest: String,
+    interoperability_losses: Vec<Value>,
+    warnings: Vec<String>,
+    action_capability: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JsonResumeExportResponse {
+    export: JsonResumeExportPayload,
 }
 
 #[tauri::command]
@@ -631,6 +748,51 @@ pub async fn export_resume_rescue_html(
 }
 
 #[tauri::command]
+pub async fn open_resume_rescue_json(app: AppHandle) -> Result<Value, DesktopError> {
+    tauri::async_runtime::spawn_blocking(move || open_resume_json_blocking(&app))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The JSON Resume review worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
+pub async fn admit_resume_rescue_json(
+    request: ResumeAdmitJsonRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_json_admission(&request)?;
+    invoke(Operation::ResumeRescueAdmitJson, &request).await
+}
+
+#[tauri::command]
+pub async fn get_resume_rescue_json_export(
+    request: ResumePreviewRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.projection_id)?;
+    invoke(Operation::ResumeRescueExportJson, &request).await
+}
+
+#[tauri::command]
+pub async fn export_resume_rescue_json(
+    app: AppHandle,
+    request: ResumeExportJsonRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.projection_id)?;
+    validate_resume_digest(&request.expected_document_digest)?;
+    tauri::async_runtime::spawn_blocking(move || export_resume_json_blocking(&app, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The JSON Resume export worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
 pub async fn trace_provenance(request: TraceProvenanceRequest) -> Result<Value, DesktopError> {
     validate_kind(&request.kind)?;
     validate_reference_id(&request.artifact_id)?;
@@ -865,6 +1027,88 @@ fn export_resume_html_blocking(
     }))
 }
 
+fn open_resume_json_blocking(app: &AppHandle) -> Result<Value, DesktopError> {
+    let mut dialog = FileDialog::new()
+        .add_filter("JSON Resume", &["json"])
+        .set_title("Review a JSON Resume file");
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let path = dialog
+        .pick_file()
+        .ok_or_else(|| DesktopError::new("USER_CANCELLED", "JSON Resume import was cancelled."))?;
+    let source_text = read_json_resume_source(&path)?;
+    let params = serde_json::json!({"source_text": source_text});
+    let value = bridge::call_blocking(Operation::ResumeRescueReviewJson, params)?;
+    let response: JsonResumeReviewResponse = serde_json::from_value(value).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid JSON Resume review.",
+        )
+    })?;
+    validate_json_resume_review(&response.review, &source_text)?;
+    Ok(serde_json::json!({
+        "source_text": source_text,
+        "review": response.review,
+    }))
+}
+
+fn export_resume_json_blocking(
+    app: &AppHandle,
+    request: ResumeExportJsonRequest,
+) -> Result<Value, DesktopError> {
+    let params = serde_json::json!({"projection_id": request.projection_id});
+    let value = bridge::call_blocking(Operation::ResumeRescueExportJson, params)?;
+    let response: JsonResumeExportResponse = serde_json::from_value(value).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid JSON Resume export.",
+        )
+    })?;
+    validate_json_resume_export(&response.export, &request)?;
+
+    let default_name = format!(
+        "resume-{}.json",
+        request
+            .projection_id
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+    );
+    let mut dialog = FileDialog::new()
+        .add_filter("JSON Resume", &["json"])
+        .set_can_create_directories(true)
+        .set_file_name(default_name)
+        .set_title("Export a new JSON Resume file");
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let path = dialog
+        .save_file()
+        .ok_or_else(|| DesktopError::new("USER_CANCELLED", "JSON Resume export was cancelled."))?;
+    validate_resume_json_path(&path)?;
+    write_new_json_resume_export(&path, response.export.json_text.as_bytes())?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("resume.json");
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "projection_id": request.projection_id,
+        "document_digest": response.export.document_digest,
+        "file_name": file_name,
+        "byte_count": response.export.json_text.len(),
+        "created": true,
+        "action_capability": "none",
+    }))
+}
+
 fn validate_resume_preview_for_export(
     preview: &ResumePreviewPayload,
     request: &ResumeExportHtmlRequest,
@@ -945,6 +1189,266 @@ fn write_new_resume_export(path: &Path, content: &[u8]) -> Result<(), DesktopErr
         ));
     }
     Ok(())
+}
+
+fn read_json_resume_source(path: &Path) -> Result<String, DesktopError> {
+    validate_resume_json_path(path).map_err(|_| {
+        DesktopError::new(
+            "INVALID_IMPORT_PATH",
+            "JSON Resume imports require a .json file.",
+        )
+    })?;
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(not(unix))]
+    if std::fs::symlink_metadata(path).is_err_or(|metadata| metadata.file_type().is_symlink()) {
+        return Err(DesktopError::new(
+            "INVALID_IMPORT_PATH",
+            "The selected JSON Resume source is not a regular file.",
+        ));
+    }
+    let file = options.open(path).map_err(|_| {
+        DesktopError::new(
+            "IMPORT_FAILED",
+            "The selected JSON Resume source could not be opened.",
+        )
+    })?;
+    let metadata = file.metadata().map_err(|_| {
+        DesktopError::new(
+            "IMPORT_FAILED",
+            "The selected JSON Resume source could not be inspected.",
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(DesktopError::new(
+            "INVALID_IMPORT_PATH",
+            "The selected JSON Resume source is not a regular file.",
+        ));
+    }
+    if metadata.len() > MAX_JSON_RESUME_SOURCE_BYTES as u64 {
+        return Err(DesktopError::new(
+            "IMPORT_TOO_LARGE",
+            "The selected JSON Resume source exceeds 500 KB.",
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take((MAX_JSON_RESUME_SOURCE_BYTES + 1) as u64)
+        .read_to_end(&mut bytes)
+        .map_err(|_| {
+            DesktopError::new(
+                "IMPORT_FAILED",
+                "The selected JSON Resume source could not be read completely.",
+            )
+        })?;
+    if bytes.len() > MAX_JSON_RESUME_SOURCE_BYTES {
+        return Err(DesktopError::new(
+            "IMPORT_TOO_LARGE",
+            "The selected JSON Resume source exceeds 500 KB.",
+        ));
+    }
+    let source = String::from_utf8(bytes).map_err(|_| {
+        DesktopError::new(
+            "IMPORT_INVALID",
+            "The selected JSON Resume source is not valid UTF-8.",
+        )
+    })?;
+    validate_json_resume_source_text(&source)?;
+    Ok(source)
+}
+
+fn validate_resume_json_path(path: &Path) -> Result<(), DesktopError> {
+    if !path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("json"))
+    {
+        return Err(DesktopError::new(
+            "INVALID_EXPORT_PATH",
+            "JSON Resume files require a .json file name.",
+        ));
+    }
+    Ok(())
+}
+
+fn write_new_json_resume_export(path: &Path, content: &[u8]) -> Result<(), DesktopError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            DesktopError::new(
+                "EXPORT_EXISTS",
+                "The selected export path already exists; choose a new file name.",
+            )
+        } else {
+            DesktopError::new(
+                "EXPORT_FAILED",
+                "The JSON Resume file could not be created.",
+            )
+        }
+    })?;
+    if file
+        .write_all(content)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(DesktopError::new(
+            "EXPORT_FAILED",
+            "The JSON Resume file could not be written completely.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_resume_json_admission(request: &ResumeAdmitJsonRequest) -> Result<(), DesktopError> {
+    validate_json_resume_source_text(&request.source_text)?;
+    validate_resume_digest(&request.expected_review_digest)?;
+    validate_resume_identifier(&request.profile_id)?;
+    validate_multiline_text(&request.display_name, 512, false)?;
+    validate_bounded_text(&request.locale, 64, true)?;
+    if request
+        .expected_version
+        .is_some_and(|version| version > 2_147_483_647)
+        || request.selections.len() > MAX_JSON_RESUME_CANDIDATES
+    {
+        return Err(DesktopError::invalid_request(
+            "The JSON Resume admission is too large or has an invalid version.",
+        ));
+    }
+    let mut candidates = HashSet::new();
+    let mut facts = HashSet::new();
+    for selection in &request.selections {
+        validate_resume_identifier(&selection.candidate_id)?;
+        validate_resume_identifier(&selection.fact_id)?;
+        if !candidates.insert(selection.candidate_id.as_str())
+            || !facts.insert(selection.fact_id.as_str())
+            || !valid_resume_section(&selection.section)
+            || !matches!(
+                selection.confidentiality.as_str(),
+                "public" | "private" | "confidential"
+            )
+            || !matches!(
+                selection.ownership_scope.as_str(),
+                "individual" | "shared" | "organization" | "unspecified"
+            )
+        {
+            return Err(DesktopError::invalid_request(
+                "A JSON Resume selection is invalid.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_json_resume_source_text(source_text: &str) -> Result<(), DesktopError> {
+    let bytes = source_text.as_bytes();
+    if bytes.len() < 2 || bytes.len() > MAX_JSON_RESUME_SOURCE_BYTES || source_text.contains('\0') {
+        return Err(DesktopError::invalid_request(
+            "The JSON Resume source is empty, too large, or invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_json_resume_review(
+    review: &JsonResumeImportReview,
+    source_text: &str,
+) -> Result<(), DesktopError> {
+    validate_json_resume_upstream(&review.upstream_schema)?;
+    let source_digest = sha256_hex(source_text.as_bytes());
+    let expected_source_id = format!("json-resume-{}", &source_digest[..32]);
+    if review.schema_version != 1
+        || review.format != "json_resume_v1"
+        || review.action_capability != "none"
+        || review.source.id != expected_source_id
+        || !constant_time_equal(review.source.digest.as_bytes(), source_digest.as_bytes())
+        || review.source.byte_count != source_text.len() as u64
+        || review.candidates.len() > MAX_JSON_RESUME_CANDIDATES
+        || review.omissions.len() > MAX_JSON_RESUME_CANDIDATES
+        || review.unknown_fields.len() > MAX_JSON_RESUME_CANDIDATES
+        || review.warnings.len() > 100
+        || review.candidates.iter().any(|item| !item.is_object())
+        || review.omissions.iter().any(|item| !item.is_object())
+        || review.display_name_candidate.chars().count() > 512
+        || validate_resume_digest(&review.review_digest).is_err()
+    {
+        return Err(DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid JSON Resume review.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_json_resume_export(
+    export: &JsonResumeExportPayload,
+    request: &ResumeExportJsonRequest,
+) -> Result<(), DesktopError> {
+    validate_json_resume_upstream(&export.upstream_schema)?;
+    let parsed: Value = serde_json::from_str(&export.json_text).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned malformed JSON Resume content.",
+        )
+    })?;
+    let digest = sha256_hex(export.json_text.as_bytes());
+    if export.schema_version != 1
+        || export.format != "json_resume_v1"
+        || export.action_capability != "none"
+        || export.projection_binding.id != request.projection_id
+        || export.profile_binding.version == 0
+        || parsed != export.document
+        || !export.document.is_object()
+        || !constant_time_equal(
+            export.document_digest.as_bytes(),
+            request.expected_document_digest.as_bytes(),
+        )
+        || !constant_time_equal(export.document_digest.as_bytes(), digest.as_bytes())
+        || validate_resume_digest(&export.projection_binding.artifact_digest).is_err()
+        || validate_resume_identifier(&export.profile_binding.id).is_err()
+        || validate_resume_digest(&export.profile_binding.digest).is_err()
+        || export.interoperability_losses.len() > MAX_RESUME_FACTS
+        || export
+            .interoperability_losses
+            .iter()
+            .any(|item| !item.is_object())
+        || export.warnings.len() > 100
+    {
+        return Err(DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid JSON Resume export.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_json_resume_upstream(value: &JsonResumeUpstreamSchema) -> Result<(), DesktopError> {
+    if value.version != "v1.0.0"
+        || value.commit != "272929d51b450dbd5a0d242af24c60252904f405"
+        || value.url
+            != "https://raw.githubusercontent.com/jsonresume/jsonresume.org/272929d51b450dbd5a0d242af24c60252904f405/packages/schema/schema.json"
+    {
+        return Err(DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an unsupported JSON Resume schema binding.",
+        ));
+    }
+    Ok(())
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
 }
 
 fn checked_value<T: Serialize + ?Sized>(request: &T) -> Result<Value, DesktopError> {
@@ -1253,6 +1757,31 @@ fn validate_resume_provenance(source: &ResumeProvenanceRequest) -> Result<(), De
             validate_resume_identifier(memory_id)?;
             validate_multiline_text(memory_path, 1_024, false)?;
             validate_resume_digest(memory_digest)
+        }
+        ResumeProvenanceRequest::JsonResumeField {
+            reviewed_at,
+            source_id,
+            source_digest,
+            json_pointer,
+            value_digest,
+            mapping,
+            upstream_schema_version,
+        } => {
+            validate_bounded_text(reviewed_at, 100, false)?;
+            validate_resume_identifier(source_id)?;
+            validate_resume_digest(source_digest)?;
+            validate_multiline_text(json_pointer, 1_024, false)?;
+            validate_resume_digest(value_digest)?;
+            if !matches!(
+                mapping.as_str(),
+                "exact_field" | "deterministic_composite" | "openchronicle_extension_exact"
+            ) || upstream_schema_version != "v1.0.0"
+            {
+                return Err(DesktopError::invalid_request(
+                    "A JSON Resume provenance binding is invalid.",
+                ));
+            }
+            Ok(())
         }
     }
 }
@@ -1752,6 +2281,174 @@ mod tests {
     }
 
     #[test]
+    fn json_resume_native_reader_rejects_wrong_paths_links_and_oversize_files() {
+        let directory = tempfile::tempdir().expect("temporary import directory");
+        let source = directory.path().join("reviewed.json");
+        std::fs::write(&source, b"{\"basics\":{\"name\":\"Ada\"}}").expect("write source fixture");
+        assert_eq!(
+            read_json_resume_source(&source).expect("read reviewed source"),
+            "{\"basics\":{\"name\":\"Ada\"}}"
+        );
+        let wrong_extension = directory.path().join("reviewed.txt");
+        std::fs::write(&wrong_extension, b"{}").expect("write extension fixture");
+        assert_eq!(
+            read_json_resume_source(&wrong_extension)
+                .expect_err("wrong extension must fail")
+                .code,
+            "INVALID_IMPORT_PATH"
+        );
+        let oversized = directory.path().join("oversized.json");
+        std::fs::write(&oversized, vec![b'x'; MAX_JSON_RESUME_SOURCE_BYTES + 1])
+            .expect("write oversized fixture");
+        assert_eq!(
+            read_json_resume_source(&oversized)
+                .expect_err("oversized source must fail")
+                .code,
+            "IMPORT_TOO_LARGE"
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let link = directory.path().join("linked.json");
+            symlink(&source, &link).expect("create source link");
+            assert!(read_json_resume_source(&link).is_err());
+        }
+    }
+
+    #[test]
+    fn json_resume_review_is_bound_to_native_source_digest() {
+        let source = "{\"basics\":{\"name\":\"Ada\"}}";
+        let digest = sha256_hex(source.as_bytes());
+        let review = JsonResumeImportReview {
+            schema_version: 1,
+            format: "json_resume_v1".to_owned(),
+            upstream_schema: json_resume_upstream_fixture(),
+            source: JsonResumeSourceBinding {
+                id: format!("json-resume-{}", &digest[..32]),
+                digest,
+                byte_count: source.len() as u64,
+            },
+            display_name_candidate: "Ada".to_owned(),
+            candidates: vec![serde_json::json!({"id": "candidate-1"})],
+            omissions: vec![],
+            unknown_fields: vec![],
+            warnings: vec![],
+            action_capability: "none".to_owned(),
+            review_digest: "a".repeat(64),
+        };
+        assert!(validate_json_resume_review(&review, source).is_ok());
+        assert_eq!(
+            validate_json_resume_review(&review, "{\"basics\":{}}")
+                .expect_err("changed source must fail")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+    }
+
+    #[test]
+    fn json_resume_admission_rejects_duplicate_or_unbounded_selection() {
+        let selection = ResumeJsonSelectionRequest {
+            candidate_id: "candidate-1".to_owned(),
+            fact_id: "fact-1".to_owned(),
+            section: "summary".to_owned(),
+            confidentiality: "public".to_owned(),
+            ownership_scope: "individual".to_owned(),
+        };
+        let valid = ResumeAdmitJsonRequest {
+            source_text: "{}".to_owned(),
+            expected_review_digest: "a".repeat(64),
+            profile_id: "profile-1".to_owned(),
+            display_name: "Ada".to_owned(),
+            locale: "en-US".to_owned(),
+            selections: vec![selection],
+            expected_version: Some(1),
+        };
+        assert!(validate_resume_json_admission(&valid).is_ok());
+        let duplicated = ResumeAdmitJsonRequest {
+            selections: vec![
+                ResumeJsonSelectionRequest {
+                    candidate_id: "candidate-1".to_owned(),
+                    fact_id: "fact-1".to_owned(),
+                    section: "summary".to_owned(),
+                    confidentiality: "public".to_owned(),
+                    ownership_scope: "individual".to_owned(),
+                },
+                ResumeJsonSelectionRequest {
+                    candidate_id: "candidate-1".to_owned(),
+                    fact_id: "fact-2".to_owned(),
+                    section: "skill".to_owned(),
+                    confidentiality: "public".to_owned(),
+                    ownership_scope: "individual".to_owned(),
+                },
+            ],
+            ..valid
+        };
+        assert!(validate_resume_json_admission(&duplicated).is_err());
+    }
+
+    #[test]
+    fn json_resume_export_recomputes_digest_and_creates_private_file() {
+        let json_text = "{\n  \"basics\": {\n    \"name\": \"Ada\"\n  }\n}\n";
+        let digest = sha256_hex(json_text.as_bytes());
+        let request = ResumeExportJsonRequest {
+            projection_id: "projection-1".to_owned(),
+            expected_document_digest: digest.clone(),
+        };
+        let export = JsonResumeExportPayload {
+            schema_version: 1,
+            format: "json_resume_v1".to_owned(),
+            upstream_schema: json_resume_upstream_fixture(),
+            projection_binding: JsonResumeProjectionBinding {
+                id: request.projection_id.clone(),
+                artifact_digest: "b".repeat(64),
+            },
+            profile_binding: JsonResumeProfileBinding {
+                id: "profile-1".to_owned(),
+                version: 1,
+                digest: "c".repeat(64),
+            },
+            document: serde_json::json!({"basics": {"name": "Ada"}}),
+            json_text: json_text.to_owned(),
+            document_digest: digest,
+            interoperability_losses: vec![],
+            warnings: vec!["Review before sharing.".to_owned()],
+            action_capability: "none".to_owned(),
+        };
+        assert!(validate_json_resume_export(&export, &request).is_ok());
+
+        let directory = tempfile::tempdir().expect("temporary export directory");
+        let path = directory.path().join("resume.json");
+        write_new_json_resume_export(&path, json_text.as_bytes()).expect("new JSON export");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read export"),
+            json_text
+        );
+        assert_eq!(
+            write_new_json_resume_export(&path, b"{}")
+                .expect_err("existing file must not be overwritten")
+                .code,
+            "EXPORT_EXISTS"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(&path).expect("export metadata").mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    fn json_resume_upstream_fixture() -> JsonResumeUpstreamSchema {
+        JsonResumeUpstreamSchema {
+            version: "v1.0.0".to_owned(),
+            commit: "272929d51b450dbd5a0d242af24c60252904f405".to_owned(),
+            url: "https://raw.githubusercontent.com/jsonresume/jsonresume.org/272929d51b450dbd5a0d242af24c60252904f405/packages/schema/schema.json".to_owned(),
+        }
+    }
+
+    #[test]
     fn candidate_edit_is_bounded() {
         let request = EditCandidateRequest {
             candidate_id: "mc-1".to_owned(),
@@ -1834,7 +2531,7 @@ mod tests {
 
     #[test]
     fn request_size_is_measured_as_utf8_json() {
-        let request = serde_json::json!({"content": "界".repeat(30_000)});
+        let request = serde_json::json!({"content": "界".repeat(700_000)});
         assert_eq!(
             checked_value(&request)
                 .expect_err("UTF-8 request must exceed limit")

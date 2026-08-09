@@ -10,9 +10,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 9 adds deterministic Résumé Rescue HTML
-// preview without adding upload, application, submission, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 9 as const;
+// WebView result projection. Version 10 adds reviewed JSON Resume interoperability
+// without adding upload, application, submission, or send capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 10 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -190,6 +190,16 @@ export type ResumeProvenance =
       memory_id: string;
       memory_path: string;
       memory_digest: string;
+    }
+  | {
+      kind: "json_resume_field";
+      reviewed_at: string;
+      source_id: string;
+      source_digest: string;
+      json_pointer: string;
+      value_digest: string;
+      mapping: "exact_field" | "deterministic_composite" | "openchronicle_extension_exact";
+      upstream_schema_version: "v1.0.0";
     };
 
 export interface ResumeFact {
@@ -337,6 +347,74 @@ export interface ResumeHtmlExportResult {
   created: true;
   action_capability: "none";
 }
+
+export interface JsonResumeUpstreamSchema {
+  version: "v1.0.0";
+  commit: "272929d51b450dbd5a0d242af24c60252904f405";
+  url: string;
+}
+
+export interface JsonResumeImportCandidate {
+  id: string;
+  suggested_section: ResumeSectionKind;
+  suggested_text: string;
+  mapping: "exact_field" | "deterministic_composite" | "openchronicle_extension_exact";
+  source_fields: Array<{ pointer: string; value: string }>;
+  review_status: "unreviewed";
+}
+
+export interface JsonResumeImportOmission {
+  pointer: string;
+  reason: string;
+  value_digest: string;
+}
+
+export interface JsonResumeImportReview {
+  schema_version: 1;
+  format: "json_resume_v1";
+  upstream_schema: JsonResumeUpstreamSchema;
+  source: { id: string; digest: string; byte_count: number };
+  display_name_candidate: string;
+  candidates: JsonResumeImportCandidate[];
+  omissions: JsonResumeImportOmission[];
+  unknown_fields: string[];
+  warnings: string[];
+  action_capability: "none";
+  review_digest: string;
+}
+
+export interface OpenedJsonResumeReview {
+  source_text: string;
+  review: JsonResumeImportReview;
+}
+
+export interface JsonResumeSelection {
+  candidate_id: string;
+  fact_id: string;
+  section: ResumeSectionKind;
+  confidentiality: ResumeConfidentiality;
+  ownership_scope: ResumeOwnership;
+}
+
+export interface JsonResumeExport {
+  schema_version: 1;
+  format: "json_resume_v1";
+  upstream_schema: JsonResumeUpstreamSchema;
+  projection_binding: { id: string; artifact_digest: string };
+  profile_binding: { id: string; version: number; digest: string };
+  document: Record<string, unknown>;
+  json_text: string;
+  document_digest: string;
+  interoperability_losses: Array<{
+    fact_id: string;
+    section: ResumeSectionKind;
+    reason: string;
+  }>;
+  warnings: string[];
+  action_capability: "none";
+}
+
+export type ResumeJsonExportResult = ResumeHtmlExportResult;
 
 export type SuggestionStatus =
   | "ready"
