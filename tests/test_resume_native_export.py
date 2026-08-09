@@ -150,6 +150,9 @@ def test_docx_export_zip_is_canonical_and_contains_no_active_or_external_content
             package.read(info).decode("utf-8") for info in infos if info.filename.endswith(".rels")
         )
         assert 'TargetMode="External"' not in relationship_text
+        numbering = package.read("word/numbering.xml").decode("utf-8")
+        assert "•" in numbering
+        assert "\uf0b7" not in numbering
 
 
 def test_docx_export_rejects_invalid_preview_binding(ac_root: Path) -> None:

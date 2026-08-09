@@ -13,3 +13,16 @@ LibreOffice-to-PDF text/render inspection on the supported development host.
 
 Generated artifacts belong under ignored temporary directories. No private
 résumé or installed-font file enters Git history.
+
+Run the pinned DOCX interoperability audit on the supported development host:
+
+```bash
+uv run python -m openchronicle.evaluation.resume_docx_render \
+  --output-dir scratch/vida-docx-render-lo262 \
+  --soffice /opt/homebrew/bin/soffice
+```
+
+The automated result intentionally remains `pending_visual_review`; inspect
+every generated PNG before recording an evidence decision. PDF byte hashes may
+vary because LibreOffice writes conversion metadata, while DOCX bytes and
+rendered page pixels are the repeatability gates.

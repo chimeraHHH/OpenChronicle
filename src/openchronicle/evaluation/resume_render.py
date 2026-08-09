@@ -37,7 +37,9 @@ from ..resume_rescue.render import (
     RENDERER_VERSION,
     SECTION_LABELS,
     TEMPLATE_ID,
+    ResumeDocumentTree,
     ResumePreview,
+    build_document_tree,
     render_preview,
 )
 from ..resume_rescue.store import ProfileVersion, ResumeProjection
@@ -167,8 +169,10 @@ def load_cases(path: Path = DEFAULT_CASES) -> list[dict[str, Any]]:
     return cases
 
 
-def build_case_preview(case: Mapping[str, Any]) -> tuple[ResumePreview, list[str]]:
-    """Build a production preview from one already validated synthetic case."""
+def _build_case_sources(
+    case: Mapping[str, Any],
+) -> tuple[ProfileVersion, ResumeProjection, list[str]]:
+    """Build shared production sources from one already validated synthetic case."""
 
     profile_facts: list[dict[str, Any]] = []
     request_sections: list[dict[str, Any]] = []
@@ -264,7 +268,21 @@ def build_case_preview(case: Mapping[str, Any]) -> tuple[ResumePreview, list[str
         artifact_digest=artifact_hash,
         created_at="2026-08-09T00:00:00Z",
     )
+    return profile, projection, ordered_segments
+
+
+def build_case_preview(case: Mapping[str, Any]) -> tuple[ResumePreview, list[str]]:
+    """Build a production preview from one already validated synthetic case."""
+
+    profile, projection, ordered_segments = _build_case_sources(case)
     return render_preview(profile=profile, projection=projection), ordered_segments
+
+
+def build_case_document_tree(case: Mapping[str, Any]) -> tuple[ResumeDocumentTree, list[str]]:
+    """Build the same closed semantic tree used by native export renderers."""
+
+    profile, projection, ordered_segments = _build_case_sources(case)
+    return build_document_tree(profile=profile, projection=projection), ordered_segments
 
 
 def run_audit(

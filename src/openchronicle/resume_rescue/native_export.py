@@ -13,9 +13,12 @@ from typing import Any
 
 from defusedxml import ElementTree as DefusedElementTree
 from docx import Document
+from docx.document import Document as DocxDocument
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Mm, Pt, RGBColor
+from docx.text.paragraph import Paragraph
 
 from .render import RENDERER_VERSION, TEMPLATE_ID, ResumeDocumentTree
 
@@ -127,6 +130,7 @@ def _build_docx(tree: ResumeDocumentTree) -> bytes:
         heading_run._element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "Arial")
         for item in semantic_section.items:
             paragraph = document.add_paragraph(style="List Bullet")
+            _set_explicit_bullet_numbering(paragraph)
             paragraph.paragraph_format.space_after = Pt(4)
             paragraph.paragraph_format.keep_together = True
             run = paragraph.add_run(item.text)
@@ -146,9 +150,51 @@ def _build_docx(tree: ResumeDocumentTree) -> bytes:
     timestamp = _stable_datetime(tree.created_at)
     properties.created = timestamp
     properties.modified = timestamp
+    _normalize_bullet_numbering(document)
     output = io.BytesIO()
     document.save(output)
     return output.getvalue()
+
+
+def _set_explicit_bullet_numbering(paragraph: Paragraph) -> None:
+    """Keep bullets visible when office suites ignore style-only numbering."""
+
+    properties = paragraph._p.get_or_add_pPr()
+    numbering = OxmlElement("w:numPr")
+    level = OxmlElement("w:ilvl")
+    level.set(qn("w:val"), "0")
+    number = OxmlElement("w:numId")
+    number.set(qn("w:val"), "1")
+    numbering.append(level)
+    numbering.append(number)
+    properties.append(numbering)
+
+
+def _normalize_bullet_numbering(document: DocxDocument) -> None:
+    """Use a Unicode bullet instead of the template's private-use Symbol glyph."""
+
+    numbering = document.part.numbering_part.element
+    for abstract in numbering.findall(qn("w:abstractNum")):
+        for level in abstract.findall(qn("w:lvl")):
+            number_format = level.find(qn("w:numFmt"))
+            level_text = level.find(qn("w:lvlText"))
+            if (
+                number_format is None
+                or number_format.get(qn("w:val")) != "bullet"
+                or level_text is None
+            ):
+                continue
+            level_text.set(qn("w:val"), "•")
+            run_properties = level.find(qn("w:rPr"))
+            if run_properties is None:
+                run_properties = OxmlElement("w:rPr")
+                level.append(run_properties)
+            fonts = run_properties.find(qn("w:rFonts"))
+            if fonts is None:
+                fonts = OxmlElement("w:rFonts")
+                run_properties.append(fonts)
+            for attribute in ("ascii", "hAnsi", "eastAsia"):
+                fonts.set(qn(f"w:{attribute}"), "Arial")
 
 
 def _stable_datetime(value: str) -> datetime:

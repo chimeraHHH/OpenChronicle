@@ -19,6 +19,26 @@ def test_native_export_contract_freezes_formats_references_and_hard_gates() -> N
         "version": "1.2.0",
         "license": "MIT",
     }
+    assert manifest["docx_qa"] == {
+        "kind": "libreoffice-headless-to-pdf",
+        "version": "LibreOffice 26.2.3.2 70e089b17412e4cb7773e41413306b17a2328c34",
+        "tools": {
+            "pdfinfo_version": "pdfinfo version 26.04.0",
+            "pdftotext_version": "pdftotext version 26.04.0",
+            "pdftoppm_version": "pdftoppm version 26.04.0",
+        },
+        "page_width_points": 595.276,
+        "page_height_points": 841.89,
+        "page_size_tolerance_points": 2.0,
+        "maximum_pdf_bytes": 10_485_760,
+        "maximum_png_bytes": 20_971_520,
+        "expected_pages": {
+            "single-page-hostile-markup": [1, 1],
+            "unicode-and-directionality": [1, 1],
+            "long-unbroken-token": [1, 1],
+            "automatic-multipage-flow": [2, 4],
+        },
+    }
     assert {item["repository"] for item in manifest["comparators"]} == {
         "AmruthPillai/Reactive-Resume",
         "Kozea/WeasyPrint",
