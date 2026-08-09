@@ -422,8 +422,11 @@ Résumé Rescue starts disabled. Its first local slice stores immutable versions
 of explicitly reviewed career facts and content-addressed opportunity snapshots.
 Facts carry stable IDs, closed provenance, confidentiality, ownership scope,
 and unresolved conflict groups. Updating a profile creates a new version
-instead of overwriting a source used by an earlier projection. This slice has
-no document upload, model call, ATS promise, application form access, or
+instead of overwriting a source used by an earlier projection. Opportunity
+updates preserve immutable snapshots in a digest-CAS supersession chain. The
+first deterministic projection can only select exact reviewed fact text; its
+job-requirement mappings are explicitly unverified until reviewed. This slice
+has no document upload, model call, ATS promise, application form access, or
 submission capability.
 
 ## `[search]`

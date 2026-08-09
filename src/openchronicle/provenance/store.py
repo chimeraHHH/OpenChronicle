@@ -262,6 +262,21 @@ def availability(conn: sqlite3.Connection, ref: EvidenceRef) -> str:
         from ..reply_rescue import store as reply_rescue_store
 
         return "available" if reply_rescue_store.get(conn, ref.id) else "missing"
+    if ref.kind == "resume_profile":
+        from ..resume_rescue import store as resume_rescue_store
+
+        current = resume_rescue_store.get_current_profile(conn, ref.id)
+        return (
+            "available" if current is not None and ref.path == str(current.version) else "missing"
+        )
+    if ref.kind == "resume_opportunity":
+        from ..resume_rescue import store as resume_rescue_store
+
+        return "available" if resume_rescue_store.get_opportunity(conn, ref.id) else "missing"
+    if ref.kind == "resume_rescue":
+        from ..resume_rescue import store as resume_rescue_store
+
+        return "available" if resume_rescue_store.get_projection(conn, ref.id) else "missing"
     return "unknown"
 
 
@@ -333,6 +348,21 @@ def current_content_hash(conn: sqlite3.Connection, ref: EvidenceRef) -> str | No
 
         row = reply_rescue_store.get(conn, ref.id)
         return row.source_digest if row is not None else None
+    if ref.kind == "resume_profile":
+        from ..resume_rescue import store as resume_rescue_store
+
+        row = resume_rescue_store.get_current_profile(conn, ref.id)
+        return row.digest if row is not None and ref.path == str(row.version) else None
+    if ref.kind == "resume_opportunity":
+        from ..resume_rescue import store as resume_rescue_store
+
+        row = resume_rescue_store.get_opportunity(conn, ref.id)
+        return row.digest if row is not None else None
+    if ref.kind == "resume_rescue":
+        from ..resume_rescue import store as resume_rescue_store
+
+        row = resume_rescue_store.get_projection(conn, ref.id)
+        return row.artifact_digest if row is not None else None
     return None
 
 

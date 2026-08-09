@@ -258,9 +258,15 @@ privacy UX is validated on a signed macOS build.
   reuses Prompt Rescue's double-fenced exact AX selection receipt; it labels the
   result `selected_excerpt_unverified`, leaves recipients and reply mode
   unspecified, and does not claim mail-thread identity. Connector identities,
-  live selection compatibility evidence, provider quality evidence, and Résumé
-  Rescue remain open; drafts and all send/submit authority remain later,
-  separate capabilities.
+  live selection compatibility evidence, and provider quality evidence remain
+  open. Résumé Rescue now has its first local source/projection foundation:
+  immutable reviewed-profile versions, content-addressed opportunity revisions
+  with digest-CAS supersession, closed fact/provenance/conflict schemas, and a
+  deterministic exact-text projection whose requirement mappings remain
+  explicitly `manual_mapping_unverified`. Profile or opportunity changes make
+  prior projections unavailable. The frozen evaluator, native review/preview,
+  reviewed import, and document export remain open; drafts and all send/submit
+  authority remain later, separate capabilities.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only

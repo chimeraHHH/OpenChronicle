@@ -9,8 +9,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, canonical_digest
-from .models import opportunity_digest, profile_digest, validate_opportunity, validate_profile
+from .models import (
+    build_exact_artifact,
+    opportunity_digest,
+    profile_digest,
+    validate_artifact,
+    validate_opportunity,
+    validate_profile,
+    validate_projection_request,
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS resume_profiles (
@@ -40,6 +49,35 @@ CREATE TABLE IF NOT EXISTS resume_opportunities (
 );
 CREATE INDEX IF NOT EXISTS idx_resume_opportunities_created
     ON resume_opportunities(created_at DESC, id);
+CREATE TABLE IF NOT EXISTS resume_opportunity_supersessions (
+    previous_id TEXT PRIMARY KEY,
+    next_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    row_digest TEXT NOT NULL,
+    CHECK(previous_id <> next_id)
+);
+CREATE INDEX IF NOT EXISTS idx_resume_opportunity_next
+    ON resume_opportunity_supersessions(next_id);
+
+CREATE TABLE IF NOT EXISTS resume_rescue_projections (
+    id TEXT PRIMARY KEY,
+    idempotency_key TEXT UNIQUE NOT NULL,
+    profile_id TEXT NOT NULL,
+    profile_version INTEGER NOT NULL,
+    profile_digest TEXT NOT NULL,
+    opportunity_id TEXT NOT NULL,
+    opportunity_digest TEXT NOT NULL,
+    request_json TEXT NOT NULL,
+    request_digest TEXT NOT NULL,
+    artifact_json TEXT NOT NULL,
+    artifact_digest TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    row_digest TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_resume_projections_profile
+    ON resume_rescue_projections(profile_id, profile_version, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_resume_projections_opportunity
+    ON resume_rescue_projections(opportunity_id, created_at DESC);
 """
 
 
@@ -77,6 +115,22 @@ class OpportunitySnapshot:
             timestamp=self.created_at,
             content_hash=self.digest,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeProjection:
+    id: str
+    idempotency_key: str
+    profile_id: str
+    profile_version: int
+    profile_digest: str
+    opportunity_id: str
+    opportunity_digest: str
+    request: dict[str, Any]
+    request_digest: str
+    artifact: dict[str, Any]
+    artifact_digest: str
+    created_at: str
 
 
 class ResumeRescueConflict(RuntimeError):
@@ -192,6 +246,15 @@ def create_opportunity(
     now: datetime | None = None,
 ) -> tuple[OpportunitySnapshot, bool]:
     ensure_schema(conn)
+    return _create_opportunity(conn, snapshot, now=now)
+
+
+def _create_opportunity(
+    conn: sqlite3.Connection,
+    snapshot: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> tuple[OpportunitySnapshot, bool]:
     normalized = validate_opportunity(snapshot)
     digest = opportunity_digest(normalized)
     opportunity_id = f"resume-opportunity-{digest[:32]}"
@@ -207,13 +270,26 @@ def create_opportunity(
             """,
             (opportunity_id, _json(normalized), digest, timestamp, row_digest),
         )
-        current = get_opportunity(conn, opportunity_id)
+        current = _get_opportunity_snapshot(conn, opportunity_id)
         if current is None or current.digest != digest:
             raise RuntimeError("resume opportunity insert did not produce a valid snapshot")
         return current, conn.total_changes > before
 
 
 def get_opportunity(conn: sqlite3.Connection, opportunity_id: str) -> OpportunitySnapshot | None:
+    current = _get_opportunity_snapshot(conn, opportunity_id)
+    if current is None:
+        return None
+    replaced = conn.execute(
+        "SELECT 1 FROM resume_opportunity_supersessions WHERE previous_id=?",
+        (opportunity_id,),
+    ).fetchone()
+    return current if replaced is None else None
+
+
+def _get_opportunity_snapshot(
+    conn: sqlite3.Connection, opportunity_id: str
+) -> OpportunitySnapshot | None:
     row = conn.execute(
         "SELECT * FROM resume_opportunities WHERE id=?", (opportunity_id,)
     ).fetchone()
@@ -223,9 +299,195 @@ def get_opportunity(conn: sqlite3.Connection, opportunity_id: str) -> Opportunit
 def list_opportunities(conn: sqlite3.Connection, *, limit: int = 50) -> list[OpportunitySnapshot]:
     _limit(limit)
     rows = conn.execute(
-        "SELECT * FROM resume_opportunities ORDER BY created_at DESC, id LIMIT ?", (limit,)
+        """
+        SELECT o.* FROM resume_opportunities o
+        LEFT JOIN resume_opportunity_supersessions s ON s.previous_id=o.id
+        WHERE s.previous_id IS NULL
+        ORDER BY o.created_at DESC, o.id LIMIT ?
+        """,
+        (limit,),
     ).fetchall()
     return [item for row in rows if (item := _to_opportunity(row)) is not None]
+
+
+def replace_opportunity(
+    conn: sqlite3.Connection,
+    *,
+    opportunity_id: str,
+    expected_digest: str,
+    snapshot: dict[str, Any],
+    now: datetime | None = None,
+) -> tuple[OpportunitySnapshot, bool]:
+    ensure_schema(conn)
+    normalized = validate_opportunity(snapshot)
+    replacement_digest = opportunity_digest(normalized)
+    with _atomic(conn, "resume_opportunity_replace"):
+        original = _get_opportunity_snapshot(conn, opportunity_id)
+        if original is None or original.digest != expected_digest:
+            raise ResumeRescueConflict("resume opportunity changed")
+        existing = conn.execute(
+            "SELECT * FROM resume_opportunity_supersessions WHERE previous_id=?",
+            (opportunity_id,),
+        ).fetchone()
+        if existing is not None:
+            replacement = _replayed_replacement(
+                conn,
+                existing,
+                expected_digest=replacement_digest,
+            )
+            if replacement is not None:
+                return replacement, False
+            raise ResumeRescueConflict("resume opportunity changed")
+        if replacement_digest == original.digest:
+            return original, False
+        replacement, _ = _create_opportunity(conn, normalized, now=now)
+        created_at = _timestamp(now)
+        row_digest = _supersession_row_digest(
+            previous_id=original.id,
+            next_id=replacement.id,
+            created_at=created_at,
+        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO resume_opportunity_supersessions(
+                    previous_id, next_id, created_at, row_digest
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (original.id, replacement.id, created_at, row_digest),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ResumeRescueConflict("resume opportunity changed") from exc
+        return replacement, True
+
+
+def _replayed_replacement(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row | tuple,
+    *,
+    expected_digest: str,
+) -> OpportunitySnapshot | None:
+    try:
+        _parse_timestamp(row["created_at"])
+        if row["row_digest"] != _supersession_row_digest(
+            previous_id=row["previous_id"],
+            next_id=row["next_id"],
+            created_at=row["created_at"],
+        ):
+            return None
+        replacement = get_opportunity(conn, row["next_id"])
+        return (
+            replacement
+            if replacement is not None and replacement.digest == expected_digest
+            else None
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def create_projection(
+    conn: sqlite3.Connection,
+    *,
+    profile: ProfileVersion,
+    opportunity: OpportunitySnapshot,
+    request: dict[str, Any],
+    now: datetime | None = None,
+) -> tuple[ResumeProjection, bool]:
+    ensure_schema(conn)
+    normalized_request = validate_projection_request(request)
+    artifact = build_exact_artifact(
+        profile=profile.profile,
+        profile_version=profile.version,
+        profile_digest_value=profile.digest,
+        opportunity=opportunity.snapshot,
+        opportunity_id=opportunity.id,
+        opportunity_digest_value=opportunity.digest,
+        request=normalized_request,
+    )
+    request_hash = canonical_digest(
+        {"schema": "resume-projection-request-v1", "request": normalized_request}
+    )
+    artifact_hash = canonical_digest({"schema": "resume-artifact-v1", "artifact": artifact})
+    idempotency_key = canonical_digest(
+        {
+            "schema": "resume-exact-projection-job-v1",
+            "profile_id": profile.profile_id,
+            "profile_version": profile.version,
+            "profile_digest": profile.digest,
+            "opportunity_id": opportunity.id,
+            "opportunity_digest": opportunity.digest,
+            "request_digest": request_hash,
+        }
+    )
+    projection_id = f"resume-rescue-{idempotency_key[:32]}"
+    created_at = _timestamp(now)
+    row_digest = _projection_row_digest(
+        projection_id=projection_id,
+        idempotency_key=idempotency_key,
+        profile_id=profile.profile_id,
+        profile_version=profile.version,
+        profile_digest_value=profile.digest,
+        opportunity_id=opportunity.id,
+        opportunity_digest_value=opportunity.digest,
+        request_digest=request_hash,
+        artifact_digest=artifact_hash,
+        created_at=created_at,
+    )
+    before = conn.total_changes
+    with _atomic(conn, "resume_projection_create"):
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO resume_rescue_projections(
+                id, idempotency_key, profile_id, profile_version, profile_digest,
+                opportunity_id, opportunity_digest, request_json, request_digest,
+                artifact_json, artifact_digest, created_at, row_digest
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                projection_id,
+                idempotency_key,
+                profile.profile_id,
+                profile.version,
+                profile.digest,
+                opportunity.id,
+                opportunity.digest,
+                _json(normalized_request),
+                request_hash,
+                _json(artifact),
+                artifact_hash,
+                created_at,
+                row_digest,
+            ),
+        )
+        current = get_projection(conn, projection_id)
+        if current is None or current.idempotency_key != idempotency_key:
+            raise RuntimeError("resume projection insert did not produce a valid artifact")
+        subject = EvidenceRef(kind="resume_rescue", id=projection_id)
+        expected_sources = [profile.ref, opportunity.ref]
+        if conn.total_changes > before:
+            provenance_store.replace_sources(conn, subject=subject, sources=expected_sources)
+            created = True
+        else:
+            if provenance_store.direct_sources_checked(conn, subject) != expected_sources:
+                raise RuntimeError("resume projection replay provenance differs")
+            created = False
+        return current, created
+
+
+def get_projection(conn: sqlite3.Connection, projection_id: str) -> ResumeProjection | None:
+    row = conn.execute(
+        "SELECT * FROM resume_rescue_projections WHERE id=?", (projection_id,)
+    ).fetchone()
+    return _to_projection(row) if row is not None else None
+
+
+def list_projections(conn: sqlite3.Connection, *, limit: int = 50) -> list[ResumeProjection]:
+    _limit(limit)
+    rows = conn.execute(
+        "SELECT * FROM resume_rescue_projections ORDER BY created_at DESC, id LIMIT ?",
+        (limit,),
+    ).fetchall()
+    return [item for row in rows if (item := _to_projection(row)) is not None]
 
 
 def _to_profile_with_head(conn: sqlite3.Connection, row: sqlite3.Row) -> ProfileVersion | None:
@@ -286,6 +548,74 @@ def _to_opportunity(row: sqlite3.Row | tuple) -> OpportunitySnapshot | None:
         return None
 
 
+def _to_projection(row: sqlite3.Row | tuple) -> ResumeProjection | None:
+    try:
+        request = validate_projection_request(json.loads(row["request_json"]))
+        artifact = validate_artifact(json.loads(row["artifact_json"]))
+        request_hash = canonical_digest(
+            {"schema": "resume-projection-request-v1", "request": request}
+        )
+        artifact_hash = canonical_digest({"schema": "resume-artifact-v1", "artifact": artifact})
+        idempotency_key = canonical_digest(
+            {
+                "schema": "resume-exact-projection-job-v1",
+                "profile_id": row["profile_id"],
+                "profile_version": row["profile_version"],
+                "profile_digest": row["profile_digest"],
+                "opportunity_id": row["opportunity_id"],
+                "opportunity_digest": row["opportunity_digest"],
+                "request_digest": request_hash,
+            }
+        )
+        if (
+            type(row["profile_version"]) is not int
+            or row["profile_version"] < 1
+            or row["id"] != f"resume-rescue-{idempotency_key[:32]}"
+            or row["idempotency_key"] != idempotency_key
+            or row["request_digest"] != request_hash
+            or row["artifact_digest"] != artifact_hash
+            or artifact["profile_binding"]
+            != {
+                "id": row["profile_id"],
+                "version": row["profile_version"],
+                "digest": row["profile_digest"],
+            }
+            or artifact["opportunity_binding"]["id"] != row["opportunity_id"]
+            or artifact["opportunity_binding"]["digest"] != row["opportunity_digest"]
+            or row["row_digest"]
+            != _projection_row_digest(
+                projection_id=row["id"],
+                idempotency_key=idempotency_key,
+                profile_id=row["profile_id"],
+                profile_version=row["profile_version"],
+                profile_digest_value=row["profile_digest"],
+                opportunity_id=row["opportunity_id"],
+                opportunity_digest_value=row["opportunity_digest"],
+                request_digest=request_hash,
+                artifact_digest=artifact_hash,
+                created_at=row["created_at"],
+            )
+        ):
+            return None
+        _parse_timestamp(row["created_at"])
+        return ResumeProjection(
+            id=row["id"],
+            idempotency_key=idempotency_key,
+            profile_id=row["profile_id"],
+            profile_version=row["profile_version"],
+            profile_digest=row["profile_digest"],
+            opportunity_id=row["opportunity_id"],
+            opportunity_digest=row["opportunity_digest"],
+            request=request,
+            request_digest=request_hash,
+            artifact=artifact,
+            artifact_digest=artifact_hash,
+            created_at=row["created_at"],
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
 def _valid_head(row: sqlite3.Row | tuple) -> bool:
     try:
         return bool(
@@ -330,6 +660,47 @@ def _opportunity_row_digest(opportunity_id: str, digest: str, created_at: str) -
             "schema": "resume-opportunity-row-v1",
             "id": opportunity_id,
             "snapshot_digest": digest,
+            "created_at": created_at,
+        }
+    )
+
+
+def _projection_row_digest(
+    *,
+    projection_id: str,
+    idempotency_key: str,
+    profile_id: str,
+    profile_version: int,
+    profile_digest_value: str,
+    opportunity_id: str,
+    opportunity_digest_value: str,
+    request_digest: str,
+    artifact_digest: str,
+    created_at: str,
+) -> str:
+    return canonical_digest(
+        {
+            "schema": "resume-projection-row-v1",
+            "id": projection_id,
+            "idempotency_key": idempotency_key,
+            "profile_id": profile_id,
+            "profile_version": profile_version,
+            "profile_digest": profile_digest_value,
+            "opportunity_id": opportunity_id,
+            "opportunity_digest": opportunity_digest_value,
+            "request_digest": request_digest,
+            "artifact_digest": artifact_digest,
+            "created_at": created_at,
+        }
+    )
+
+
+def _supersession_row_digest(*, previous_id: str, next_id: str, created_at: str) -> str:
+    return canonical_digest(
+        {
+            "schema": "resume-opportunity-supersession-v1",
+            "previous_id": previous_id,
+            "next_id": next_id,
             "created_at": created_at,
         }
     )

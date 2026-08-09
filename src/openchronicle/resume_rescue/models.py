@@ -37,6 +37,23 @@ OPPORTUNITY_FIELDS = {
     "locale",
     "captured_at",
 }
+PROJECTION_REQUEST_FIELDS = {"schema_version", "sections", "requirements"}
+REQUEST_SECTION_FIELDS = {"kind", "fact_ids"}
+REQUEST_REQUIREMENT_FIELDS = {"id", "text", "fact_ids"}
+ARTIFACT_FIELDS = {
+    "schema_version",
+    "workflow",
+    "action_capability",
+    "generation_mode",
+    "profile_binding",
+    "opportunity_binding",
+    "sections",
+    "requirement_coverage",
+    "conflicts",
+    "missing_evidence",
+    "excluded_fact_ids",
+    "warnings",
+}
 
 VALID_SECTIONS = {
     "summary",
@@ -128,6 +145,280 @@ def profile_digest(value: dict[str, Any]) -> str:
 
 def opportunity_digest(value: dict[str, Any]) -> str:
     return canonical_digest({"schema": "resume-opportunity-v1", "opportunity": value})
+
+
+def validate_projection_request(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != PROJECTION_REQUEST_FIELDS:
+        raise ResumeSchemaError("resume projection request must use the closed schema")
+    if value.get("schema_version") != 1:
+        raise ResumeSchemaError("resume projection request version is unsupported")
+    sections_raw = value.get("sections")
+    requirements_raw = value.get("requirements")
+    if not isinstance(sections_raw, list) or len(sections_raw) > len(VALID_SECTIONS):
+        raise ResumeSchemaError("resume projection sections must be a bounded list")
+    if not isinstance(requirements_raw, list) or len(requirements_raw) > 200:
+        raise ResumeSchemaError("resume projection requirements must be a bounded list")
+
+    sections: list[dict[str, Any]] = []
+    seen_sections: set[str] = set()
+    selected_ids: list[str] = []
+    for raw in sections_raw:
+        if not isinstance(raw, dict) or set(raw) != REQUEST_SECTION_FIELDS:
+            raise ResumeSchemaError("resume projection section must use the closed schema")
+        kind = raw.get("kind")
+        if kind not in VALID_SECTIONS or kind in seen_sections:
+            raise ResumeSchemaError("resume projection section kind is invalid or duplicated")
+        ids = _identifier_list(raw.get("fact_ids"), "section fact IDs", maximum_items=2_000)
+        seen_sections.add(kind)
+        selected_ids.extend(ids)
+        sections.append({"kind": kind, "fact_ids": ids})
+    if len(set(selected_ids)) != len(selected_ids):
+        raise ResumeSchemaError("resume projection facts may appear only once")
+
+    requirements: list[dict[str, Any]] = []
+    seen_requirements: set[str] = set()
+    for raw in requirements_raw:
+        if not isinstance(raw, dict) or set(raw) != REQUEST_REQUIREMENT_FIELDS:
+            raise ResumeSchemaError("resume requirement must use the closed schema")
+        requirement_id = _identifier(raw.get("id"), "requirement id")
+        if requirement_id in seen_requirements:
+            raise ResumeSchemaError("resume requirement IDs must be unique")
+        seen_requirements.add(requirement_id)
+        requirements.append(
+            {
+                "id": requirement_id,
+                "text": _text(raw.get("text"), "requirement text", maximum=5_000),
+                "fact_ids": _identifier_list(
+                    raw.get("fact_ids"), "requirement fact IDs", maximum_items=50
+                ),
+            }
+        )
+    return {"schema_version": 1, "sections": sections, "requirements": requirements}
+
+
+def build_exact_artifact(
+    *,
+    profile: dict[str, Any],
+    profile_version: int,
+    profile_digest_value: str,
+    opportunity: dict[str, Any],
+    opportunity_id: str,
+    opportunity_digest_value: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    normalized_profile = validate_profile(profile)
+    normalized_opportunity = validate_opportunity(opportunity)
+    normalized_request = validate_projection_request(request)
+    if type(profile_version) is not int or profile_version < 1:
+        raise ResumeSchemaError("resume profile version is invalid")
+    _digest(profile_digest_value, "profile digest")
+    _identifier(opportunity_id, "opportunity id")
+    _digest(opportunity_digest_value, "opportunity digest")
+
+    facts = {item["id"]: item for item in normalized_profile["facts"]}
+    selected_ids = [
+        fact_id for section in normalized_request["sections"] for fact_id in section["fact_ids"]
+    ]
+    if any(fact_id not in facts for fact_id in selected_ids):
+        raise ResumeSchemaError("resume projection selected an unknown fact")
+    conflict_fact_ids = {
+        fact_id for conflict in normalized_profile["conflicts"] for fact_id in conflict["fact_ids"]
+    }
+    if conflict_fact_ids.intersection(selected_ids):
+        raise ResumeSchemaError("resume projection cannot select an unresolved conflict")
+    selected_set = set(selected_ids)
+
+    output_sections = []
+    for section in normalized_request["sections"]:
+        items = []
+        for fact_id in section["fact_ids"]:
+            fact = facts[fact_id]
+            if fact["section"] != section["kind"]:
+                raise ResumeSchemaError("resume projection fact is in the wrong section")
+            items.append(
+                {
+                    "fact_id": fact_id,
+                    "text": fact["text"],
+                    "transformation": "selected_exact",
+                    "confidentiality": fact["confidentiality"],
+                    "ownership_scope": fact["ownership_scope"],
+                    "provenance": copy.deepcopy(fact["provenance"]),
+                }
+            )
+        output_sections.append({"kind": section["kind"], "items": items})
+
+    coverage = []
+    missing = []
+    for requirement in normalized_request["requirements"]:
+        if requirement["text"] not in normalized_opportunity["source_text"]:
+            raise ResumeSchemaError("resume requirement is not an exact opportunity excerpt")
+        mapped_ids = requirement["fact_ids"]
+        if any(fact_id not in selected_set for fact_id in mapped_ids):
+            raise ResumeSchemaError("resume requirement mapped an unselected fact")
+        status = "candidate_supported" if mapped_ids else "missing_evidence"
+        coverage.append(
+            {
+                "id": requirement["id"],
+                "text": requirement["text"],
+                "status": status,
+                "fact_ids": copy.deepcopy(mapped_ids),
+                "support_assurance": ("manual_mapping_unverified" if mapped_ids else "no_evidence"),
+            }
+        )
+        if not mapped_ids:
+            missing.append({"requirement_id": requirement["id"], "text": requirement["text"]})
+
+    warnings = [
+        "Requirement mappings require review; no ATS or hiring outcome is claimed.",
+        "Opportunity text was treated as untrusted data; embedded instructions were not executed.",
+    ]
+    selected_facts = [facts[fact_id] for fact_id in selected_ids]
+    if any(item["confidentiality"] != "public" for item in selected_facts):
+        warnings.append("Review private or confidential facts before any export.")
+    if any(item["ownership_scope"] != "individual" for item in selected_facts):
+        warnings.append("Review shared or non-individual ownership wording before any export.")
+
+    artifact = {
+        "schema_version": 1,
+        "workflow": "resume_rescue",
+        "action_capability": "none",
+        "generation_mode": "deterministic_exact_projection",
+        "profile_binding": {
+            "id": normalized_profile["profile_id"],
+            "version": profile_version,
+            "digest": profile_digest_value,
+        },
+        "opportunity_binding": {
+            "id": opportunity_id,
+            "digest": opportunity_digest_value,
+            "employer": normalized_opportunity["employer"],
+            "title": normalized_opportunity["title"],
+        },
+        "sections": output_sections,
+        "requirement_coverage": coverage,
+        "conflicts": copy.deepcopy(normalized_profile["conflicts"]),
+        "missing_evidence": missing,
+        "excluded_fact_ids": [
+            fact["id"] for fact in normalized_profile["facts"] if fact["id"] not in selected_set
+        ],
+        "warnings": warnings,
+    }
+    return validate_artifact(artifact)
+
+
+def validate_artifact(value: object) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != ARTIFACT_FIELDS:
+        raise ResumeSchemaError("resume artifact must use the closed schema")
+    if (
+        value.get("schema_version") != 1
+        or value.get("workflow") != "resume_rescue"
+        or value.get("action_capability") != "none"
+        or value.get("generation_mode") != "deterministic_exact_projection"
+    ):
+        raise ResumeSchemaError("resume artifact identity is invalid")
+    profile_binding = value.get("profile_binding")
+    if not isinstance(profile_binding, dict) or set(profile_binding) != {"id", "version", "digest"}:
+        raise ResumeSchemaError("resume artifact profile binding is invalid")
+    profile_id = _identifier(profile_binding.get("id"), "profile binding id")
+    profile_version = profile_binding.get("version")
+    if type(profile_version) is not int or profile_version < 1:
+        raise ResumeSchemaError("resume artifact profile binding version is invalid")
+    profile_hash = _digest(profile_binding.get("digest"), "profile binding digest")
+
+    opportunity_binding = value.get("opportunity_binding")
+    if not isinstance(opportunity_binding, dict) or set(opportunity_binding) != {
+        "id",
+        "digest",
+        "employer",
+        "title",
+    }:
+        raise ResumeSchemaError("resume artifact opportunity binding is invalid")
+    opportunity_id = _identifier(opportunity_binding.get("id"), "opportunity binding id")
+    opportunity_hash = _digest(opportunity_binding.get("digest"), "opportunity binding digest")
+    employer = _text(opportunity_binding.get("employer"), "employer", maximum=512)
+    title = _text(opportunity_binding.get("title"), "title", maximum=512)
+
+    sections_raw = value.get("sections")
+    if not isinstance(sections_raw, list) or len(sections_raw) > len(VALID_SECTIONS):
+        raise ResumeSchemaError("resume artifact sections are invalid")
+    sections = []
+    selected_ids: list[str] = []
+    seen_sections: set[str] = set()
+    for raw in sections_raw:
+        if not isinstance(raw, dict) or set(raw) != {"kind", "items"}:
+            raise ResumeSchemaError("resume artifact section is invalid")
+        kind = raw.get("kind")
+        items_raw = raw.get("items")
+        if kind not in VALID_SECTIONS or kind in seen_sections or not isinstance(items_raw, list):
+            raise ResumeSchemaError("resume artifact section is invalid")
+        items = [_validate_artifact_item(item) for item in items_raw]
+        if any(item["fact_id"] in selected_ids for item in items):
+            raise ResumeSchemaError("resume artifact fact IDs must be unique")
+        selected_ids.extend(item["fact_id"] for item in items)
+        seen_sections.add(kind)
+        sections.append({"kind": kind, "items": items})
+
+    excluded = _identifier_list(
+        value.get("excluded_fact_ids"), "excluded fact IDs", maximum_items=2_000
+    )
+    if set(selected_ids).intersection(excluded):
+        raise ResumeSchemaError("resume artifact selected and excluded facts overlap")
+    all_fact_ids = set(selected_ids).union(excluded)
+    conflicts_raw = value.get("conflicts")
+    if not isinstance(conflicts_raw, list) or len(conflicts_raw) > 500:
+        raise ResumeSchemaError("resume artifact conflicts are invalid")
+    conflicts = [_validate_conflict(item, all_fact_ids) for item in conflicts_raw]
+    if len({item["id"] for item in conflicts}) != len(conflicts):
+        raise ResumeSchemaError("resume artifact conflict IDs must be unique")
+
+    coverage_raw = value.get("requirement_coverage")
+    if not isinstance(coverage_raw, list) or len(coverage_raw) > 200:
+        raise ResumeSchemaError("resume artifact requirement coverage is invalid")
+    coverage = [_validate_artifact_coverage(item, set(selected_ids)) for item in coverage_raw]
+    if len({item["id"] for item in coverage}) != len(coverage):
+        raise ResumeSchemaError("resume artifact requirement IDs must be unique")
+    missing_raw = value.get("missing_evidence")
+    if not isinstance(missing_raw, list) or len(missing_raw) > 200:
+        raise ResumeSchemaError("resume artifact missing evidence is invalid")
+    missing = []
+    for raw in missing_raw:
+        if not isinstance(raw, dict) or set(raw) != {"requirement_id", "text"}:
+            raise ResumeSchemaError("resume artifact missing evidence is invalid")
+        missing.append(
+            {
+                "requirement_id": _identifier(raw.get("requirement_id"), "missing requirement id"),
+                "text": _text(raw.get("text"), "missing requirement text", maximum=5_000),
+            }
+        )
+    expected_missing = [
+        {"requirement_id": item["id"], "text": item["text"]}
+        for item in coverage
+        if item["status"] == "missing_evidence"
+    ]
+    if missing != expected_missing:
+        raise ResumeSchemaError("resume artifact missing evidence ledger differs")
+    warnings = _string_list(
+        value.get("warnings"), "artifact warnings", maximum_items=20, maximum_chars=2_000
+    )
+    return {
+        "schema_version": 1,
+        "workflow": "resume_rescue",
+        "action_capability": "none",
+        "generation_mode": "deterministic_exact_projection",
+        "profile_binding": {"id": profile_id, "version": profile_version, "digest": profile_hash},
+        "opportunity_binding": {
+            "id": opportunity_id,
+            "digest": opportunity_hash,
+            "employer": employer,
+            "title": title,
+        },
+        "sections": sections,
+        "requirement_coverage": coverage,
+        "conflicts": conflicts,
+        "missing_evidence": missing,
+        "excluded_fact_ids": excluded,
+        "warnings": warnings,
+    }
 
 
 def _validate_fact(value: object) -> dict[str, Any]:
@@ -237,6 +528,69 @@ def _validate_conflict(value: object, fact_ids: set[str]) -> dict[str, Any]:
         "fact_ids": copy.deepcopy(ids),
         "description": _text(value.get("description"), "conflict description", maximum=2_000),
     }
+
+
+def _validate_artifact_item(value: object) -> dict[str, Any]:
+    expected = {
+        "fact_id",
+        "text",
+        "transformation",
+        "confidentiality",
+        "ownership_scope",
+        "provenance",
+    }
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ResumeSchemaError("resume artifact item must use the closed schema")
+    if value.get("transformation") != "selected_exact":
+        raise ResumeSchemaError("resume artifact transformation is invalid")
+    confidentiality = value.get("confidentiality")
+    ownership = value.get("ownership_scope")
+    if confidentiality not in VALID_CONFIDENTIALITY or ownership not in VALID_OWNERSHIP:
+        raise ResumeSchemaError("resume artifact fact policy is invalid")
+    provenance_raw = value.get("provenance")
+    if not isinstance(provenance_raw, list) or not provenance_raw or len(provenance_raw) > 20:
+        raise ResumeSchemaError("resume artifact fact provenance is invalid")
+    provenance = [_validate_provenance(item) for item in provenance_raw]
+    return {
+        "fact_id": _identifier(value.get("fact_id"), "artifact fact id"),
+        "text": _text(value.get("text"), "artifact fact text", maximum=8_000),
+        "transformation": "selected_exact",
+        "confidentiality": confidentiality,
+        "ownership_scope": ownership,
+        "provenance": provenance,
+    }
+
+
+def _validate_artifact_coverage(value: object, selected_ids: set[str]) -> dict[str, Any]:
+    expected = {"id", "text", "status", "fact_ids", "support_assurance"}
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ResumeSchemaError("resume artifact requirement coverage is invalid")
+    status = value.get("status")
+    assurance = value.get("support_assurance")
+    ids = _identifier_list(value.get("fact_ids"), "coverage fact IDs", maximum_items=50)
+    if any(fact_id not in selected_ids for fact_id in ids):
+        raise ResumeSchemaError("resume artifact coverage mapped an unknown fact")
+    if (status, assurance, bool(ids)) not in {
+        ("candidate_supported", "manual_mapping_unverified", True),
+        ("missing_evidence", "no_evidence", False),
+    }:
+        raise ResumeSchemaError("resume artifact coverage assurance is invalid")
+    return {
+        "id": _identifier(value.get("id"), "coverage requirement id"),
+        "text": _text(value.get("text"), "coverage requirement text", maximum=5_000),
+        "status": status,
+        "fact_ids": ids,
+        "support_assurance": assurance,
+    }
+
+
+def _identifier_list(value: object, name: str, *, maximum_items: int) -> list[str]:
+    if not isinstance(value, list) or len(value) > maximum_items:
+        raise ResumeSchemaError(f"resume {name} must be a bounded list")
+    result = [_identifier(item, name) for item in value]
+    if len(set(result)) != len(result):
+        raise ResumeSchemaError(f"resume {name} must not contain duplicates")
+    return result
 
 
 def _identifier(value: object, name: str) -> str:
