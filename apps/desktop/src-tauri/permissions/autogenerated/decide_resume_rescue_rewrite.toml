@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-decide-resume-rescue-rewrite"
+description = "Enables the decide_resume_rescue_rewrite command without any pre-configured scope."
+commands.allow = ["decide_resume_rescue_rewrite"]
+
+[[permission]]
+identifier = "deny-decide-resume-rescue-rewrite"
+description = "Denies the decide_resume_rescue_rewrite command without any pre-configured scope."
+commands.deny = ["decide_resume_rescue_rewrite"]

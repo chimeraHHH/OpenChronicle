@@ -36,6 +36,7 @@ from openchronicle.provenance.models import (
     timeline_block_digest,
 )
 from openchronicle.reply_rescue import store as reply_rescue_store
+from openchronicle.resume_rescue import rewrite_store as resume_rewrite_store
 from openchronicle.resume_rescue.native_export import ResumeNativeExport
 from openchronicle.resume_rescue.pdf_export import PdfExportUnavailable
 from openchronicle.resume_rescue.service import ResumeRescueService
@@ -1338,6 +1339,9 @@ def test_resume_rescue_bridge_is_disabled_and_closed_by_default(
     assert state_code == 0
     assert state["result"] == {
         "enabled": False,
+        "rewrite_enabled": False,
+        "rewrite_provider": None,
+        "rewrites": [],
         "profiles": [],
         "opportunities": [],
         "projections": [],
@@ -1356,6 +1360,227 @@ def test_resume_rescue_bridge_is_disabled_and_closed_by_default(
     )
     assert rejected_code == 2
     assert rejected["error"]["code"] == "INVALID_PARAMS"
+
+
+def test_resume_rewrite_bridge_discloses_queues_reviews_and_restores_individually(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.resume_rescue.enabled = True
+    cfg.resume_rescue.rewrite_enabled = True
+    cfg.models["resume_rescue"] = config_mod.ModelConfig(
+        model="ollama/bridge-local",
+        base_url="http://127.0.0.1:11434",
+        timeout_seconds=1,
+        num_retries=0,
+    )
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, cfg)
+        service.save_profile(
+            profile_id="rewrite-bridge-profile",
+            display_name="Ada Example",
+            locale="en-US",
+            facts=[
+                {
+                    "id": "fact-latency",
+                    "section": "experience",
+                    "text": (
+                        "Built Python APIs at Acme Labs and reduced p95 latency by 40% in 2024."
+                    ),
+                    "confidentiality": "private",
+                    "ownership_scope": "individual",
+                    "provenance": [
+                        {
+                            "kind": "manual_reviewed",
+                            "reviewed_at": "2026-08-09T08:00:00+08:00",
+                        }
+                    ],
+                }
+            ],
+        )
+        opportunity, _ = service.save_opportunity(
+            employer="Target Labs",
+            title="Reliability Engineer",
+            source_text="Improve service reliability.",
+            captured_at="2026-08-09T09:00:00+08:00",
+        )
+        projection, _ = service.compose_exact(
+            profile_id="rewrite-bridge-profile",
+            opportunity_id=opportunity.id,
+            sections=[{"kind": "experience", "fact_ids": ["fact-latency"]}],
+            requirements=[
+                {
+                    "id": "req-reliability",
+                    "text": "Improve service reliability.",
+                    "fact_ids": ["fact-latency"],
+                }
+            ],
+        )
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+
+    initial, initial_code = _request("resume_rescue.state")
+    assert initial_code == 0
+    provider = initial["result"]["rewrite_provider"]
+    assert provider == {"model": "ollama/bridge-local", "location": "local"}
+    queued, queued_code = _request(
+        "resume_rescue.queue_rewrite",
+        {
+            "projection_id": projection.id,
+            "expected_artifact_digest": projection.artifact_digest,
+            "expected_model_identity": provider["model"],
+            "expected_provider_location": provider["location"],
+            "remote_egress_authorized": False,
+        },
+    )
+    assert queued_code == 0
+    queued_job = queued["result"]["rewrite"]
+    assert queued_job["status"] == "queued"
+    assert queued_job["proposals"] == []
+    with fts.cursor() as conn:
+        claimed = resume_rewrite_store.claim_next(
+            conn, lease_token="bridge-rewrite-lease", lease_seconds=60
+        )
+        assert claimed is not None
+        ready = resume_rewrite_store.complete(
+            conn,
+            job_id=claimed.id,
+            lease_token="bridge-rewrite-lease",
+            output={
+                "schema_version": 1,
+                "proposals": [
+                    {
+                        "proposal_id": "proposal-latency",
+                        "operation": "replace_text",
+                        "section": "experience",
+                        "fact_id": "fact-latency",
+                        "original_text": (
+                            "Built Python APIs at Acme Labs and reduced p95 latency by 40% in 2024."
+                        ),
+                        "proposed_text": (
+                            "Reduced p95 latency by 40% in 2024 at Acme Labs; built Python APIs."
+                        ),
+                        "rationale": "Emphasizes the mapped result without adding a claim.",
+                        "requirement_ids": ["req-reliability"],
+                        "evidence_fragments": ["reduced p95 latency by 40%"],
+                    }
+                ],
+            },
+        )
+
+    current, current_code = _request("resume_rescue.state")
+    assert current_code == 0
+    job = current["result"]["rewrites"][0]
+    proposal = job["proposals"][0]
+    assert job["id"] == ready.id
+    assert len(proposal["proposal_digest"]) == 64
+    accepted, accepted_code = _request(
+        "resume_rescue.decide_rewrite",
+        {
+            "job_id": job["id"],
+            "proposal_id": proposal["proposal_id"],
+            "expected_proposal_digest": proposal["proposal_digest"],
+            "expected_job_version": job["version"],
+            "expected_head_id": "",
+            "expected_artifact_digest": projection.artifact_digest,
+            "decision": "accepted",
+        },
+    )
+    assert accepted_code == 0
+    version_one = accepted["result"]["version"]
+    assert version_one["decision"] == "accepted"
+    assert version_one["artifact"]["sections"][0]["items"][0]["text"] == proposal["proposed_text"]
+
+    rejected, rejected_code = _request(
+        "resume_rescue.decide_rewrite",
+        {
+            "job_id": job["id"],
+            "proposal_id": proposal["proposal_id"],
+            "expected_proposal_digest": proposal["proposal_digest"],
+            "expected_job_version": job["version"],
+            "expected_head_id": version_one["id"],
+            "expected_artifact_digest": version_one["artifact_digest"],
+            "decision": "rejected",
+        },
+    )
+    assert rejected_code == 0
+    version_two = rejected["result"]["version"]
+    assert version_two["artifact"]["sections"][0]["items"][0]["text"] == proposal["original_text"]
+    restored, restored_code = _request(
+        "resume_rescue.restore_rewrite",
+        {
+            "target_version_id": version_one["id"],
+            "expected_head_id": version_two["id"],
+            "expected_artifact_digest": version_two["artifact_digest"],
+        },
+    )
+    assert restored_code == 0
+    version_three = restored["result"]["version"]
+    assert version_three["restore_target_id"] == version_one["id"]
+
+    previewed, previewed_code = _request(
+        "resume_rescue.preview_rewrite", {"version_id": version_three["id"]}
+    )
+    assert previewed_code == 0
+    assert proposal["proposed_text"] in previewed["result"]["preview"]["plain_text"]
+    exported, exported_code = _request(
+        "resume_rescue.export_rewrite_json", {"version_id": version_three["id"]}
+    )
+    assert exported_code == 0
+    assert exported["result"]["export"]["projection_binding"]["id"] == version_three["id"]
+    assert "apply_all" not in json.dumps(current)
+
+    blocked_delete, blocked_delete_code = _request(
+        "resume_rescue.delete_rewrite",
+        {"job_id": job["id"], "expected_version": job["version"]},
+    )
+    assert blocked_delete_code == 2
+    assert blocked_delete["error"]["code"] == "VERSION_CONFLICT"
+
+
+def test_resume_rewrite_bridge_maps_remote_consent_denial_without_queueing(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.resume_rescue.enabled = True
+    cfg.resume_rescue.rewrite_enabled = True
+    cfg.models["resume_rescue"] = config_mod.ModelConfig(
+        model="openai/remote-model",
+        base_url="https://api.example.test",
+    )
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, cfg)
+        service.save_profile(
+            profile_id="remote-profile",
+            display_name="Ada",
+            facts=[],
+        )
+        opportunity, _ = service.save_opportunity(
+            employer="Remote",
+            title="Role",
+            source_text="Reviewed requirement.",
+        )
+        projection, _ = service.compose_exact(
+            profile_id="remote-profile",
+            opportunity_id=opportunity.id,
+            sections=[],
+        )
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+    denied, denied_code = _request(
+        "resume_rescue.queue_rewrite",
+        {
+            "projection_id": projection.id,
+            "expected_artifact_digest": projection.artifact_digest,
+            "expected_model_identity": "openai/remote-model",
+            "expected_provider_location": "remote_or_unknown",
+            "remote_egress_authorized": False,
+        },
+    )
+    assert denied_code == 2
+    assert denied["error"]["code"] == "EGRESS_NOT_AUTHORIZED"
+    with fts.cursor() as conn:
+        assert resume_rewrite_store.list_jobs(conn) == []
 
 
 def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(

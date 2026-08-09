@@ -50,6 +50,13 @@ import type {
   ResumeRequirementRequest,
   ResumeRescueArtifact,
   ResumeRescueState,
+  ResumeRewriteBinding,
+  ResumeRewriteDecision,
+  ResumeRewriteJob,
+  ResumeRewriteProposal,
+  ResumeRewriteProviderLocation,
+  ResumeRewriteStatus,
+  ResumeRewriteVersion,
   ResumeSectionKind,
   ResumeDocumentImportReview,
   ResumeDocumentLocator,
@@ -136,6 +143,16 @@ const resumeOwnerships = new Set<ResumeOwnership>([
   "shared",
   "organization",
   "unspecified",
+]);
+const resumeRewriteStatuses = new Set<ResumeRewriteStatus>([
+  "queued",
+  "leased",
+  "ready",
+  "failed",
+]);
+const resumeRewriteProviderLocations = new Set<ResumeRewriteProviderLocation>([
+  "local",
+  "remote_or_unknown",
 ]);
 const jsonResumeMappings = new Set([
   "exact_field",
@@ -1066,6 +1083,17 @@ function resumeProjectionRequest(value: unknown): ResumeProjectionRequest {
 }
 
 function resumeArtifact(value: unknown): ResumeRescueArtifact {
+  const identity = objectValue(value, "Résumé Rescue artifact");
+  const generationMode = stringValue(
+    identity.generation_mode,
+    "Résumé Rescue generation mode",
+  );
+  if (
+    generationMode !== "deterministic_exact_projection" &&
+    generationMode !== "supervised_rewrite_projection"
+  ) {
+    return protocolError("Résumé Rescue generation mode");
+  }
   const raw = closedObject(
     value,
     [
@@ -1081,15 +1109,16 @@ function resumeArtifact(value: unknown): ResumeRescueArtifact {
       "missing_evidence",
       "excluded_fact_ids",
       "warnings",
+      ...(generationMode === "supervised_rewrite_projection"
+        ? ["rewrite_binding"]
+        : []),
     ],
     "Résumé Rescue artifact",
   );
   if (
     numberValue(raw.schema_version, "Résumé Rescue artifact schema") !== 1 ||
     stringValue(raw.workflow, "Résumé Rescue workflow") !== "resume_rescue" ||
-    stringValue(raw.action_capability, "Résumé Rescue action capability") !== "none" ||
-    stringValue(raw.generation_mode, "Résumé Rescue generation mode") !==
-      "deterministic_exact_projection"
+    stringValue(raw.action_capability, "Résumé Rescue action capability") !== "none"
   ) {
     return protocolError("Résumé Rescue artifact identity");
   }
@@ -1122,13 +1151,25 @@ function resumeArtifact(value: unknown): ResumeRescueArtifact {
       const factId = stringValue(item.fact_id, "Résumé Rescue artifact fact id");
       if (selectedIds.has(factId)) return protocolError("Résumé Rescue duplicate selected fact");
       selectedIds.add(factId);
-      if (stringValue(item.transformation, "Résumé Rescue transformation") !== "selected_exact") {
+      const transformation = stringValue(
+        item.transformation,
+        "Résumé Rescue transformation",
+      );
+      if (
+        transformation !== "selected_exact" &&
+        !(
+          generationMode === "supervised_rewrite_projection" &&
+          transformation === "accepted_model_rewrite"
+        )
+      ) {
         return protocolError("Résumé Rescue transformation");
       }
       return {
         fact_id: factId,
         text: stringValue(item.text, "Résumé Rescue artifact fact text"),
-        transformation: "selected_exact" as const,
+        transformation: transformation as
+          | "selected_exact"
+          | "accepted_model_rewrite",
         confidentiality: allowedString(
           item.confidentiality,
           resumeConfidentialities,
@@ -1204,11 +1245,99 @@ function resumeArtifact(value: unknown): ResumeRescueArtifact {
   if (excludedFactIds.some((factId) => selectedIds.has(factId))) {
     return protocolError("Résumé Rescue selected/excluded fact binding");
   }
+  let rewriteBinding: ResumeRewriteBinding | undefined;
+  if (generationMode === "supervised_rewrite_projection") {
+    const binding = closedObject(
+      raw.rewrite_binding,
+      [
+        "base_projection_id",
+        "base_artifact_digest",
+        "rewrite_job_id",
+        "rewrite_output_digest",
+        "decision_version",
+        "decisions",
+      ],
+      "Résumé Rescue rewrite binding",
+    );
+    const proposalIds = new Set<string>();
+    const decisionFactIds = new Set<string>();
+    const decisions: ResumeRewriteDecision[] = arrayValue(
+      binding.decisions,
+      "Résumé Rescue rewrite decisions",
+    ).map((value) => {
+      const item = closedObject(
+        value,
+        ["proposal_id", "proposal_digest", "fact_id", "status"],
+        "Résumé Rescue rewrite decision",
+      );
+      const proposalId = stringValue(item.proposal_id, "Résumé Rescue proposal id");
+      const factId = stringValue(item.fact_id, "Résumé Rescue decision fact id");
+      const status = stringValue(item.status, "Résumé Rescue decision status");
+      if (
+        proposalIds.has(proposalId) ||
+        decisionFactIds.has(factId) ||
+        !selectedIds.has(factId) ||
+        (status !== "accepted" && status !== "rejected")
+      ) {
+        return protocolError("Résumé Rescue rewrite decision binding");
+      }
+      proposalIds.add(proposalId);
+      decisionFactIds.add(factId);
+      return {
+        proposal_id: proposalId,
+        proposal_digest: resumeDigest(
+          item.proposal_digest,
+          "Résumé Rescue proposal digest",
+        ),
+        fact_id: factId,
+        status,
+      };
+    });
+    const acceptedFacts = new Set(
+      decisions.filter((item) => item.status === "accepted").map((item) => item.fact_id),
+    );
+    if (decisions.length === 0) {
+      return protocolError("Résumé Rescue rewrite decision ledger");
+    }
+    for (const section of sections) {
+      for (const item of section.items) {
+        const expected = acceptedFacts.has(item.fact_id)
+          ? "accepted_model_rewrite"
+          : "selected_exact";
+        if (item.transformation !== expected) {
+          return protocolError("Résumé Rescue rewrite transformation ledger");
+        }
+      }
+    }
+    rewriteBinding = {
+      base_projection_id: stringValue(
+        binding.base_projection_id,
+        "Résumé Rescue base projection id",
+      ),
+      base_artifact_digest: resumeDigest(
+        binding.base_artifact_digest,
+        "Résumé Rescue base artifact digest",
+      ),
+      rewrite_job_id: stringValue(
+        binding.rewrite_job_id,
+        "Résumé Rescue rewrite job id",
+      ),
+      rewrite_output_digest: resumeDigest(
+        binding.rewrite_output_digest,
+        "Résumé Rescue rewrite output digest",
+      ),
+      decision_version: resumePositiveInteger(
+        binding.decision_version,
+        "Résumé Rescue decision version",
+      ),
+      decisions,
+    };
+  }
   return {
     schema_version: 1,
     workflow: "resume_rescue",
     action_capability: "none",
-    generation_mode: "deterministic_exact_projection",
+    generation_mode: generationMode,
     profile_binding: {
       id: stringValue(profileBinding.id, "Résumé Rescue profile binding id"),
       version: resumePositiveInteger(profileBinding.version, "Résumé Rescue bound profile version"),
@@ -1226,6 +1355,7 @@ function resumeArtifact(value: unknown): ResumeRescueArtifact {
     missing_evidence: missingEvidence,
     excluded_fact_ids: excludedFactIds,
     warnings: stringArray(raw.warnings, "Résumé Rescue warnings"),
+    ...(rewriteBinding ? { rewrite_binding: rewriteBinding } : {}),
   };
 }
 
@@ -1260,6 +1390,8 @@ function resumeProjection(value: unknown): ResumeProjection {
     "Résumé Rescue projection opportunity digest",
   );
   if (
+    artifact.generation_mode !== "deterministic_exact_projection" ||
+    artifact.rewrite_binding !== undefined ||
     artifact.profile_binding.id !== profileId ||
     artifact.profile_binding.version !== profileVersion ||
     artifact.profile_binding.digest !== profileDigest ||
@@ -1301,19 +1433,356 @@ function resumeProjection(value: unknown): ResumeProjection {
   };
 }
 
+function resumeRewriteProposal(value: unknown): ResumeRewriteProposal {
+  const raw = closedObject(
+    value,
+    [
+      "proposal_id",
+      "proposal_digest",
+      "operation",
+      "section",
+      "fact_id",
+      "original_text",
+      "proposed_text",
+      "rationale",
+      "requirement_ids",
+      "evidence_fragments",
+    ],
+    "Résumé Rescue rewrite proposal",
+  );
+  if (stringValue(raw.operation, "Résumé Rescue rewrite operation") !== "replace_text") {
+    return protocolError("Résumé Rescue rewrite operation");
+  }
+  return {
+    proposal_id: stringValue(raw.proposal_id, "Résumé Rescue proposal id"),
+    proposal_digest: resumeDigest(raw.proposal_digest, "Résumé Rescue proposal digest"),
+    operation: "replace_text",
+    section: resumeSection(raw.section),
+    fact_id: stringValue(raw.fact_id, "Résumé Rescue proposal fact id"),
+    original_text: stringValue(raw.original_text, "Résumé Rescue proposal original text"),
+    proposed_text: stringValue(raw.proposed_text, "Résumé Rescue proposal replacement text"),
+    rationale: stringValue(raw.rationale, "Résumé Rescue proposal rationale"),
+    requirement_ids: stringArray(raw.requirement_ids, "Résumé Rescue proposal requirements"),
+    evidence_fragments: stringArray(
+      raw.evidence_fragments,
+      "Résumé Rescue proposal evidence",
+    ),
+  };
+}
+
+function resumeRewriteVersion(value: unknown): ResumeRewriteVersion {
+  const raw = closedObject(
+    value,
+    [
+      "id",
+      "lineage_id",
+      "version",
+      "parent_id",
+      "action",
+      "proposal_id",
+      "proposal_digest",
+      "restore_target_id",
+      "decision",
+      "base_projection_id",
+      "base_artifact_digest",
+      "rewrite_job_id",
+      "rewrite_output_digest",
+      "decisions",
+      "artifact",
+      "artifact_digest",
+      "created_at",
+    ],
+    "Résumé Rescue rewrite version",
+  );
+  const artifact = resumeArtifact(raw.artifact);
+  if (
+    artifact.generation_mode !== "supervised_rewrite_projection" ||
+    !artifact.rewrite_binding
+  ) {
+    return protocolError("Résumé Rescue rewrite artifact mode");
+  }
+  const version = resumePositiveInteger(raw.version, "Résumé Rescue rewrite version number");
+  const action = stringValue(raw.action, "Résumé Rescue rewrite version action");
+  const decision = stringValue(raw.decision, "Résumé Rescue rewrite decision");
+  const proposalId = stringValue(raw.proposal_id, "Résumé Rescue rewrite action proposal");
+  const restoreTargetId = stringValue(
+    raw.restore_target_id,
+    "Résumé Rescue rewrite restore target",
+  );
+  if (
+    (action === "decision" &&
+      (restoreTargetId !== "" ||
+        proposalId === "" ||
+        (decision !== "accepted" && decision !== "rejected"))) ||
+    (action === "restore" &&
+      (restoreTargetId === "" || proposalId !== "" || decision !== "restored")) ||
+    (action !== "decision" && action !== "restore")
+  ) {
+    return protocolError("Résumé Rescue rewrite version action");
+  }
+  const decisions = artifact.rewrite_binding.decisions;
+  const rawDecisions = arrayValue(raw.decisions, "Résumé Rescue version decisions");
+  if (
+    rawDecisions.length !== decisions.length ||
+    rawDecisions.some((value, index) => {
+      const item = closedObject(
+        value,
+        ["proposal_id", "proposal_digest", "fact_id", "status"],
+        "Résumé Rescue version decision",
+      );
+      const expected = decisions[index];
+      if (!expected) return true;
+      return (
+        item.proposal_id !== expected.proposal_id ||
+        item.proposal_digest !== expected.proposal_digest ||
+        item.fact_id !== expected.fact_id ||
+        item.status !== expected.status
+      );
+    })
+  ) {
+    return protocolError("Résumé Rescue rewrite version decisions");
+  }
+  const baseProjectionId = stringValue(
+    raw.base_projection_id,
+    "Résumé Rescue version base projection",
+  );
+  const baseArtifactDigest = resumeDigest(
+    raw.base_artifact_digest,
+    "Résumé Rescue version base artifact digest",
+  );
+  const rewriteJobId = stringValue(raw.rewrite_job_id, "Résumé Rescue version job id");
+  const rewriteOutputDigest = resumeDigest(
+    raw.rewrite_output_digest,
+    "Résumé Rescue version output digest",
+  );
+  if (
+    artifact.rewrite_binding.base_projection_id !== baseProjectionId ||
+    artifact.rewrite_binding.base_artifact_digest !== baseArtifactDigest ||
+    artifact.rewrite_binding.rewrite_job_id !== rewriteJobId ||
+    artifact.rewrite_binding.rewrite_output_digest !== rewriteOutputDigest ||
+    artifact.rewrite_binding.decision_version !== version
+  ) {
+    return protocolError("Résumé Rescue rewrite version binding");
+  }
+  return {
+    id: stringValue(raw.id, "Résumé Rescue version id"),
+    lineage_id: stringValue(raw.lineage_id, "Résumé Rescue version lineage"),
+    version,
+    parent_id: stringValue(raw.parent_id, "Résumé Rescue version parent"),
+    action,
+    proposal_id: proposalId,
+    proposal_digest: resumeDigest(raw.proposal_digest, "Résumé Rescue version proposal digest"),
+    restore_target_id: restoreTargetId,
+    decision: decision as "accepted" | "rejected" | "restored",
+    base_projection_id: baseProjectionId,
+    base_artifact_digest: baseArtifactDigest,
+    rewrite_job_id: rewriteJobId,
+    rewrite_output_digest: rewriteOutputDigest,
+    decisions,
+    artifact,
+    artifact_digest: resumeDigest(raw.artifact_digest, "Résumé Rescue version artifact digest"),
+    created_at: stringValue(raw.created_at, "Résumé Rescue version created time"),
+  };
+}
+
+function resumeRewriteJob(value: unknown): ResumeRewriteJob {
+  const raw = closedObject(
+    value,
+    [
+      "id",
+      "status",
+      "projection_id",
+      "projection_artifact_digest",
+      "model_identity",
+      "provider_location",
+      "remote_egress_authorized",
+      "proposals",
+      "output_digest",
+      "error_code",
+      "attempt_count",
+      "created_at",
+      "updated_at",
+      "version",
+      "head",
+      "versions",
+    ],
+    "Résumé Rescue rewrite job",
+  );
+  const id = stringValue(raw.id, "Résumé Rescue rewrite job id");
+  const status = allowedString(
+    raw.status,
+    resumeRewriteStatuses,
+    "Résumé Rescue rewrite status",
+  );
+  const projectionId = stringValue(raw.projection_id, "Résumé Rescue rewrite projection id");
+  const projectionDigest = resumeDigest(
+    raw.projection_artifact_digest,
+    "Résumé Rescue rewrite projection digest",
+  );
+  const outputDigest = stringValue(raw.output_digest, "Résumé Rescue rewrite output digest");
+  const proposals = arrayValue(raw.proposals, "Résumé Rescue rewrite proposals").map(
+    resumeRewriteProposal,
+  );
+  const proposalIds = new Set(proposals.map((item) => item.proposal_id));
+  const factIds = new Set(proposals.map((item) => item.fact_id));
+  if (
+    proposalIds.size !== proposals.length ||
+    factIds.size !== proposals.length ||
+    (status === "ready" ? !/^[0-9a-f]{64}$/.test(outputDigest) : outputDigest !== "") ||
+    (status !== "ready" && proposals.length > 0)
+  ) {
+    return protocolError("Résumé Rescue rewrite output state");
+  }
+  const head = raw.head === null ? null : resumeRewriteVersion(raw.head);
+  const versions = arrayValue(raw.versions, "Résumé Rescue rewrite versions").map(
+    resumeRewriteVersion,
+  );
+  if (
+    [head, ...versions].filter((item): item is ResumeRewriteVersion => item !== null).some(
+      (item) =>
+        item.rewrite_job_id !== id ||
+        item.base_projection_id !== projectionId ||
+        item.base_artifact_digest !== projectionDigest ||
+        item.rewrite_output_digest !== outputDigest,
+    ) ||
+    (head !== null && versions[0]?.id !== head.id)
+  ) {
+    return protocolError("Résumé Rescue rewrite history binding");
+  }
+  return {
+    id,
+    status,
+    projection_id: projectionId,
+    projection_artifact_digest: projectionDigest,
+    model_identity: stringValue(raw.model_identity, "Résumé Rescue rewrite model"),
+    provider_location: allowedString(
+      raw.provider_location,
+      resumeRewriteProviderLocations,
+      "Résumé Rescue rewrite provider location",
+    ),
+    remote_egress_authorized: booleanValue(
+      raw.remote_egress_authorized,
+      "Résumé Rescue rewrite egress authorization",
+    ),
+    proposals,
+    output_digest: outputDigest,
+    error_code: stringValue(raw.error_code, "Résumé Rescue rewrite error"),
+    attempt_count: numberValue(raw.attempt_count, "Résumé Rescue rewrite attempts"),
+    created_at: stringValue(raw.created_at, "Résumé Rescue rewrite created time"),
+    updated_at: stringValue(raw.updated_at, "Résumé Rescue rewrite updated time"),
+    version: resumePositiveInteger(raw.version, "Résumé Rescue rewrite job version"),
+    head,
+    versions,
+  };
+}
+
 export function normalizeResumeRescueState(value: unknown): ResumeRescueState {
   const raw = closedObject(
     value,
-    ["enabled", "profiles", "opportunities", "projections"],
+    [
+      "enabled",
+      "rewrite_enabled",
+      "rewrite_provider",
+      "profiles",
+      "opportunities",
+      "projections",
+      "rewrites",
+    ],
     "Résumé Rescue state",
   );
+  const rewriteEnabled = booleanValue(
+    raw.rewrite_enabled,
+    "Résumé Rescue rewrite enabled state",
+  );
+  const rewriteProvider =
+    raw.rewrite_provider === null
+      ? null
+      : closedObject(
+          raw.rewrite_provider,
+          ["model", "location"],
+          "Résumé Rescue rewrite provider",
+        );
+  const enabled = booleanValue(raw.enabled, "Résumé Rescue enabled state");
+  if (enabled && rewriteEnabled !== (rewriteProvider !== null)) {
+    return protocolError("Résumé Rescue rewrite provider disclosure");
+  }
   return {
-    enabled: booleanValue(raw.enabled, "Résumé Rescue enabled state"),
+    enabled,
+    rewrite_enabled: rewriteEnabled,
+    rewrite_provider: rewriteProvider
+      ? {
+          model: stringValue(rewriteProvider.model, "Résumé Rescue rewrite model"),
+          location: allowedString(
+            rewriteProvider.location,
+            resumeRewriteProviderLocations,
+            "Résumé Rescue rewrite provider location",
+          ),
+        }
+      : null,
+    rewrites: arrayValue(raw.rewrites, "Résumé Rescue rewrites").map(resumeRewriteJob),
     profiles: arrayValue(raw.profiles, "Résumé Rescue profiles").map(resumeProfileVersion),
     opportunities: arrayValue(raw.opportunities, "Résumé Rescue opportunities").map(
       resumeOpportunity,
     ),
     projections: arrayValue(raw.projections, "Résumé Rescue projections").map(resumeProjection),
+  };
+}
+
+export function normalizeResumeRewriteMutation(value: unknown): ResumeRewriteJob {
+  const raw = closedObject(value, ["rewrite"], "Résumé Rescue rewrite response");
+  return resumeRewriteJob(raw.rewrite);
+}
+
+export function normalizeResumeRewriteQueue(value: unknown): {
+  rewrite: ResumeRewriteJob;
+  created: boolean;
+} {
+  const raw = closedObject(
+    value,
+    ["rewrite", "created"],
+    "Résumé Rescue rewrite queue response",
+  );
+  return {
+    rewrite: resumeRewriteJob(raw.rewrite),
+    created: booleanValue(raw.created, "Résumé Rescue rewrite created state"),
+  };
+}
+
+export function normalizeResumeRewriteVersionMutation(value: unknown): {
+  version: ResumeRewriteVersion;
+  created?: boolean;
+} {
+  const raw = objectValue(value, "Résumé Rescue rewrite version response");
+  const fields = Object.keys(raw).sort();
+  if (
+    JSON.stringify(fields) !== JSON.stringify(["version"]) &&
+    JSON.stringify(fields) !== JSON.stringify(["created", "version"])
+  ) {
+    return protocolError("Résumé Rescue rewrite version response");
+  }
+  return {
+    version: resumeRewriteVersion(raw.version),
+    ...(raw.created === undefined
+      ? {}
+      : { created: booleanValue(raw.created, "Résumé Rescue rewrite version created state") }),
+  };
+}
+
+export function normalizeResumeRewriteDelete(value: unknown): {
+  job_id: string;
+  deleted: true;
+} {
+  const raw = closedObject(
+    value,
+    ["job_id", "deleted"],
+    "Résumé Rescue rewrite delete response",
+  );
+  if (booleanValue(raw.deleted, "Résumé Rescue rewrite deleted state") !== true) {
+    return protocolError("Résumé Rescue rewrite deleted state");
+  }
+  return {
+    job_id: stringValue(raw.job_id, "Résumé Rescue rewrite deleted id"),
+    deleted: true,
   };
 }
 
@@ -2703,8 +3172,137 @@ export const desktopApi = {
   getResumeRescueState: () =>
     request(
       "get_resume_rescue_state",
-      { profile_limit: 20, opportunity_limit: 20, projection_limit: 20 },
+      {
+        profile_limit: 20,
+        opportunity_limit: 20,
+        projection_limit: 20,
+        rewrite_limit: 20,
+        rewrite_version_limit: 20,
+      },
       normalizeResumeRescueState,
+    ),
+  queueResumeRewrite: (input: {
+    projectionId: string;
+    expectedArtifactDigest: string;
+    expectedModelIdentity: string;
+    expectedProviderLocation: ResumeRewriteProviderLocation;
+    remoteEgressAuthorized: boolean;
+  }) =>
+    request(
+      "queue_resume_rescue_rewrite",
+      {
+        projection_id: input.projectionId,
+        expected_artifact_digest: input.expectedArtifactDigest,
+        expected_model_identity: input.expectedModelIdentity,
+        expected_provider_location: input.expectedProviderLocation,
+        remote_egress_authorized: input.remoteEgressAuthorized,
+      },
+      normalizeResumeRewriteQueue,
+    ),
+  retryResumeRewrite: (jobId: string, expectedVersion: number) =>
+    request(
+      "retry_resume_rescue_rewrite",
+      { job_id: jobId, expected_version: expectedVersion },
+      (value) => {
+        const job = normalizeResumeRewriteMutation(value);
+        if (job.id !== jobId) return protocolError("Résumé Rescue rewrite retry identity");
+        return job;
+      },
+    ),
+  deleteResumeRewrite: (jobId: string, expectedVersion: number) =>
+    request(
+      "delete_resume_rescue_rewrite",
+      { job_id: jobId, expected_version: expectedVersion },
+      (value) => {
+        const result = normalizeResumeRewriteDelete(value);
+        if (result.job_id !== jobId) {
+          return protocolError("Résumé Rescue rewrite delete identity");
+        }
+        return result;
+      },
+    ),
+  decideResumeRewrite: (input: {
+    jobId: string;
+    proposalId: string;
+    expectedProposalDigest: string;
+    expectedJobVersion: number;
+    expectedHeadId: string;
+    expectedArtifactDigest: string;
+    decision: "accepted" | "rejected";
+  }) =>
+    request(
+      "decide_resume_rescue_rewrite",
+      {
+        job_id: input.jobId,
+        proposal_id: input.proposalId,
+        expected_proposal_digest: input.expectedProposalDigest,
+        expected_job_version: input.expectedJobVersion,
+        expected_head_id: input.expectedHeadId,
+        expected_artifact_digest: input.expectedArtifactDigest,
+        decision: input.decision,
+      },
+      (value) => {
+        const result = normalizeResumeRewriteVersionMutation(value);
+        if (
+          result.version.rewrite_job_id !== input.jobId ||
+          result.version.proposal_id !== input.proposalId ||
+          result.version.proposal_digest !== input.expectedProposalDigest ||
+          result.version.decision !== input.decision
+        ) {
+          return protocolError("Résumé Rescue rewrite decision identity");
+        }
+        return result;
+      },
+    ),
+  restoreResumeRewrite: (input: {
+    targetVersionId: string;
+    expectedHeadId: string;
+    expectedArtifactDigest: string;
+  }) =>
+    request(
+      "restore_resume_rescue_rewrite",
+      {
+        target_version_id: input.targetVersionId,
+        expected_head_id: input.expectedHeadId,
+        expected_artifact_digest: input.expectedArtifactDigest,
+      },
+      (value) => {
+        const result = normalizeResumeRewriteVersionMutation(value);
+        if (result.version.restore_target_id !== input.targetVersionId) {
+          return protocolError("Résumé Rescue rewrite restore identity");
+        }
+        return result.version;
+      },
+    ),
+  getResumeRewritePreview: (versionId: string, expectedArtifactDigest: string) =>
+    request(
+      "get_resume_rescue_rewrite_preview",
+      { version_id: versionId },
+      (value) => {
+        const preview = normalizeResumePreview(value);
+        if (
+          preview.projection_id !== versionId ||
+          preview.artifact_digest !== expectedArtifactDigest
+        ) {
+          return protocolError("Résumé Rescue rewrite preview identity");
+        }
+        return preview;
+      },
+    ),
+  getResumeRewriteJsonExport: (versionId: string, expectedArtifactDigest: string) =>
+    request(
+      "get_resume_rescue_rewrite_json_export",
+      { version_id: versionId },
+      (value) => {
+        const exported = normalizeJsonResumeExport(value);
+        if (
+          exported.projection_binding.id !== versionId ||
+          exported.projection_binding.artifact_digest !== expectedArtifactDigest
+        ) {
+          return protocolError("Résumé Rescue rewrite JSON export identity");
+        }
+        return exported;
+      },
     ),
   saveResumeProfile: (profile: ResumeProfile, expectedVersion?: number) =>
     request(

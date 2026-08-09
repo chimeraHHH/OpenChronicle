@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-resume-rescue-rewrite-preview"
+description = "Enables the get_resume_rescue_rewrite_preview command without any pre-configured scope."
+commands.allow = ["get_resume_rescue_rewrite_preview"]
+
+[[permission]]
+identifier = "deny-get-resume-rescue-rewrite-preview"
+description = "Denies the get_resume_rescue_rewrite_preview command without any pre-configured scope."
+commands.deny = ["get_resume_rescue_rewrite_preview"]

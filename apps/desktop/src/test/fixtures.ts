@@ -17,6 +17,8 @@ import type {
   ResumePreview,
   ResumeProjection,
   ResumeRescueState,
+  ResumeRewriteJob,
+  ResumeRewriteVersion,
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
@@ -406,9 +408,97 @@ export function resumeProjection(): ResumeProjection {
 export function resumeRescueState(): ResumeRescueState {
   return {
     enabled: true,
+    rewrite_enabled: false,
+    rewrite_provider: null,
+    rewrites: [],
     profiles: [resumeProfileVersion()],
     opportunities: [resumeOpportunity()],
     projections: [resumeProjection()],
+  };
+}
+
+export function resumeRewriteJob(): ResumeRewriteJob {
+  const projection = resumeProjection();
+  const proposal = {
+    proposal_id: "rewrite-proposal-1",
+    proposal_digest: "d".repeat(64),
+    operation: "replace_text" as const,
+    section: "experience" as const,
+    fact_id: "fact-api",
+    original_text: projection.artifact.sections[0]!.items[0]!.text,
+    proposed_text: "Reduced API p95 latency 40% by profiling and optimizing the query path.",
+    rationale: "Lead with the measured result while preserving the reviewed fact.",
+    requirement_ids: ["req-latency"],
+    evidence_fragments: ["Reduced API p95 latency by 40%", "profiling the query path"],
+  };
+  const decisions = [
+    {
+      proposal_id: proposal.proposal_id,
+      proposal_digest: proposal.proposal_digest,
+      fact_id: proposal.fact_id,
+      status: "accepted" as const,
+    },
+  ];
+  const artifact = {
+    ...projection.artifact,
+    generation_mode: "supervised_rewrite_projection" as const,
+    sections: [
+      {
+        kind: "experience" as const,
+        items: [
+          {
+            ...projection.artifact.sections[0]!.items[0]!,
+            text: proposal.proposed_text,
+            transformation: "accepted_model_rewrite" as const,
+          },
+        ],
+      },
+    ],
+    rewrite_binding: {
+      base_projection_id: projection.id,
+      base_artifact_digest: projection.artifact_digest,
+      rewrite_job_id: "resume-rewrite-1",
+      rewrite_output_digest: "e".repeat(64),
+      decision_version: 1,
+      decisions,
+    },
+  };
+  const version: ResumeRewriteVersion = {
+    id: "resume-rewrite-version-1",
+    lineage_id: "resume-rewrite-lineage-1",
+    version: 1,
+    parent_id: "",
+    action: "decision",
+    proposal_id: proposal.proposal_id,
+    proposal_digest: proposal.proposal_digest,
+    restore_target_id: "",
+    decision: "accepted",
+    base_projection_id: projection.id,
+    base_artifact_digest: projection.artifact_digest,
+    rewrite_job_id: "resume-rewrite-1",
+    rewrite_output_digest: "e".repeat(64),
+    decisions,
+    artifact,
+    artifact_digest: "f".repeat(64),
+    created_at: "2026-08-09T01:20:00.000000+00:00",
+  };
+  return {
+    id: "resume-rewrite-1",
+    status: "ready",
+    projection_id: projection.id,
+    projection_artifact_digest: projection.artifact_digest,
+    model_identity: "ollama/test-local",
+    provider_location: "local",
+    remote_egress_authorized: false,
+    proposals: [proposal],
+    output_digest: "e".repeat(64),
+    error_code: "",
+    attempt_count: 1,
+    created_at: "2026-08-09T01:19:00.000000+00:00",
+    updated_at: "2026-08-09T01:20:00.000000+00:00",
+    version: 2,
+    head: version,
+    versions: [version],
   };
 }
 

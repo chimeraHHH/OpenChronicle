@@ -10,9 +10,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 11 adds reviewed PDF/DOCX extraction without
-// exposing source bytes or adding upload, application, submission, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 13 as const;
+// WebView result projection. Version 14 adds digest-bound, single-proposal
+// résumé rewrite review without upload, application, submission, or send capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 14 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -272,7 +272,7 @@ export interface ResumeProjectionRequest {
 export interface ResumeArtifactItem {
   fact_id: string;
   text: string;
-  transformation: "selected_exact";
+  transformation: "selected_exact" | "accepted_model_rewrite";
   confidentiality: ResumeConfidentiality;
   ownership_scope: ResumeOwnership;
   provenance: ResumeProvenance[];
@@ -290,7 +290,7 @@ export interface ResumeRescueArtifact {
   schema_version: 1;
   workflow: "resume_rescue";
   action_capability: "none";
-  generation_mode: "deterministic_exact_projection";
+  generation_mode: "deterministic_exact_projection" | "supervised_rewrite_projection";
   profile_binding: { id: string; version: number; digest: string };
   opportunity_binding: {
     id: string;
@@ -304,6 +304,79 @@ export interface ResumeRescueArtifact {
   missing_evidence: Array<{ requirement_id: string; text: string }>;
   excluded_fact_ids: string[];
   warnings: string[];
+  rewrite_binding?: ResumeRewriteBinding;
+}
+
+export type ResumeRewriteStatus = "queued" | "leased" | "ready" | "failed";
+export type ResumeRewriteProviderLocation = "local" | "remote_or_unknown";
+export type ResumeRewriteDecisionStatus = "accepted" | "rejected";
+
+export interface ResumeRewriteDecision {
+  proposal_id: string;
+  proposal_digest: string;
+  fact_id: string;
+  status: ResumeRewriteDecisionStatus;
+}
+
+export interface ResumeRewriteBinding {
+  base_projection_id: string;
+  base_artifact_digest: string;
+  rewrite_job_id: string;
+  rewrite_output_digest: string;
+  decision_version: number;
+  decisions: ResumeRewriteDecision[];
+}
+
+export interface ResumeRewriteProposal {
+  proposal_id: string;
+  proposal_digest: string;
+  operation: "replace_text";
+  section: ResumeSectionKind;
+  fact_id: string;
+  original_text: string;
+  proposed_text: string;
+  rationale: string;
+  requirement_ids: string[];
+  evidence_fragments: string[];
+}
+
+export interface ResumeRewriteVersion {
+  id: string;
+  lineage_id: string;
+  version: number;
+  parent_id: string;
+  action: "decision" | "restore";
+  proposal_id: string;
+  proposal_digest: string;
+  restore_target_id: string;
+  decision: ResumeRewriteDecisionStatus | "restored";
+  base_projection_id: string;
+  base_artifact_digest: string;
+  rewrite_job_id: string;
+  rewrite_output_digest: string;
+  decisions: ResumeRewriteDecision[];
+  artifact: ResumeRescueArtifact;
+  artifact_digest: string;
+  created_at: string;
+}
+
+export interface ResumeRewriteJob {
+  id: string;
+  status: ResumeRewriteStatus;
+  projection_id: string;
+  projection_artifact_digest: string;
+  model_identity: string;
+  provider_location: ResumeRewriteProviderLocation;
+  remote_egress_authorized: boolean;
+  proposals: ResumeRewriteProposal[];
+  output_digest: string;
+  error_code: string;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+  version: number;
+  head: ResumeRewriteVersion | null;
+  versions: ResumeRewriteVersion[];
 }
 
 export interface ResumeProjection {
@@ -321,6 +394,12 @@ export interface ResumeProjection {
 
 export interface ResumeRescueState {
   enabled: boolean;
+  rewrite_enabled: boolean;
+  rewrite_provider: {
+    model: string;
+    location: ResumeRewriteProviderLocation;
+  } | null;
+  rewrites: ResumeRewriteJob[];
   profiles: ResumeProfileVersion[];
   opportunities: ResumeOpportunity[];
   projections: ResumeProjection[];

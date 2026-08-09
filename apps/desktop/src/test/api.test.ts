@@ -38,6 +38,7 @@ import {
   resumePreview,
   resumeProjection,
   resumeRescueState,
+  resumeRewriteJob,
   suggestion,
   wrapDetail,
 } from "./fixtures";
@@ -47,8 +48,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks pinned native PDF export as bridge protocol v13", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(13);
+  it("tracks supervised rewrite review as bridge protocol v14", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(14);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -157,7 +158,13 @@ describe("desktop bridge adapters", () => {
     const state = await desktopApi.getResumeRescueState();
 
     expect(tauri.invoke).toHaveBeenCalledWith("get_resume_rescue_state", {
-      request: { profile_limit: 20, opportunity_limit: 20, projection_limit: 20 },
+      request: {
+        profile_limit: 20,
+        opportunity_limit: 20,
+        projection_limit: 20,
+        rewrite_limit: 20,
+        rewrite_version_limit: 20,
+      },
     });
     expect(state.profiles[0]?.profile.facts[0]).toMatchObject({
       id: "fact-api",
@@ -184,6 +191,88 @@ describe("desktop bridge adapters", () => {
     tauri.invoke.mockResolvedValueOnce(unsafe);
     await expect(desktopApi.getResumeRescueState()).rejects.toMatchObject({
       code: "BRIDGE_PROTOCOL_ERROR",
+    });
+  });
+
+  it("binds supervised résumé proposals to one reviewed decision at a time", async () => {
+    const rewrite = resumeRewriteJob();
+    tauri.invoke.mockResolvedValueOnce({
+      ...resumeRescueState(),
+      rewrite_enabled: true,
+      rewrite_provider: { model: rewrite.model_identity, location: rewrite.provider_location },
+      rewrites: [rewrite],
+    });
+
+    const state = await desktopApi.getResumeRescueState();
+    expect(state.rewrites[0]).toMatchObject({
+      id: rewrite.id,
+      status: "ready",
+      proposals: [
+        {
+          proposal_id: "rewrite-proposal-1",
+          operation: "replace_text",
+          fact_id: "fact-api",
+        },
+      ],
+      head: {
+        decision: "accepted",
+        artifact: { generation_mode: "supervised_rewrite_projection" },
+      },
+    });
+
+    const malformed = resumeRewriteJob() as unknown as Record<string, unknown>;
+    const proposals = malformed.proposals as Array<Record<string, unknown>>;
+    proposals[0]!.accept_all = true;
+    tauri.invoke.mockResolvedValueOnce({
+      ...resumeRescueState(),
+      rewrite_enabled: true,
+      rewrite_provider: { model: rewrite.model_identity, location: rewrite.provider_location },
+      rewrites: [malformed],
+    });
+    await expect(desktopApi.getResumeRescueState()).rejects.toMatchObject({
+      code: "BRIDGE_PROTOCOL_ERROR",
+    });
+
+    tauri.invoke.mockResolvedValueOnce({ rewrite, created: true });
+    await desktopApi.queueResumeRewrite({
+      projectionId: rewrite.projection_id,
+      expectedArtifactDigest: rewrite.projection_artifact_digest,
+      expectedModelIdentity: rewrite.model_identity,
+      expectedProviderLocation: rewrite.provider_location,
+      remoteEgressAuthorized: false,
+    });
+    expect(tauri.invoke).toHaveBeenLastCalledWith("queue_resume_rescue_rewrite", {
+      request: {
+        projection_id: rewrite.projection_id,
+        expected_artifact_digest: rewrite.projection_artifact_digest,
+        expected_model_identity: rewrite.model_identity,
+        expected_provider_location: "local",
+        remote_egress_authorized: false,
+      },
+    });
+
+    const proposal = rewrite.proposals[0]!;
+    const head = rewrite.head!;
+    tauri.invoke.mockResolvedValueOnce({ version: head, created: true });
+    await desktopApi.decideResumeRewrite({
+      jobId: rewrite.id,
+      proposalId: proposal.proposal_id,
+      expectedProposalDigest: proposal.proposal_digest,
+      expectedJobVersion: rewrite.version,
+      expectedHeadId: "",
+      expectedArtifactDigest: rewrite.projection_artifact_digest,
+      decision: "accepted",
+    });
+    expect(tauri.invoke).toHaveBeenLastCalledWith("decide_resume_rescue_rewrite", {
+      request: {
+        job_id: rewrite.id,
+        proposal_id: proposal.proposal_id,
+        expected_proposal_digest: proposal.proposal_digest,
+        expected_job_version: rewrite.version,
+        expected_head_id: "",
+        expected_artifact_digest: rewrite.projection_artifact_digest,
+        decision: "accepted",
+      },
     });
   });
 

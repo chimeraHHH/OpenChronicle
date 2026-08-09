@@ -13,6 +13,8 @@ permissions = [
   "allow-get-resume-rescue-state",
   "allow-get-resume-rescue-preview",
   "allow-get-resume-rescue-json-export",
+  "allow-get-resume-rescue-rewrite-preview",
+  "allow-get-resume-rescue-rewrite-json-export",
 ]
 
 [[set]]
@@ -46,4 +48,9 @@ permissions = [
   "allow-discard-resume-rescue-document",
   "allow-export-resume-rescue-docx",
   "allow-export-resume-rescue-pdf",
+  "allow-queue-resume-rescue-rewrite",
+  "allow-retry-resume-rescue-rewrite",
+  "allow-delete-resume-rescue-rewrite",
+  "allow-decide-resume-rescue-rewrite",
+  "allow-restore-resume-rescue-rewrite",
 ]

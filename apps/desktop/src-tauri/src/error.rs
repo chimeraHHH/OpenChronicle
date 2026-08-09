@@ -38,6 +38,10 @@ impl DesktopError {
                 "VERSION_CONFLICT",
                 "The record changed. Refresh before trying again.",
             ),
+            "EGRESS_NOT_AUTHORIZED" => Self::new(
+                "EGRESS_NOT_AUTHORIZED",
+                "Remote résumé rewrite requires explicit authorization for this request.",
+            ),
             "EXPORT_UNAVAILABLE" => Self::new(
                 "EXPORT_UNAVAILABLE",
                 "Pinned PDF export is unavailable on this development host.",
@@ -114,5 +118,9 @@ mod tests {
         let unavailable = DesktopError::from_bridge("EXPORT_UNAVAILABLE");
         assert_eq!(unavailable.code, "EXPORT_UNAVAILABLE");
         assert!(unavailable.message.contains("development host"));
+
+        let egress = DesktopError::from_bridge("EGRESS_NOT_AUTHORIZED");
+        assert_eq!(egress.code, "EGRESS_NOT_AUTHORIZED");
+        assert!(egress.message.contains("explicit authorization"));
     }
 }

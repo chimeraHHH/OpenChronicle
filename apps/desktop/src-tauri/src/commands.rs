@@ -376,6 +376,53 @@ pub(crate) struct ResumeRescueStateRequest {
     pub opportunity_limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub projection_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rewrite_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rewrite_version_limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRewriteQueueRequest {
+    pub projection_id: String,
+    pub expected_artifact_digest: String,
+    pub expected_model_identity: String,
+    pub expected_provider_location: String,
+    pub remote_egress_authorized: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRewriteCasRequest {
+    pub job_id: String,
+    pub expected_version: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRewriteDecisionRequest {
+    pub job_id: String,
+    pub proposal_id: String,
+    pub expected_proposal_digest: String,
+    pub expected_job_version: u64,
+    pub expected_head_id: String,
+    pub expected_artifact_digest: String,
+    pub decision: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRewriteRestoreRequest {
+    pub target_version_id: String,
+    pub expected_head_id: String,
+    pub expected_artifact_digest: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRewriteVersionRequest {
+    pub version_id: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -909,6 +956,74 @@ pub async fn get_resume_rescue_state(
 ) -> Result<Value, DesktopError> {
     validate_resume_state(&request)?;
     invoke(Operation::ResumeRescueState, &request).await
+}
+
+#[tauri::command]
+pub async fn queue_resume_rescue_rewrite(
+    request: ResumeRewriteQueueRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.projection_id)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    validate_multiline_text(&request.expected_model_identity, 256, false)?;
+    if !matches!(
+        request.expected_provider_location.as_str(),
+        "local" | "remote_or_unknown"
+    ) {
+        return Err(DesktopError::invalid_request(
+            "The Résumé Rescue provider location is invalid.",
+        ));
+    }
+    invoke(Operation::ResumeRescueQueueRewrite, &request).await
+}
+
+#[tauri::command]
+pub async fn retry_resume_rescue_rewrite(
+    request: ResumeRewriteCasRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_rewrite_cas(&request)?;
+    invoke(Operation::ResumeRescueRetryRewrite, &request).await
+}
+
+#[tauri::command]
+pub async fn delete_resume_rescue_rewrite(
+    request: ResumeRewriteCasRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_rewrite_cas(&request)?;
+    invoke(Operation::ResumeRescueDeleteRewrite, &request).await
+}
+
+#[tauri::command]
+pub async fn decide_resume_rescue_rewrite(
+    request: ResumeRewriteDecisionRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_rewrite_decision(&request)?;
+    invoke(Operation::ResumeRescueDecideRewrite, &request).await
+}
+
+#[tauri::command]
+pub async fn restore_resume_rescue_rewrite(
+    request: ResumeRewriteRestoreRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.target_version_id)?;
+    validate_resume_identifier(&request.expected_head_id)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    invoke(Operation::ResumeRescueRestoreRewrite, &request).await
+}
+
+#[tauri::command]
+pub async fn get_resume_rescue_rewrite_preview(
+    request: ResumeRewriteVersionRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.version_id)?;
+    invoke(Operation::ResumeRescuePreviewRewrite, &request).await
+}
+
+#[tauri::command]
+pub async fn get_resume_rescue_rewrite_json_export(
+    request: ResumeRewriteVersionRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.version_id)?;
+    invoke(Operation::ResumeRescueExportRewriteJson, &request).await
 }
 
 #[tauri::command]
@@ -2620,6 +2735,8 @@ fn validate_resume_state(request: &ResumeRescueStateRequest) -> Result<(), Deskt
         request.profile_limit,
         request.opportunity_limit,
         request.projection_limit,
+        request.rewrite_limit,
+        request.rewrite_version_limit,
     ]
     .into_iter()
     .flatten()
@@ -2627,6 +2744,37 @@ fn validate_resume_state(request: &ResumeRescueStateRequest) -> Result<(), Deskt
     {
         return Err(DesktopError::invalid_request(
             "A Résumé Rescue state limit is invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_resume_rewrite_cas(request: &ResumeRewriteCasRequest) -> Result<(), DesktopError> {
+    validate_resume_identifier(&request.job_id)?;
+    if request.expected_version == 0 || request.expected_version > 2_147_483_647 {
+        return Err(DesktopError::invalid_request(
+            "The Résumé Rescue rewrite version is invalid.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_resume_rewrite_decision(
+    request: &ResumeRewriteDecisionRequest,
+) -> Result<(), DesktopError> {
+    validate_resume_identifier(&request.job_id)?;
+    validate_resume_identifier(&request.proposal_id)?;
+    validate_resume_digest(&request.expected_proposal_digest)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    if !request.expected_head_id.is_empty() {
+        validate_resume_identifier(&request.expected_head_id)?;
+    }
+    if request.expected_job_version == 0
+        || request.expected_job_version > 2_147_483_647
+        || !matches!(request.decision.as_str(), "accepted" | "rejected")
+    {
+        return Err(DesktopError::invalid_request(
+            "The Résumé Rescue rewrite decision is invalid.",
         ));
     }
     Ok(())
@@ -3167,6 +3315,8 @@ mod tests {
             profile_limit: Some(50),
             opportunity_limit: Some(50),
             projection_limit: Some(50),
+            rewrite_limit: Some(50),
+            rewrite_version_limit: Some(50),
         })
         .is_ok());
         assert!(validate_resume_state(&ResumeRescueStateRequest {
@@ -3194,6 +3344,27 @@ mod tests {
             None,
         )
         .is_err());
+    }
+
+    #[test]
+    fn resume_rewrite_review_is_single_proposal_and_digest_bound() {
+        let valid = ResumeRewriteDecisionRequest {
+            job_id: "resume-rewrite-job".to_owned(),
+            proposal_id: "proposal-one".to_owned(),
+            expected_proposal_digest: "a".repeat(64),
+            expected_job_version: 3,
+            expected_head_id: String::new(),
+            expected_artifact_digest: "b".repeat(64),
+            decision: "accepted".to_owned(),
+        };
+        assert!(validate_resume_rewrite_decision(&valid).is_ok());
+        assert!(
+            validate_resume_rewrite_decision(&ResumeRewriteDecisionRequest {
+                decision: "accept_all".to_owned(),
+                ..valid
+            })
+            .is_err()
+        );
     }
 
     #[test]

@@ -27,8 +27,12 @@ from .provenance.models import EvidenceRef
 from .reply_rescue import store as reply_rescue_store
 from .reply_rescue.service import ReplyRescueService
 from .reply_rescue.service import validate_config as validate_reply_rescue
+from .resume_rescue import review_store as resume_review_store
+from .resume_rescue import rewrite_store as resume_rewrite_store
 from .resume_rescue import store as resume_rescue_store
 from .resume_rescue.pdf_export import PdfExportUnavailable
+from .resume_rescue.rewrite import rewrite_proposal_digest
+from .resume_rescue.rewrite_generation import ResumeRewriteEgressDenied
 from .resume_rescue.service import ResumeRescueService
 from .services.capture_control import PauseStateConflict, set_paused
 from .services.context import ContextService
@@ -40,7 +44,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 13
+PROTOCOL_VERSION = 14
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -92,6 +96,15 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         return _error("VERSION_CONFLICT", "The Reply Rescue job changed."), 2
     except resume_rescue_store.ResumeRescueConflict:
         return _error("VERSION_CONFLICT", "The Résumé Rescue source changed."), 2
+    except resume_rewrite_store.ResumeRewriteConflict:
+        return _error("VERSION_CONFLICT", "The Résumé Rescue rewrite changed."), 2
+    except resume_review_store.ResumeRewriteReviewConflict:
+        return _error("VERSION_CONFLICT", "The Résumé Rescue review changed."), 2
+    except ResumeRewriteEgressDenied:
+        return _error(
+            "EGRESS_NOT_AUTHORIZED",
+            "The disclosed Résumé Rescue provider is not authorized.",
+        ), 2
     except PdfExportUnavailable:
         return _error(
             "EXPORT_UNAVAILABLE",
@@ -188,6 +201,15 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "resume_rescue.export_pdf": _resume_rescue_export_pdf,
         "resume_rescue.review_document": _resume_rescue_review_document,
         "resume_rescue.admit_document": _resume_rescue_admit_document,
+        "resume_rescue.queue_rewrite": _resume_rescue_queue_rewrite,
+        "resume_rescue.retry_rewrite": _resume_rescue_retry_rewrite,
+        "resume_rescue.delete_rewrite": _resume_rescue_delete_rewrite,
+        "resume_rescue.decide_rewrite": _resume_rescue_decide_rewrite,
+        "resume_rescue.restore_rewrite": _resume_rescue_restore_rewrite,
+        "resume_rescue.preview_rewrite": _resume_rescue_preview_rewrite,
+        "resume_rescue.export_rewrite_json": _resume_rescue_export_rewrite_json,
+        "resume_rescue.export_rewrite_docx": _resume_rescue_export_rewrite_docx,
+        "resume_rescue.export_rewrite_pdf": _resume_rescue_export_rewrite_pdf,
         "provenance.trace": _provenance_trace,
         "evidence.resolve": _evidence_resolve,
         "capture.set_paused": _capture_set_paused,
@@ -416,18 +438,36 @@ def _reply_rescue_delete(params: dict[str, Any]) -> dict[str, Any]:
 def _resume_rescue_state(params: dict[str, Any]) -> dict[str, Any]:
     _fields(
         params,
-        optional={"profile_limit", "opportunity_limit", "projection_limit"},
+        optional={
+            "profile_limit",
+            "opportunity_limit",
+            "projection_limit",
+            "rewrite_limit",
+            "rewrite_version_limit",
+        },
     )
     profile_limit = _bounded_int(params.get("profile_limit", 20), 1, 50)
     opportunity_limit = _bounded_int(params.get("opportunity_limit", 20), 1, 50)
     projection_limit = _bounded_int(params.get("projection_limit", 20), 1, 50)
+    rewrite_limit = _bounded_int(params.get("rewrite_limit", 20), 1, 50)
+    rewrite_version_limit = _bounded_int(params.get("rewrite_version_limit", 20), 1, 50)
     cfg = config_mod.load()
-    if type(cfg.resume_rescue.enabled) is not bool:
+    if (
+        type(cfg.resume_rescue.enabled) is not bool
+        or type(cfg.resume_rescue.rewrite_enabled) is not bool
+    ):
         raise ValueError("resume rescue enabled state is invalid")
     with fts.cursor() as conn:
         service = ResumeRescueService(conn, cfg)
+        rewrites = service.list_rewrites(limit=rewrite_limit)
         return {
             "enabled": cfg.resume_rescue.enabled,
+            "rewrite_enabled": cfg.resume_rescue.rewrite_enabled,
+            "rewrite_provider": (
+                service.rewrite_provider_summary()
+                if cfg.resume_rescue.enabled and cfg.resume_rescue.rewrite_enabled
+                else None
+            ),
             "profiles": [
                 _resume_profile_payload(value)
                 for value in service.list_profiles(limit=profile_limit)
@@ -439,6 +479,14 @@ def _resume_rescue_state(params: dict[str, Any]) -> dict[str, Any]:
             "projections": [
                 _resume_projection_payload(value)
                 for value in service.list_projections(limit=projection_limit)
+            ],
+            "rewrites": [
+                _resume_rewrite_state_payload(
+                    service,
+                    value,
+                    version_limit=rewrite_version_limit,
+                )
+                for value in rewrites
             ],
         }
 
@@ -650,6 +698,158 @@ def _resume_rescue_export_pdf(params: dict[str, Any]) -> dict[str, Any]:
             expected_preview_document_digest=_bounded_string(
                 params["expected_preview_document_digest"], 64, nonempty=True
             ),
+        )
+        return {
+            "export": {
+                **exported.metadata(),
+                "content_base64": base64.b64encode(exported.content).decode("ascii"),
+            }
+        }
+
+
+def _resume_rescue_queue_rewrite(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={
+            "projection_id",
+            "expected_artifact_digest",
+            "expected_model_identity",
+            "expected_provider_location",
+            "remote_egress_authorized",
+        },
+    )
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job, created = ResumeRescueService(conn, cfg).queue_rewrite(
+            _bounded_string(params["projection_id"], 128, nonempty=True),
+            expected_artifact_digest=_bounded_string(
+                params["expected_artifact_digest"], 64, nonempty=True
+            ),
+            expected_model_identity=_bounded_string(
+                params["expected_model_identity"], 256, nonempty=True
+            ),
+            expected_provider_location=_bounded_string(
+                params["expected_provider_location"], 50, nonempty=True
+            ),
+            remote_egress_authorized=_strict_bool(params["remote_egress_authorized"]),
+        )
+        service = ResumeRescueService(conn, cfg)
+        return {
+            "rewrite": _resume_rewrite_state_payload(service, job, version_limit=20),
+            "created": created,
+        }
+
+
+def _resume_rescue_retry_rewrite(params: dict[str, Any]) -> dict[str, Any]:
+    job_id, expected_version = _resume_rewrite_cas_params(params)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, cfg)
+        job = service.retry_rewrite(job_id, expected_version=expected_version)
+        return {"rewrite": _resume_rewrite_state_payload(service, job, version_limit=20)}
+
+
+def _resume_rescue_delete_rewrite(params: dict[str, Any]) -> dict[str, Any]:
+    job_id, expected_version = _resume_rewrite_cas_params(params)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        ResumeRescueService(conn, cfg).delete_rewrite(job_id, expected_version=expected_version)
+        return {"job_id": job_id, "deleted": True}
+
+
+def _resume_rescue_decide_rewrite(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={
+            "job_id",
+            "proposal_id",
+            "expected_proposal_digest",
+            "expected_job_version",
+            "expected_head_id",
+            "expected_artifact_digest",
+            "decision",
+        },
+    )
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        version, created = ResumeRescueService(conn, cfg).decide_rewrite(
+            _bounded_string(params["job_id"], 128, nonempty=True),
+            proposal_id=_bounded_string(params["proposal_id"], 128, nonempty=True),
+            expected_proposal_digest=_bounded_string(
+                params["expected_proposal_digest"], 64, nonempty=True
+            ),
+            expected_job_version=_bounded_int(params["expected_job_version"], 1, 2_147_483_647),
+            expected_head_id=_bounded_string(params["expected_head_id"], 128, nonempty=False),
+            expected_artifact_digest=_bounded_string(
+                params["expected_artifact_digest"], 64, nonempty=True
+            ),
+            decision=_bounded_string(params["decision"], 20, nonempty=True),
+        )
+        return {"version": _resume_rewrite_version_payload(version), "created": created}
+
+
+def _resume_rescue_restore_rewrite(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={
+            "target_version_id",
+            "expected_head_id",
+            "expected_artifact_digest",
+        },
+    )
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        version = ResumeRescueService(conn, cfg).restore_rewrite(
+            target_version_id=_bounded_string(params["target_version_id"], 128, nonempty=True),
+            expected_head_id=_bounded_string(params["expected_head_id"], 128, nonempty=True),
+            expected_artifact_digest=_bounded_string(
+                params["expected_artifact_digest"], 64, nonempty=True
+            ),
+        )
+        return {"version": _resume_rewrite_version_payload(version)}
+
+
+def _resume_rescue_preview_rewrite(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"version_id"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        preview = ResumeRescueService(conn, cfg).preview_rewrite(
+            _bounded_string(params["version_id"], 128, nonempty=True)
+        )
+        return {"preview": preview.to_dict()}
+
+
+def _resume_rescue_export_rewrite_json(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"version_id"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        exported = ResumeRescueService(conn, cfg).export_rewrite_json(
+            _bounded_string(params["version_id"], 128, nonempty=True)
+        )
+        return {"export": exported.to_dict()}
+
+
+def _resume_rescue_export_rewrite_docx(params: dict[str, Any]) -> dict[str, Any]:
+    return _resume_rescue_export_rewrite_native(params, source_format="docx")
+
+
+def _resume_rescue_export_rewrite_pdf(params: dict[str, Any]) -> dict[str, Any]:
+    return _resume_rescue_export_rewrite_native(params, source_format="pdf")
+
+
+def _resume_rescue_export_rewrite_native(
+    params: dict[str, Any], *, source_format: str
+) -> dict[str, Any]:
+    _fields(params, required={"version_id", "expected_preview_document_digest"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        service = ResumeRescueService(conn, cfg)
+        version_id = _bounded_string(params["version_id"], 128, nonempty=True)
+        expected = _bounded_string(params["expected_preview_document_digest"], 64, nonempty=True)
+        exported = (
+            service.export_rewrite_docx(version_id, expected_preview_document_digest=expected)
+            if source_format == "docx"
+            else service.export_rewrite_pdf(version_id, expected_preview_document_digest=expected)
         )
         return {
             "export": {
@@ -897,6 +1097,14 @@ def _reply_rescue_cas_params(params: dict[str, Any]) -> tuple[str, int]:
     )
 
 
+def _resume_rewrite_cas_params(params: dict[str, Any]) -> tuple[str, int]:
+    _fields(params, required={"job_id", "expected_version"})
+    return (
+        _bounded_string(params["job_id"], 128, nonempty=True),
+        _bounded_int(params["expected_version"], 1, 2_147_483_647),
+    )
+
+
 def _request_ref(params: dict[str, Any], *, id_field: str) -> EvidenceRef:
     return EvidenceRef(
         kind=_bounded_string(params["kind"], 64, nonempty=True),
@@ -1114,6 +1322,73 @@ def _resume_projection_payload(
         "opportunity_id": value.opportunity_id,
         "opportunity_digest": value.opportunity_digest,
         "request": value.request,
+        "artifact": value.artifact,
+        "artifact_digest": value.artifact_digest,
+        "created_at": value.created_at,
+    }
+
+
+def _resume_rewrite_state_payload(
+    service: ResumeRescueService,
+    value: resume_rewrite_store.ResumeRewriteJob,
+    *,
+    version_limit: int,
+) -> dict[str, Any]:
+    head = service.get_rewrite_head(value.id)
+    versions = service.list_rewrite_versions(value.id, limit=version_limit)
+    proposals = value.output.get("proposals", []) if value.output is not None else []
+    return {
+        "id": value.id,
+        "status": value.status,
+        "projection_id": value.projection_id,
+        "projection_artifact_digest": value.projection_artifact_digest,
+        "model_identity": value.model_identity,
+        "provider_location": value.provider_location,
+        "remote_egress_authorized": value.remote_egress_authorized,
+        "proposals": [
+            {
+                "proposal_id": proposal["proposal_id"],
+                "proposal_digest": rewrite_proposal_digest(proposal),
+                "operation": proposal["operation"],
+                "section": proposal["section"],
+                "fact_id": proposal["fact_id"],
+                "original_text": proposal["original_text"],
+                "proposed_text": proposal["proposed_text"],
+                "rationale": proposal["rationale"],
+                "requirement_ids": proposal["requirement_ids"],
+                "evidence_fragments": proposal["evidence_fragments"],
+            }
+            for proposal in proposals[:200]
+        ],
+        "output_digest": value.output_digest,
+        "error_code": value.error_code,
+        "attempt_count": value.attempt_count,
+        "created_at": value.created_at,
+        "updated_at": value.updated_at,
+        "version": value.version,
+        "head": _resume_rewrite_version_payload(head) if head is not None else None,
+        "versions": [_resume_rewrite_version_payload(item) for item in versions],
+    }
+
+
+def _resume_rewrite_version_payload(
+    value: resume_review_store.ResumeRewriteVersion,
+) -> dict[str, Any]:
+    return {
+        "id": value.id,
+        "lineage_id": value.lineage_id,
+        "version": value.version,
+        "parent_id": value.parent_id,
+        "action": value.action,
+        "proposal_id": value.proposal_id,
+        "proposal_digest": value.proposal_digest,
+        "restore_target_id": value.restore_target_id,
+        "decision": value.decision,
+        "base_projection_id": value.base_projection_id,
+        "base_artifact_digest": value.base_artifact_digest,
+        "rewrite_job_id": value.rewrite_job_id,
+        "rewrite_output_digest": value.rewrite_output_digest,
+        "decisions": value.decisions,
         "artifact": value.artifact,
         "artifact_digest": value.artifact_digest,
         "created_at": value.created_at,
