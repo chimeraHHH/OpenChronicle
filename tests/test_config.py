@@ -14,6 +14,7 @@ def test_defaults_when_no_file(tmp_path: Path) -> None:
     assert cfg.capture.excluded_url_patterns == []
     assert cfg.session.gap_minutes == 5
     assert cfg.reducer.enabled is True
+    assert cfg.resume_rescue.enabled is False
     default = cfg.model_for("reducer")
     assert default.model == "gpt-5.4-nano"
     assert default.timeout_seconds is None

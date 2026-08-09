@@ -203,6 +203,14 @@ class ReplyRescueConfig:
 
 
 @dataclass
+class ResumeRescueConfig:
+    # Explicit local source admission. Model egress remains a later opt-in step.
+    enabled: bool = False
+    max_profile_chars: int = 500_000
+    max_opportunity_chars: int = 200_000
+
+
+@dataclass
 class SearchConfig:
     default_top_k: int = 5
     filter_superseded_by_default: bool = True
@@ -232,6 +240,7 @@ class Config:
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
     prompt_rescue: PromptRescueConfig = field(default_factory=PromptRescueConfig)
     reply_rescue: ReplyRescueConfig = field(default_factory=ReplyRescueConfig)
+    resume_rescue: ResumeRescueConfig = field(default_factory=ResumeRescueConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
@@ -299,6 +308,10 @@ def load(path: Path | None = None) -> Config:
         reply_rescue=_build_dataclass(
             ReplyRescueConfig,
             _as_dict(raw.get("reply_rescue")),
+        ),
+        resume_rescue=_build_dataclass(
+            ResumeRescueConfig,
+            _as_dict(raw.get("resume_rescue")),
         ),
         search=_build_dataclass(SearchConfig, _as_dict(raw.get("search"))),
         mcp=_build_dataclass(MCPConfig, _as_dict(raw.get("mcp"))),
@@ -438,6 +451,11 @@ poll_seconds = 5                # durable queued-job cadence (1..300)
 lease_seconds = 300             # minimum lease; auto-raised to provider call budget
 max_input_chars = 50000         # reviewed conversation plus directions remains bounded
 max_output_chars = 30000        # prepared reply plus review ledger bound
+
+[resume_rescue]
+enabled = false                 # explicit opt-in; current slice is local and review-only
+max_profile_chars = 500000      # complete reviewed profile envelope bound
+max_opportunity_chars = 200000  # immutable job-description snapshot bound
 
 [search]
 default_top_k = 5

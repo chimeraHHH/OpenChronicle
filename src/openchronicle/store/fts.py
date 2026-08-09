@@ -157,6 +157,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     from ..prompt_rescue import store as prompt_rescue_store
     from ..provenance import store as provenance_store
     from ..reply_rescue import store as reply_rescue_store
+    from ..resume_rescue import store as resume_rescue_store
     from ..session import store as session_store
     from ..suggestions import store as suggestion_store
     from ..timeline import store as timeline_store
@@ -168,6 +169,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     candidate_store.ensure_schema(conn)
     prompt_rescue_store.ensure_schema(conn)
     reply_rescue_store.ensure_schema(conn)
+    resume_rescue_store.ensure_schema(conn)
     daily_wrap_store.ensure_schema(conn)
     suggestion_store.ensure_schema(conn)
     classifier_jobs.ensure_schema(conn)

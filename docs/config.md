@@ -409,6 +409,23 @@ There is no mailbox/OAuth access, provider draft creation, paste, or send
 command. Editing clears the generated claim/answered-question ledger so the old
 model analysis cannot appear to support newly edited text.
 
+## `[resume_rescue]`
+
+```toml
+[resume_rescue]
+enabled = false
+max_profile_chars = 500000
+max_opportunity_chars = 200000
+```
+
+Résumé Rescue starts disabled. Its first local slice stores immutable versions
+of explicitly reviewed career facts and content-addressed opportunity snapshots.
+Facts carry stable IDs, closed provenance, confidentiality, ownership scope,
+and unresolved conflict groups. Updating a profile creates a new version
+instead of overwriting a source used by an earlier projection. This slice has
+no document upload, model call, ATS promise, application form access, or
+submission capability.
+
 ## `[search]`
 
 ```toml
