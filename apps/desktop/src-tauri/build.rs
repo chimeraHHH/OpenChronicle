@@ -23,6 +23,7 @@ const COMMANDS: &[&str] = &[
     "save_resume_rescue_opportunity",
     "replace_resume_rescue_opportunity",
     "compose_resume_rescue_exact",
+    "get_resume_rescue_preview",
     "trace_provenance",
     "resolve_evidence",
     "set_capture_paused",

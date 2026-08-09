@@ -13,6 +13,7 @@ from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef
 from . import store
 from .models import build_exact_artifact
+from .render import ResumePreview, render_preview
 
 
 class ResumeRescueService:
@@ -151,6 +152,17 @@ class ResumeRescueService:
             for projection in store.list_projections(self.conn, limit=limit)
             if self._projection_current(projection)
         ]
+
+    def preview(self, projection_id: str) -> ResumePreview:
+        projection = self.get_projection(projection_id)
+        if projection is None:
+            raise store.ResumeRescueConflict("resume rescue projection changed")
+        profile = store.get_profile_version(
+            self.conn, projection.profile_id, projection.profile_version
+        )
+        if profile is None:
+            raise store.ResumeRescueConflict("resume rescue profile changed")
+        return render_preview(profile=profile, projection=projection)
 
     def _projection_current(self, projection: store.ResumeProjection) -> bool:
         profile = store.get_current_profile(self.conn, projection.profile_id)

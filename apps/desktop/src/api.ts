@@ -32,6 +32,7 @@ import type {
   ResumeOwnership,
   ResumeProfile,
   ResumeProfileVersion,
+  ResumePreview,
   ResumeProjection,
   ResumeProjectionRequest,
   ResumeProvenance,
@@ -1277,6 +1278,48 @@ export function normalizeResumeProjectionMutation(value: unknown): {
   };
 }
 
+export function normalizeResumePreview(value: unknown): ResumePreview {
+  const response = closedObject(value, ["preview"], "Résumé Rescue preview response");
+  const raw = closedObject(
+    response.preview,
+    [
+      "schema_version",
+      "projection_id",
+      "artifact_digest",
+      "renderer_version",
+      "template_id",
+      "html",
+      "plain_text",
+      "document_digest",
+      "action_capability",
+    ],
+    "Résumé Rescue preview",
+  );
+  const html = stringValue(raw.html, "Résumé Rescue preview HTML");
+  if (
+    numberValue(raw.schema_version, "Résumé Rescue preview schema") !== 1 ||
+    numberValue(raw.renderer_version, "Résumé Rescue renderer version") !== 1 ||
+    stringValue(raw.template_id, "Résumé Rescue template") !== "openchronicle-classic-v1" ||
+    stringValue(raw.action_capability, "Résumé Rescue preview action") !== "none" ||
+    !html.startsWith("<!doctype html>\n") ||
+    !html.includes("default-src 'none'") ||
+    /<(?:script|iframe|object|embed|form|link|img|base)\b/i.test(html)
+  ) {
+    return protocolError("Résumé Rescue preview contract");
+  }
+  return {
+    schema_version: 1,
+    projection_id: stringValue(raw.projection_id, "Résumé Rescue preview projection id"),
+    artifact_digest: resumeDigest(raw.artifact_digest, "Résumé Rescue preview artifact digest"),
+    renderer_version: 1,
+    template_id: "openchronicle-classic-v1",
+    html,
+    plain_text: stringValue(raw.plain_text, "Résumé Rescue preview plain text"),
+    document_digest: resumeDigest(raw.document_digest, "Résumé Rescue document digest"),
+    action_capability: "none",
+  };
+}
+
 function privacySnapshot(raw: JsonRecord, dailyWrap: JsonRecord): PrivacySnapshot {
   return {
     allowed_bundle_ids: stringArray(raw.allowed_bundle_ids, "allowed bundle IDs"),
@@ -2019,6 +2062,17 @@ export const desktopApi = {
         return result;
       },
     ),
+  getResumePreview: (projectionId: string, expectedArtifactDigest: string) =>
+    request("get_resume_rescue_preview", { projection_id: projectionId }, (value) => {
+      const preview = normalizeResumePreview(value);
+      if (
+        preview.projection_id !== projectionId ||
+        preview.artifact_digest !== expectedArtifactDigest
+      ) {
+        return protocolError("Résumé Rescue preview response identity");
+      }
+      return preview;
+    }),
   traceProvenance: (subject: EvidenceRef, maxDepth = 4) =>
     request(
       "trace_provenance",

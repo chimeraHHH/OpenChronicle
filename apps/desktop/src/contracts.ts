@@ -10,9 +10,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 8 adds deterministic Résumé Rescue
-// sources without adding upload, application, submission, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 8 as const;
+// WebView result projection. Version 9 adds deterministic Résumé Rescue HTML
+// preview without adding upload, application, submission, or send capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 9 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -314,6 +314,18 @@ export interface ResumeRescueState {
   profiles: ResumeProfileVersion[];
   opportunities: ResumeOpportunity[];
   projections: ResumeProjection[];
+}
+
+export interface ResumePreview {
+  schema_version: 1;
+  projection_id: string;
+  artifact_digest: string;
+  renderer_version: number;
+  template_id: "openchronicle-classic-v1";
+  html: string;
+  plain_text: string;
+  document_digest: string;
+  action_capability: "none";
 }
 
 export type SuggestionStatus =

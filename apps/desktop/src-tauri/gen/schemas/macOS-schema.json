@@ -177,10 +177,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`",
+          "description": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`\n- `allow-get-resume-rescue-preview`",
           "type": "string",
           "const": "desktop-read",
-          "markdownDescription": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`"
+          "markdownDescription": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`\n- `allow-get-resume-rescue-preview`"
         },
         {
           "description": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`\n- `allow-queue-prompt-rescue`\n- `allow-edit-prompt-rescue`\n- `allow-retry-prompt-rescue`\n- `allow-delete-prompt-rescue`\n- `allow-queue-reply-rescue`\n- `allow-edit-reply-rescue`\n- `allow-retry-reply-rescue`\n- `allow-delete-reply-rescue`\n- `allow-save-resume-rescue-profile`\n- `allow-save-resume-rescue-opportunity`\n- `allow-replace-resume-rescue-opportunity`\n- `allow-compose-resume-rescue-exact`",
@@ -259,6 +259,12 @@
           "type": "string",
           "const": "allow-get-reply-rescue",
           "markdownDescription": "Enables the get_reply_rescue command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_resume_rescue_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-resume-rescue-preview",
+          "markdownDescription": "Enables the get_resume_rescue_preview command without any pre-configured scope."
         },
         {
           "description": "Enables the get_resume_rescue_state command without any pre-configured scope.",
@@ -421,6 +427,12 @@
           "type": "string",
           "const": "deny-get-reply-rescue",
           "markdownDescription": "Denies the get_reply_rescue command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_resume_rescue_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-resume-rescue-preview",
+          "markdownDescription": "Denies the get_resume_rescue_preview command without any pre-configured scope."
         },
         {
           "description": "Denies the get_resume_rescue_state command without any pre-configured scope.",

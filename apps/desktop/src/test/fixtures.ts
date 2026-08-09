@@ -11,6 +11,7 @@ import type {
   ReplyRescueJobSummary,
   ResumeOpportunity,
   ResumeProfileVersion,
+  ResumePreview,
   ResumeProjection,
   ResumeRescueState,
   ProvenanceTrace,
@@ -405,6 +406,24 @@ export function resumeRescueState(): ResumeRescueState {
     profiles: [resumeProfileVersion()],
     opportunities: [resumeOpportunity()],
     projections: [resumeProjection()],
+  };
+}
+
+export function resumePreview(): ResumePreview {
+  const projection = resumeProjection();
+  return {
+    schema_version: 1,
+    projection_id: projection.id,
+    artifact_digest: projection.artifact_digest,
+    renderer_version: 1,
+    template_id: "openchronicle-classic-v1",
+    html: `<!doctype html>
+<html lang="en-US"><head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"><style>body{font-family:Arial}</style></head><body><main data-projection-id="${projection.id}"><h1>Ada Example</h1><section><h2>Experience</h2><ul><li>Reduced API p95 latency by 40% after profiling the query path.</li></ul></section></main></body></html>
+`,
+    plain_text:
+      "Ada Example\n\nEXPERIENCE\n- Reduced API p95 latency by 40% after profiling the query path.\n",
+    document_digest: "d".repeat(64),
+    action_capability: "none",
   };
 }
 

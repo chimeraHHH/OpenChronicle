@@ -270,13 +270,17 @@ privacy UX is validated on a signed macOS build.
   warning, and exclusion quality under `benchmarks/vida-resume-rescue-v1`.
   The exact projection passes the frozen local gate; the safe untailored
   base-profile comparator preserves facts but fails targeting quality. The
-  protocol-v8 desktop slice now provides capability-scoped Rust commands,
+  protocol-v9 desktop slice now provides capability-scoped Rust commands,
   closed WebView decoders, profile/opportunity version review, exact fact and
   exact requirement selection, manual mapping, missing-evidence/conflict and
   provenance/confidentiality/ownership ledgers, and immutable projection
-  review. Deterministic document preview/export, supervised no-tool rewriting,
-  and reviewed JSON Resume/document import remain open; drafts and all
-  send/submit authority remain later, separate capabilities.
+  review. A fixed A4 HTML renderer now derives an escaped, no-network document,
+  parser-order plain-text mirror, and digest from that same current projection;
+  the desktop renders it in an empty-permission sandbox and rejects active
+  content at its protocol boundary. Deterministic file export, render/overflow
+  acceptance, supervised no-tool rewriting, and reviewed JSON Resume/document
+  import remain open; drafts and all send/submit authority remain later,
+  separate capabilities.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only

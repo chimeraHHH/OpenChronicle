@@ -49,6 +49,7 @@ pub fn run() {
             commands::save_resume_rescue_opportunity,
             commands::replace_resume_rescue_opportunity,
             commands::compose_resume_rescue_exact,
+            commands::get_resume_rescue_preview,
             commands::trace_provenance,
             commands::resolve_evidence,
             commands::set_capture_paused,

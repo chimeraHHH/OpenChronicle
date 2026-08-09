@@ -38,7 +38,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 8
+PROTOCOL_VERSION = 9
 MAX_REQUEST_BYTES = 64 * 1024
 
 
@@ -172,6 +172,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "resume_rescue.save_opportunity": _resume_rescue_save_opportunity,
         "resume_rescue.replace_opportunity": _resume_rescue_replace_opportunity,
         "resume_rescue.compose_exact": _resume_rescue_compose_exact,
+        "resume_rescue.preview": _resume_rescue_preview,
         "provenance.trace": _provenance_trace,
         "evidence.resolve": _evidence_resolve,
         "capture.set_paused": _capture_set_paused,
@@ -493,6 +494,16 @@ def _resume_rescue_compose_exact(params: dict[str, Any]) -> dict[str, Any]:
             "projection": _resume_projection_payload(projection),
             "created": created,
         }
+
+
+def _resume_rescue_preview(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"projection_id"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        preview = ResumeRescueService(conn, cfg).preview(
+            _bounded_string(params["projection_id"], 128, nonempty=True)
+        )
+        return {"preview": preview.to_dict()}
 
 
 def _resume_opportunity_params(params: dict[str, Any], *, replacing: bool) -> dict[str, Any]:

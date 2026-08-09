@@ -932,6 +932,27 @@ def test_resume_rescue_bridge_composes_exact_review_artifact_and_invalidates_sta
         {"requirement_id": "req-kubernetes", "text": "Kubernetes is required."}
     ]
 
+    previewed, previewed_code = _request(
+        "resume_rescue.preview", {"projection_id": projection["id"]}
+    )
+    assert previewed_code == 0
+    preview = previewed["result"]["preview"]
+    assert preview["schema_version"] == 1
+    assert preview["projection_id"] == projection["id"]
+    assert preview["artifact_digest"] == projection["artifact_digest"]
+    assert preview["renderer_version"] == 1
+    assert preview["template_id"] == "openchronicle-classic-v1"
+    assert preview["action_capability"] == "none"
+    assert "<script" not in preview["html"].lower()
+    assert fact["text"] in preview["plain_text"]
+
+    malformed_preview, malformed_preview_code = _request(
+        "resume_rescue.preview",
+        {"projection_id": projection["id"], "unknown": True},
+    )
+    assert malformed_preview_code == 2
+    assert malformed_preview["error"]["code"] == "INVALID_PARAMS"
+
     state, state_code = _request("resume_rescue.state")
     assert state_code == 0
     assert state["result"]["enabled"] is True

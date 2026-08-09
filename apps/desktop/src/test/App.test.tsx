@@ -36,6 +36,7 @@ import {
   replyRescueSummary,
   resumeOpportunity,
   resumeProfileVersion,
+  resumePreview,
   resumeProjection,
   resumeRescueState,
   resolvedEvidence,
@@ -106,6 +107,7 @@ function commandResult(command: string) {
   if (command === "compose_resume_rescue_exact") {
     return { projection: resumeProjection(), created: true };
   }
+  if (command === "get_resume_rescue_preview") return { preview: resumePreview() };
   if (command === "edit_candidate" || command === "approve_candidate" || command === "reject_candidate") {
     return bridgeCandidateMutation();
   }
@@ -136,6 +138,12 @@ describe("trusted console", () => {
     expect(screen.getAllByText("Missing evidence").length).toBeGreaterThan(0);
     expect(screen.getByText(/manual_mapping_unverified/i)).toBeInTheDocument();
     expect(screen.getByText(/Action capability: none/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Open document preview" }));
+    const preview = await screen.findByTitle("Deterministic résumé document preview");
+    expect(preview).toHaveAttribute("sandbox", "");
+    expect(preview).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(preview).toHaveAttribute("srcdoc", expect.stringContaining("default-src 'none'"));
+    expect(screen.getByText(/Document digest:/i)).toBeInTheDocument();
     expect(
       tauri.invoke.mock.calls.some(([command]) =>
         String(command).includes("apply") ||

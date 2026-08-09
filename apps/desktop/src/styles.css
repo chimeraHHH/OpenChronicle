@@ -881,6 +881,30 @@ select {
   grid-column: 2;
 }
 
+.resume-rescue__document {
+  margin-top: 1.4rem;
+}
+
+.resume-rescue__iframe {
+  width: 100%;
+  min-height: 820px;
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+}
+
+.resume-rescue__plain-text {
+  max-height: 320px;
+  padding: 1rem;
+  overflow: auto;
+  color: var(--text);
+  white-space: pre-wrap;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+  unicode-bidi: plaintext;
+}
+
 .prompt-rescue__notes section {
   padding: 0.85rem;
   background: var(--surface-soft);

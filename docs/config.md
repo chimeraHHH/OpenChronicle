@@ -429,9 +429,12 @@ job-requirement mappings are explicitly unverified until reviewed. This slice
 is available in the trusted desktop console: users explicitly select facts and
 exact opportunity excerpts, inspect missing evidence and conflict exclusions,
 and review the resulting immutable bindings and policy ledger. The WebView
-receives only closed protocol-v8 objects through allowlisted native commands.
+receives only closed protocol-v9 objects through allowlisted native commands.
 This slice has no document upload, model call, ATS promise, application form
-access, or submission capability.
+access, or submission capability. The document preview is generated from the
+same current projection as a fixed A4 HTML tree plus a plain-text parser-order
+mirror and digest. It uses escaped facts, a no-network Content Security Policy,
+no links/forms/scripts/assets, and an empty-permission sandbox in the desktop.
 
 ## `[search]`
 

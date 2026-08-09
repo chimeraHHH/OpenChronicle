@@ -32,6 +32,7 @@ import {
   replyRescueJob,
   resumeOpportunity,
   resumeProfileVersion,
+  resumePreview,
   resumeProjection,
   resumeRescueState,
   suggestion,
@@ -43,8 +44,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks deterministic Résumé Rescue as bridge protocol v8", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(8);
+  it("tracks deterministic Résumé Rescue preview as bridge protocol v9", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(9);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -232,6 +233,28 @@ describe("desktop bridge adapters", () => {
         requirements: projection.request.requirements,
       },
     });
+
+    tauri.invoke.mockResolvedValueOnce({ preview: resumePreview() });
+    const preview = await desktopApi.getResumePreview(
+      projection.id,
+      projection.artifact_digest,
+    );
+    expect(preview).toMatchObject({
+      template_id: "openchronicle-classic-v1",
+      renderer_version: 1,
+      action_capability: "none",
+    });
+    expect(preview.html).toContain("default-src 'none'");
+    expect(tauri.invoke).toHaveBeenLastCalledWith("get_resume_rescue_preview", {
+      request: { projection_id: projection.id },
+    });
+
+    tauri.invoke.mockResolvedValueOnce({
+      preview: { ...resumePreview(), action_capability: "download" },
+    });
+    await expect(
+      desktopApi.getResumePreview(projection.id, projection.artifact_digest),
+    ).rejects.toMatchObject({ code: "BRIDGE_PROTOCOL_ERROR" });
   });
 
   it("queues reviewed manual input and maps only a no-action prepared artifact", async () => {

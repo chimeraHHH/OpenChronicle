@@ -328,6 +328,12 @@ pub(crate) struct ResumeComposeExactRequest {
     pub requirements: Vec<ResumeRequirementRequest>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumePreviewRequest {
+    pub projection_id: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ForgetPreview {
     candidate_id: String,
@@ -567,6 +573,14 @@ pub async fn compose_resume_rescue_exact(
 ) -> Result<Value, DesktopError> {
     validate_resume_compose(&request)?;
     invoke(Operation::ResumeRescueComposeExact, &request).await
+}
+
+#[tauri::command]
+pub async fn get_resume_rescue_preview(
+    request: ResumePreviewRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.projection_id)?;
+    invoke(Operation::ResumeRescuePreview, &request).await
 }
 
 #[tauri::command]

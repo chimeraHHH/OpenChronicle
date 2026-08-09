@@ -10,6 +10,8 @@ import type {
   ResumeOwnership,
   ResumeProfile,
   ResumeProfileVersion,
+  ResumePreview,
+  ResumeProjection,
   ResumeRequirementRequest,
   ResumeRescueState,
   ResumeSectionKind,
@@ -67,6 +69,7 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   const [selectedFactIds, setSelectedFactIds] = useState<string[]>([]);
   const [requirementText, setRequirementText] = useState("");
   const [requirements, setRequirements] = useState<ResumeRequirementRequest[]>([]);
+  const [preview, setPreview] = useState<ResumePreview | null>(null);
 
   async function refresh() {
     const next = await api.getResumeRescueState();
@@ -324,6 +327,22 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
     }
   }
 
+  async function openPreview(projection: ResumeProjection) {
+    clearMessages();
+    setBusy(`preview:${projection.id}`);
+    try {
+      setPreview(await api.getResumePreview(projection.id, projection.artifact_digest));
+      window.requestAnimationFrame(() =>
+        document.getElementById("resume-document-preview")?.scrollIntoView({ block: "start" }),
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+      setPreview(null);
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (!state && busy === "load") {
     return <main className="page" id="main-content" tabIndex={-1}><p role="status">Loading local Résumé Rescue sources…</p></main>;
   }
@@ -419,8 +438,33 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
 
       <section aria-labelledby="resume-results-heading">
         <div className="section-heading-row"><div><p className="eyebrow">Immutable local results</p><h2 id="resume-results-heading">Projection review</h2></div><button className="button button--ghost" onClick={() => void refresh().catch((reason: unknown) => setError(displayError(reason)))} type="button">Refresh</button></div>
-        {state?.projections.length ? <div className="resume-rescue__projections">{state.projections.map((projection) => <article className="settings-section" key={projection.id}><div className="detail-header"><div><p className="eyebrow">{formatDateTime(projection.created_at)}</p><h3><UntrustedText>{projection.artifact.opportunity_binding.title}</UntrustedText> · <UntrustedText>{projection.artifact.opportunity_binding.employer}</UntrustedText></h3></div><StatusBadge tone="positive">Exact only</StatusBadge></div>{projection.artifact.sections.map((section) => <section key={section.kind}><h3>{section.kind}</h3><ul>{section.items.map((item) => <li key={item.fact_id}><UntrustedText>{item.text}</UntrustedText><div className="token-list"><span className="technical-label">{item.fact_id}</span><span className="technical-label">{item.confidentiality}</span><span className="technical-label">{item.ownership_scope}</span><span className="technical-label">{item.provenance.map((source) => source.kind).join(", ")}</span></div></li>)}</ul></section>)}<section><h3>Requirement evidence ledger</h3>{projection.artifact.requirement_coverage.map((coverage) => <div className="resume-rescue__coverage" key={coverage.id}><StatusBadge tone={coverage.status === "candidate_supported" ? "info" : "warning"}>{coverage.status === "candidate_supported" ? "Candidate support" : "Missing evidence"}</StatusBadge><p><UntrustedText>{coverage.text}</UntrustedText></p><small>{coverage.support_assurance} · {coverage.fact_ids.join(", ") || "no mapped facts"}</small></div>)}</section>{projection.artifact.warnings.length ? <div className="warning-panel"><h3>Required review warnings</h3><ul>{projection.artifact.warnings.map((warning, index) => <li key={`${projection.id}-warning-${index}`}><UntrustedText>{warning}</UntrustedText></li>)}</ul></div> : null}<details className="lineage-details"><summary>Technical bindings</summary><ul className="metadata-list--technical"><li>Profile {projection.profile_id} v{projection.profile_version}: {projection.profile_digest}</li><li>Opportunity {projection.opportunity_id}: {projection.opportunity_digest}</li><li>Artifact: {projection.artifact_digest}</li><li>Action capability: {projection.artifact.action_capability}</li></ul></details></article>)}</div> : <p className="empty-callout">No current projection exists. Profile updates and opportunity supersessions deliberately hide stale results.</p>}
+        {state?.projections.length ? <div className="resume-rescue__projections">{state.projections.map((projection) => <article className="settings-section" key={projection.id}><div className="detail-header"><div><p className="eyebrow">{formatDateTime(projection.created_at)}</p><h3><UntrustedText>{projection.artifact.opportunity_binding.title}</UntrustedText> · <UntrustedText>{projection.artifact.opportunity_binding.employer}</UntrustedText></h3></div><StatusBadge tone="positive">Exact only</StatusBadge></div>{projection.artifact.sections.map((section) => <section key={section.kind}><h3>{section.kind}</h3><ul>{section.items.map((item) => <li key={item.fact_id}><UntrustedText>{item.text}</UntrustedText><div className="token-list"><span className="technical-label">{item.fact_id}</span><span className="technical-label">{item.confidentiality}</span><span className="technical-label">{item.ownership_scope}</span><span className="technical-label">{item.provenance.map((source) => source.kind).join(", ")}</span></div></li>)}</ul></section>)}<section><h3>Requirement evidence ledger</h3>{projection.artifact.requirement_coverage.map((coverage) => <div className="resume-rescue__coverage" key={coverage.id}><StatusBadge tone={coverage.status === "candidate_supported" ? "info" : "warning"}>{coverage.status === "candidate_supported" ? "Candidate support" : "Missing evidence"}</StatusBadge><p><UntrustedText>{coverage.text}</UntrustedText></p><small>{coverage.support_assurance} · {coverage.fact_ids.join(", ") || "no mapped facts"}</small></div>)}</section>{projection.artifact.warnings.length ? <div className="warning-panel"><h3>Required review warnings</h3><ul>{projection.artifact.warnings.map((warning, index) => <li key={`${projection.id}-warning-${index}`}><UntrustedText>{warning}</UntrustedText></li>)}</ul></div> : null}<div className="button-row"><button className="button button--primary" disabled={Boolean(busy)} onClick={() => void openPreview(projection)} type="button">{busy === `preview:${projection.id}` ? "Rendering…" : "Open document preview"}</button><span className="muted">Fixed template · no scripts or network</span></div><details className="lineage-details"><summary>Technical bindings</summary><ul className="metadata-list--technical"><li>Profile {projection.profile_id} v{projection.profile_version}: {projection.profile_digest}</li><li>Opportunity {projection.opportunity_id}: {projection.opportunity_digest}</li><li>Artifact: {projection.artifact_digest}</li><li>Action capability: {projection.artifact.action_capability}</li></ul></details></article>)}</div> : <p className="empty-callout">No current projection exists. Profile updates and opportunity supersessions deliberately hide stale results.</p>}
       </section>
+
+      {preview ? (
+        <section className="settings-section resume-rescue__document" id="resume-document-preview">
+          <div className="section-heading-row">
+            <div>
+              <p className="eyebrow">Sandboxed deterministic document</p>
+              <h2>HTML preview</h2>
+              <p className="muted">Template {preview.template_id} · renderer v{preview.renderer_version}</p>
+            </div>
+            <button className="button button--ghost" onClick={() => setPreview(null)} type="button">Close preview</button>
+          </div>
+          <iframe
+            className="resume-rescue__iframe"
+            referrerPolicy="no-referrer"
+            sandbox=""
+            srcDoc={preview.html}
+            title="Deterministic résumé document preview"
+          />
+          <details className="lineage-details">
+            <summary>Parser-order and digest review</summary>
+            <p className="metadata-list--technical">Document digest: <UntrustedText>{preview.document_digest}</UntrustedText></p>
+            <pre className="resume-rescue__plain-text"><UntrustedText>{preview.plain_text}</UntrustedText></pre>
+          </details>
+        </section>
+      ) : null}
     </main>
   );
 }

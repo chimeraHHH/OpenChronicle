@@ -11,6 +11,7 @@ permissions = [
   "allow-get-prompt-rescue",
   "allow-get-reply-rescue",
   "allow-get-resume-rescue-state",
+  "allow-get-resume-rescue-preview",
 ]
 
 [[set]]
