@@ -95,9 +95,19 @@ def _output(*proposals: dict[str, object]) -> dict[str, object]:
 
 
 class _Response:
-    def __init__(self, value: object) -> None:
+    def __init__(self, value: object, *, tool_calls: list[object] | None = None) -> None:
         self.choices = [
-            type("Choice", (), {"message": type("Message", (), {"content": json.dumps(value)})()})
+            type(
+                "Choice",
+                (),
+                {
+                    "message": type(
+                        "Message",
+                        (),
+                        {"content": json.dumps(value), "tool_calls": tool_calls},
+                    )()
+                },
+            )
         ]
 
 
@@ -229,6 +239,36 @@ def test_generation_calls_json_provider_without_tools_and_validates_output() -> 
     assert messages[0]["role"] == "system"
     assert "You have no tools" in messages[0]["content"]
     assert json.loads(messages[1]["content"]) == build_rewrite_provider_input(_artifact())
+
+
+def test_generation_rejects_provider_tool_call_even_with_valid_json_text() -> None:
+    cfg = _cfg()
+    tool_call = type(
+        "ToolCall",
+        (),
+        {
+            "id": "rewrite-tool-call",
+            "function": type(
+                "Function",
+                (),
+                {"name": "submit_resume", "arguments": "{}"},
+            )(),
+        },
+    )()
+
+    with pytest.raises(ResumeRewriteValidationError, match="tool call") as error:
+        generate_rewrite_output(
+            cfg,
+            artifact=_artifact(),
+            expected_model_identity="ollama/test",
+            expected_provider_location="local",
+            remote_egress_authorized=False,
+            llm_caller=lambda *_args, **_kwargs: _Response(
+                _output(_proposal()), tool_calls=[tool_call]
+            ),
+        )
+
+    assert error.value.code == "invalid_output"
 
 
 @pytest.mark.parametrize(

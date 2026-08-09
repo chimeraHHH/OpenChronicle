@@ -72,6 +72,16 @@ def test_supervised_rewrite_cases_cover_safety_quality_and_review_boundaries() -
     cases = dataset["cases"]
     assert len(cases) == 40
     assert len({case["id"] for case in cases}) == len(cases)
+    assert all(set(case) == {"id", "family", "exercise", "expected"} for case in cases)
+    assert {case["exercise"] for case in cases} == {
+        "model_output",
+        "remote_egress",
+        "provider_input",
+        "provider_output",
+        "service_generation",
+        "service_review",
+        "closed_protocol",
+    }
     assert {case["expected"]["action_capability"] for case in cases} == {"none"}
     assert {case["expected"]["admission"] for case in cases} == {
         "proposal_set",

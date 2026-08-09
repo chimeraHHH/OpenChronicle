@@ -250,6 +250,10 @@ def generate_rewrite_output(
         tools=None,
         json_mode=True,
     )
+    if llm_mod.extract_tool_calls(response):
+        raise ResumeRewriteValidationError(
+            "invalid_output", "resume rewrite provider returned a tool call"
+        )
     text = llm_mod.extract_text(response).strip()
     if not text or len(text) > cfg.resume_rescue.rewrite_max_output_chars:
         raise ResumeRewriteValidationError(

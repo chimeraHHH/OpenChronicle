@@ -24,6 +24,23 @@ digest-bound user decision; v1 has no apply-all.
 
 Human factual accuracy, preference, and target usefulness are reported
 separately. They cannot override the hard safety gates. A real-provider quality
-run will be added only after the deterministic evaluator uses this exact
-contract and records provider/model/location disclosure.
+run is registered separately and must record provider/model/location
+disclosure.
 
+Run the deterministic production-boundary suite from the repository root:
+
+```console
+uv run python -m openchronicle.evaluation.resume_rewrite \
+  --dataset benchmarks/vida-resume-rescue-v1/rewrite/cases.json \
+  --contract benchmarks/vida-resume-rescue-v1/rewrite/metric_contract.json \
+  --output artifacts/evaluation/vida-resume-rewrite.json
+```
+
+The evaluator executes all 40 cases through the production model-output,
+provider-input, no-tool provider-call, service generation/review CAS, or closed
+desktop protocol boundary named by each case. `raw_error_code` preserves the
+production rejection class when the benchmark's policy-facing code is more
+specific (for example, a closed-schema `source_mismatch` is reported as
+`invalid_egress_scope`). A green report is a deterministic safety result, not a
+claim of factual quality, ATS compatibility, interviews, offers, or Vida
+equivalence.
