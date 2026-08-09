@@ -204,10 +204,15 @@ class ReplyRescueConfig:
 
 @dataclass
 class ResumeRescueConfig:
-    # Explicit local source admission. Model egress remains a later opt-in step.
+    # Local source admission and model egress are separate opt-ins.
     enabled: bool = False
     max_profile_chars: int = 500_000
     max_opportunity_chars: int = 200_000
+    rewrite_enabled: bool = False
+    rewrite_poll_seconds: int = 5
+    rewrite_lease_seconds: int = 300
+    rewrite_max_input_chars: int = 200_000
+    rewrite_max_output_chars: int = 200_000
 
 
 @dataclass
@@ -360,6 +365,10 @@ api_key_env = "OPENAI_API_KEY"
 # Explicit reply preparation. This stage has no tools and cannot send. Enabling
 # it may send exactly the reviewed conversation source to this configured model.
 
+[models.resume_rescue]
+# Explicit supervised résumé rewrite. This stage has no tools and receives only
+# selected reviewed facts plus exact requirements already mapped to those facts.
+
 [capture]
 event_driven = true           # capture on window/app/typing events via mac-ax-watcher
 heartbeat_minutes = 10        # periodic capture even when nothing happens
@@ -453,9 +462,14 @@ max_input_chars = 50000         # reviewed conversation plus directions remains 
 max_output_chars = 30000        # prepared reply plus review ledger bound
 
 [resume_rescue]
-enabled = false                 # explicit opt-in; current slice is local and review-only
+enabled = false                 # explicit opt-in for local profile/import/export operations
 max_profile_chars = 500000      # complete reviewed profile envelope bound
 max_opportunity_chars = 200000  # immutable job-description snapshot bound
+rewrite_enabled = false         # separate opt-in because a configured model may receive selected facts
+rewrite_poll_seconds = 5        # durable queued-job cadence (1..300)
+rewrite_lease_seconds = 300     # minimum lease; auto-raised to provider call budget
+rewrite_max_input_chars = 200000  # selected facts plus mapped requirement excerpts
+rewrite_max_output_chars = 200000 # closed proposal-set JSON bound
 
 [search]
 default_top_k = 5

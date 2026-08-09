@@ -180,9 +180,7 @@ def validate_rewrite_model_output(value: object, *, artifact: dict[str, Any]) ->
             "invalid_output", "resume rewrite proposals must be a bounded list"
         )
     try:
-        serialized_chars = len(
-            json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        )
+        serialized_chars = len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
     except (TypeError, ValueError) as exc:
         raise ResumeRewriteValidationError(
             "invalid_output", "resume rewrite output is not JSON compatible"
