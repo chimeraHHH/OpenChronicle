@@ -251,10 +251,16 @@ privacy UX is validated on a signed macOS build.
   strict no-tool artifact, lease/CAS lifecycle, sanitized failures, native-
   confirmed delete, and desktop compose/review/edit/copy UI all preserve
   `manual_unverified` identity assurance. Manual edits clear the generated
-  claim/answered-question ledger. Connector identities, exact selection reuse,
-  frozen adversarial evaluation, provider quality evidence, and Résumé Rescue
-  remain open; drafts and all send/submit authority remain later, separate
-  capabilities.
+  claim/answered-question ledger. The frozen 17-case adversarial evaluator now
+  separates usefulness from schema/action, secret-echo, quoted-injection,
+  recipient-warning, unresolved-context, and claim-ledger gates under
+  `benchmarks/vida-reply-rescue-v1`. A distinct `Command-Shift-R` path now
+  reuses Prompt Rescue's double-fenced exact AX selection receipt; it labels the
+  result `selected_excerpt_unverified`, leaves recipients and reply mode
+  unspecified, and does not claim mail-thread identity. Connector identities,
+  live selection compatibility evidence, provider quality evidence, and Résumé
+  Rescue remain open; drafts and all send/submit authority remain later,
+  separate capabilities.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only

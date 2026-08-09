@@ -33,6 +33,7 @@ import {
   promptRescueJob,
   promptRescueSummary,
   replyRescueJob,
+  replyRescueSummary,
   resolvedEvidence,
   snapshot,
   suggestion,
@@ -112,7 +113,7 @@ describe("trusted console", () => {
 
     await user.click(await screen.findByRole("button", { name: /Reply Rescue/i }));
     expect(await screen.findByRole("heading", { name: "Reply Rescue" })).toBeInTheDocument();
-    expect(screen.getByText(/Manual source has no thread identity/i)).toBeInTheDocument();
+    expect(screen.getByText(/Excerpt sources have no thread identity/i)).toBeInTheDocument();
     expect(screen.getByText(/no mailbox, provider-draft, paste, or send capability/i)).toBeInTheDocument();
     expect(await screen.findByDisplayValue("Ana: Can you meet Tuesday at 10?")).toBeInTheDocument();
 
@@ -201,6 +202,70 @@ describe("trusted console", () => {
     expect(within(receipt).getByText("com.apple.Notes")).toBeInTheDocument();
     expect(within(receipt).getByText(/Launch notes/)).toBeInTheDocument();
     expect(within(receipt).getByText(/range 4\+27/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /import selection/i })).not.toBeInTheDocument();
+  });
+
+  it("shows Reply Rescue's distinct shortcut and weaker exact-selection receipt", async () => {
+    const user = userEvent.setup();
+    const binding = {
+      schema_version: 1 as const,
+      captured_at: "2026-08-09T12:00:00Z",
+      app_name: "Notes",
+      bundle_id: "com.apple.Notes",
+      pid: 123,
+      window_title: "Conversation excerpt",
+      element_role: "AXTextArea",
+      element_subrole: "",
+      selection_location: 7,
+      selection_length: 48,
+    };
+    const summary = replyRescueSummary({
+      source_kind: "macos_selection",
+      identity_assurance: "selected_excerpt_unverified",
+    });
+    const detail = replyRescueJob({
+      source_kind: "macos_selection",
+      source: {
+        schema_version: 2,
+        identity_assurance: "selected_excerpt_unverified",
+        selection_binding: binding,
+        conversation_text: "Ana: Can you confirm whether Tuesday still works?",
+        participants: [],
+        intended_recipients: [],
+        reply_mode: "unspecified",
+        goal: "Prepare a cautious reply to this selected excerpt for review.",
+        tone: "",
+        style_instructions: [],
+        commitments: [],
+      },
+    });
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") {
+        return bridgeSnapshot(
+          snapshot({
+            reply_rescue: {
+              ...snapshot().reply_rescue,
+              jobs: [summary],
+            },
+          }),
+        );
+      }
+      if (command === "get_reply_rescue") return bridgeReplyRescueJob(detail);
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Reply Rescue/i }));
+    const selectionHelp = screen
+      .getByRole("heading", { name: "Import an exact macOS selection" })
+      .closest("section");
+    expect(selectionHelp).toHaveTextContent("press ⌘ ⇧ R");
+    expect(selectionHelp).toHaveTextContent("recipients and reply mode left unspecified");
+    const receipt = await screen.findByLabelText("Reply exact selection source");
+    expect(within(receipt).getByText("Notes")).toBeInTheDocument();
+    expect(within(receipt).getByText("com.apple.Notes")).toBeInTheDocument();
+    expect(within(receipt).getByText(/range 7\+48/)).toBeInTheDocument();
+    expect(receipt).toHaveTextContent("does not establish mail-thread or recipient identity");
     expect(screen.queryByRole("button", { name: /import selection/i })).not.toBeInTheDocument();
   });
 

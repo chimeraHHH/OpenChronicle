@@ -9,9 +9,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 6 adds review-only Reply Rescue artifacts
-// without adding mailbox, draft, paste, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 6 as const;
+// WebView result projection. Version 7 adds exact-selection Reply Rescue
+// sources without adding mailbox, draft, paste, or send capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 7 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -77,10 +77,12 @@ export interface PromptRescueSnapshot {
 
 export type ReplyRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type ReplyRescueProviderLocation = "local" | "remote_or_unknown";
+export type ReplyRescueSourceKind = "manual_conversation" | "macos_selection";
+export type ReplyRescueIdentityAssurance =
+  | "manual_unverified"
+  | "selected_excerpt_unverified";
 
-export interface ReplyRescueSource {
-  schema_version: 1;
-  identity_assurance: "manual_unverified";
+interface ReplyRescueSourceFields {
   conversation_text: string;
   participants: string[];
   intended_recipients: string[];
@@ -90,6 +92,19 @@ export interface ReplyRescueSource {
   style_instructions: string[];
   commitments: string[];
 }
+
+export interface ReplyRescueManualSource extends ReplyRescueSourceFields {
+  schema_version: 1;
+  identity_assurance: "manual_unverified";
+}
+
+export interface ReplyRescueSelectionSource extends ReplyRescueSourceFields {
+  schema_version: 2;
+  identity_assurance: "selected_excerpt_unverified";
+  selection_binding: PromptRescueSelectionBinding;
+}
+
+export type ReplyRescueSource = ReplyRescueManualSource | ReplyRescueSelectionSource;
 
 export interface ReplyRescueClaim {
   text: string;
@@ -111,9 +126,9 @@ export interface ReplyRescueOutput {
 export interface ReplyRescueJobSummary {
   id: string;
   status: ReplyRescueStatus;
-  source_kind: "manual_conversation";
+  source_kind: ReplyRescueSourceKind;
   conversation_preview: string;
-  identity_assurance: "manual_unverified";
+  identity_assurance: ReplyRescueIdentityAssurance;
   model_identity: string;
   provider_location: ReplyRescueProviderLocation;
   output_edited: boolean;

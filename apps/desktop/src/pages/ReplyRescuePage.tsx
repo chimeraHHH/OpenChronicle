@@ -30,6 +30,12 @@ function statusTone(status: ReplyRescueJobSummary["status"]) {
   return "info" as const;
 }
 
+function sourceLabel(sourceKind: ReplyRescueJobSummary["source_kind"]) {
+  return sourceKind === "macos_selection"
+    ? "Bound selection, unverified conversation identity"
+    : "Manual excerpt, unverified identity";
+}
+
 function lines(value: string): string[] {
   return value
     .split("\n")
@@ -223,8 +229,9 @@ export function ReplyRescuePage({
           <p className="eyebrow">Prepared reply, never sent</p>
           <h1>Reply Rescue</h1>
           <p>
-            Supply a conversation excerpt you have reviewed. OpenChronicle prepares a reply for
-            local review and copy; it has no mailbox, provider-draft, paste, or send capability.
+            Supply a reviewed conversation excerpt or import one exact macOS selection.
+            OpenChronicle prepares a reply for local review and copy; it has no mailbox,
+            provider-draft, paste, or send capability.
           </p>
         </div>
         <StatusBadge tone={rescue.enabled ? "positive" : "neutral"}>
@@ -246,11 +253,25 @@ export function ReplyRescuePage({
         </p>
       </section>
 
-      <section className="warning-panel">
-        <h2>Manual source has no thread identity</h2>
+      <section className="info-panel">
+        <h2>Import an exact macOS selection</h2>
         <p>
-          This excerpt does not prove a mailbox account, thread, sender, or recipient. Verify the
-          target and every commitment before copying. Reply Rescue cannot send anything.
+          In another app, select only the conversation excerpt you want to disclose, then press
+          {" "}<kbd>⌘</kbd> <kbd>⇧</kbd> <kbd>R</kbd>. OpenChronicle reads only that stable AX
+          selection and queues a cautious reply with recipients and reply mode left unspecified.
+        </p>
+        <p>
+          The adapter never falls back to the clipboard or whole-field text. The receipt proves
+          the selected app, window, element, and range—not a mailbox thread, sender, or recipient.
+        </p>
+      </section>
+
+      <section className="warning-panel">
+        <h2>Excerpt sources have no thread identity</h2>
+        <p>
+          Manual text and exact selections do not prove a mailbox account, thread, sender, or
+          recipient. Verify the target and every commitment before copying. Reply Rescue cannot
+          send anything.
         </p>
       </section>
 
@@ -298,7 +319,7 @@ export function ReplyRescuePage({
             <button aria-pressed={selectedId === job.id} className="prompt-rescue__history-item" key={job.id} onClick={() => setSelectedId(job.id)} type="button">
               <span className="review-list__meta"><StatusBadge tone={statusTone(job.status)}>{job.status}</StatusBadge><span>{formatDateTime(job.updated_at)}</span></span>
               <strong><UntrustedText>{job.conversation_preview}</UntrustedText></strong>
-              <small>Manual, unverified identity · attempt {job.attempt_count}</small>
+              <small>{sourceLabel(job.source_kind)} · attempt {job.attempt_count}</small>
             </button>
           ))}
         </section>
@@ -306,7 +327,23 @@ export function ReplyRescuePage({
         <section aria-label="Reply Rescue detail" className="prompt-rescue__detail">
           {!selectedId ? <div className="empty-state"><h2>Select a prepared reply</h2><p>Conversation and proposed reply appear side by side.</p></div> : busy === "load" && !detail ? <p role="status">Loading local reply…</p> : detail ? (
             <>
-              <div className="detail-header"><div><p className="eyebrow">Manual, unverified identity · {formatDateTime(detail.created_at)}</p><h2>Review prepared reply</h2></div><StatusBadge tone={statusTone(detail.status)}>{detail.status}</StatusBadge></div>
+              <div className="detail-header"><div><p className="eyebrow">{sourceLabel(detail.source_kind)} · {formatDateTime(detail.created_at)}</p><h2>Review prepared reply</h2></div><StatusBadge tone={statusTone(detail.status)}>{detail.status}</StatusBadge></div>
+              {detail.source.identity_assurance === "selected_excerpt_unverified" ? (
+                <section className="info-panel" aria-label="Reply exact selection source">
+                  <h3>Exact selection receipt</h3>
+                  <p>
+                    <strong><UntrustedText>{detail.source.selection_binding.app_name || "Unknown app"}</UntrustedText></strong>
+                    {" · "}<UntrustedText>{detail.source.selection_binding.bundle_id}</UntrustedText>
+                  </p>
+                  <p>
+                    <UntrustedText>{detail.source.selection_binding.window_title || "Untitled window"}</UntrustedText>
+                    {" · "}<UntrustedText>{detail.source.selection_binding.element_role}</UntrustedText>
+                    {" · range "}{detail.source.selection_binding.selection_location}
+                    {"+"}{detail.source.selection_binding.selection_length}
+                  </p>
+                  <p className="muted">Captured {formatDateTime(detail.source.selection_binding.captured_at)}. This receipt does not establish mail-thread or recipient identity.</p>
+                </section>
+              ) : null}
               <section className="info-panel"><h3>Declared target</h3><p>Mode: <strong>{detail.source.reply_mode}</strong> · Recipients: <UntrustedText>{detail.source.intended_recipients.join(", ") || "None declared"}</UntrustedText></p><p>Participants: <UntrustedText>{detail.source.participants.join(", ") || "None declared"}</UntrustedText></p></section>
               <div className="prompt-rescue__comparison">
                 <label className="field"><span>Reviewed conversation</span><textarea readOnly rows={18} value={detail.source.conversation_text} /></label>

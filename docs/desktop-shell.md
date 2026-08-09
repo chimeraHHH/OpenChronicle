@@ -34,10 +34,11 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v6** retains the
+The bridge protocol is versioned and allowlisted. Protocol **v7** retains the
 v2 immutable Daily Wrap projection, v3 side-effect-free suggestion review, and
 v4 manual Prompt Rescue surface and v5 exact-selection receipt, then adds v6
-manual-conversation Reply Rescue review.
+manual-conversation Reply Rescue review and v7's weaker-identity exact-selection
+Reply Rescue source.
 Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:
@@ -52,8 +53,9 @@ only:
 - Prompt Rescue manual-input and global-shortcut exact-selection queue,
   read/edit/retry/delete operations, and explicit clipboard copy in the
   WebView;
-- Reply Rescue manual-conversation queue, read/edit/retry/delete operations,
-  visible unverified-identity/recipient warnings, and explicit clipboard copy;
+- Reply Rescue manual-conversation and distinct global-shortcut exact-selection
+  queues, read/edit/retry/delete operations, visible unverified conversation-
+  identity/recipient warnings, and explicit clipboard copy;
 - bounded provenance tracing and exact, policy-aware evidence resolution;
 - compare-and-set pause/resume for **new capture**.
 

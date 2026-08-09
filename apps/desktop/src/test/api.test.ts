@@ -39,8 +39,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks the review-only Reply Rescue surface as bridge protocol v6", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(6);
+  it("tracks exact-selection Reply Rescue as bridge protocol v7", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(7);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -227,6 +227,60 @@ describe("desktop bridge adapters", () => {
     (malformed.job.source_binding as Record<string, unknown>).unknown = true;
     tauri.invoke.mockResolvedValueOnce(malformed);
     await expect(desktopApi.getPromptRescue(selected.id)).rejects.toMatchObject({
+      code: "BRIDGE_PROTOCOL_ERROR",
+    });
+  });
+
+  it("keeps Reply Rescue selection identity weaker than mailbox identity", async () => {
+    const binding = {
+      schema_version: 1 as const,
+      captured_at: "2026-08-09T12:00:00Z",
+      app_name: "Notes",
+      bundle_id: "com.apple.Notes",
+      pid: 123,
+      window_title: "Conversation excerpt",
+      element_role: "AXTextArea",
+      element_subrole: "",
+      selection_location: 7,
+      selection_length: 48,
+    };
+    const selected = replyRescueJob({
+      source_kind: "macos_selection",
+      source: {
+        schema_version: 2,
+        identity_assurance: "selected_excerpt_unverified",
+        selection_binding: binding,
+        conversation_text: "Ana: Can you confirm whether Tuesday still works?",
+        participants: [],
+        intended_recipients: [],
+        reply_mode: "unspecified",
+        goal: "Prepare a cautious reply to this selected excerpt for review.",
+        tone: "",
+        style_instructions: [],
+        commitments: [],
+      },
+    });
+    tauri.invoke.mockResolvedValueOnce(bridgeReplyRescueJob(selected));
+
+    const result = await desktopApi.getReplyRescue(selected.id);
+
+    expect(result.source_kind).toBe("macos_selection");
+    expect(result.source.identity_assurance).toBe("selected_excerpt_unverified");
+    if (result.source.identity_assurance !== "selected_excerpt_unverified") {
+      throw new Error("expected selected excerpt");
+    }
+    expect(result.source.selection_binding).toMatchObject({
+      bundle_id: "com.apple.Notes",
+      selection_location: 7,
+      selection_length: 48,
+    });
+    expect(result.source.intended_recipients).toEqual([]);
+
+    const malformed = bridgeReplyRescueJob(selected);
+    const malformedSource = malformed.job.source as unknown as Record<string, unknown>;
+    (malformedSource.selection_binding as Record<string, unknown>).unknown = true;
+    tauri.invoke.mockResolvedValueOnce(malformed);
+    await expect(desktopApi.getReplyRescue(selected.id)).rejects.toMatchObject({
       code: "BRIDGE_PROTOCOL_ERROR",
     });
   });

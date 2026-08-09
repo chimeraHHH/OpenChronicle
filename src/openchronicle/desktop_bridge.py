@@ -36,7 +36,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 6
+PROTOCOL_VERSION = 7
 MAX_REQUEST_BYTES = 64 * 1024
 
 

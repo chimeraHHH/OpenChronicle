@@ -22,6 +22,7 @@ import type {
   ReplyRescueOutput,
   ReplyRescueProviderLocation,
   ReplyRescueSource,
+  ReplyRescueSourceKind,
   ReplyRescueStatus,
   ProvenanceTrace,
   ResolvedEvidence,
@@ -81,6 +82,11 @@ const replyRescueProviderLocations = new Set<ReplyRescueProviderLocation>([
   "local",
   "remote_or_unknown",
 ]);
+const replyRescueSourceKinds = new Set(["manual_conversation", "macos_selection"] as const);
+const replyRescueIdentityAssurances = new Set([
+  "manual_unverified",
+  "selected_excerpt_unverified",
+] as const);
 const wrapCategories: WrapCategory[] = [
   "completed",
   "progressed",
@@ -515,12 +521,29 @@ function replyRescueProviderLocation(value: unknown): ReplyRescueProviderLocatio
   );
 }
 
-function replyRescueSource(value: unknown): ReplyRescueSource {
+function replyRescueSource(value: unknown, sourceKind: ReplyRescueSourceKind): ReplyRescueSource {
   const raw = objectValue(value, "Reply Rescue source");
+  const assurance = allowedString(
+    raw.identity_assurance,
+    replyRescueIdentityAssurances,
+    "Reply Rescue identity assurance",
+  );
+  const expectedFields = new Set([
+    "schema_version",
+    "identity_assurance",
+    "conversation_text",
+    "participants",
+    "intended_recipients",
+    "reply_mode",
+    "goal",
+    "tone",
+    "style_instructions",
+    "commitments",
+    ...(sourceKind === "macos_selection" ? ["selection_binding"] : []),
+  ]);
   if (
-    numberValue(raw.schema_version, "Reply Rescue source schema") !== 1 ||
-    stringValue(raw.identity_assurance, "Reply Rescue identity assurance") !==
-      "manual_unverified"
+    Object.keys(raw).length !== expectedFields.size ||
+    Object.keys(raw).some((key) => !expectedFields.has(key))
   ) {
     return protocolError("Reply Rescue source contract");
   }
@@ -533,16 +556,14 @@ function replyRescueSource(value: unknown): ReplyRescueSource {
     "Reply Rescue conversation",
   );
   if (!conversationText.trim()) return protocolError("Reply Rescue conversation");
-  return {
-    schema_version: 1,
-    identity_assurance: "manual_unverified",
+  const fields = {
     conversation_text: conversationText,
     participants: stringArray(raw.participants, "Reply Rescue participants"),
     intended_recipients: stringArray(
       raw.intended_recipients,
       "Reply Rescue intended recipients",
     ),
-    reply_mode: replyMode,
+    reply_mode: replyMode as "reply" | "reply_all" | "unspecified",
     goal: stringValue(raw.goal, "Reply Rescue goal"),
     tone: stringValue(raw.tone, "Reply Rescue tone"),
     style_instructions: stringArray(
@@ -550,6 +571,29 @@ function replyRescueSource(value: unknown): ReplyRescueSource {
       "Reply Rescue style instructions",
     ),
     commitments: stringArray(raw.commitments, "Reply Rescue commitments"),
+  };
+  if (sourceKind === "manual_conversation") {
+    if (
+      numberValue(raw.schema_version, "Reply Rescue source schema") !== 1 ||
+      assurance !== "manual_unverified"
+    ) {
+      return protocolError("Reply Rescue manual source contract");
+    }
+    return { schema_version: 1, identity_assurance: "manual_unverified", ...fields };
+  }
+  if (
+    numberValue(raw.schema_version, "Reply Rescue source schema") !== 2 ||
+    assurance !== "selected_excerpt_unverified"
+  ) {
+    return protocolError("Reply Rescue selection source contract");
+  }
+  const binding = promptRescueBinding(raw.selection_binding, "macos_selection");
+  if (!binding) return protocolError("Reply Rescue selection binding");
+  return {
+    schema_version: 2,
+    identity_assurance: "selected_excerpt_unverified",
+    selection_binding: binding,
+    ...fields,
   };
 }
 
@@ -598,19 +642,28 @@ function replyRescueOutput(value: unknown): ReplyRescueOutput | null {
 
 function replyRescueSummary(value: unknown): ReplyRescueJobSummary {
   const raw = objectValue(value, "Reply Rescue summary");
+  const sourceKind = allowedString(
+    raw.source_kind,
+    replyRescueSourceKinds,
+    "Reply Rescue source kind",
+  );
+  const assurance = allowedString(
+    raw.identity_assurance,
+    replyRescueIdentityAssurances,
+    "Reply Rescue identity assurance",
+  );
   if (
-    stringValue(raw.source_kind, "Reply Rescue source kind") !== "manual_conversation" ||
-    stringValue(raw.identity_assurance, "Reply Rescue identity assurance") !==
-      "manual_unverified"
+    (sourceKind === "manual_conversation" && assurance !== "manual_unverified") ||
+    (sourceKind === "macos_selection" && assurance !== "selected_excerpt_unverified")
   ) {
     return protocolError("Reply Rescue source assurance");
   }
   return {
     id: stringValue(raw.id, "Reply Rescue id"),
     status: replyRescueStatus(raw.status),
-    source_kind: "manual_conversation",
+    source_kind: sourceKind,
     conversation_preview: stringValue(raw.conversation_preview, "Reply Rescue preview"),
-    identity_assurance: "manual_unverified",
+    identity_assurance: assurance,
     model_identity: stringValue(raw.model_identity, "Reply Rescue model"),
     provider_location: replyRescueProviderLocation(raw.provider_location),
     output_edited: booleanValue(raw.output_edited, "Reply Rescue edited state"),
@@ -624,9 +677,11 @@ function replyRescueSummary(value: unknown): ReplyRescueJobSummary {
 
 function replyRescueJob(value: unknown): ReplyRescueJob {
   const raw = objectValue(value, "Reply Rescue job");
-  if (stringValue(raw.source_kind, "Reply Rescue source kind") !== "manual_conversation") {
-    return protocolError("Reply Rescue source kind");
-  }
+  const sourceKind = allowedString(
+    raw.source_kind,
+    replyRescueSourceKinds,
+    "Reply Rescue source kind",
+  );
   const status = replyRescueStatus(raw.status);
   const output = replyRescueOutput(raw.output);
   if ((status === "ready") !== (output !== null)) {
@@ -635,8 +690,8 @@ function replyRescueJob(value: unknown): ReplyRescueJob {
   return {
     id: stringValue(raw.id, "Reply Rescue id"),
     status,
-    source_kind: "manual_conversation",
-    source: replyRescueSource(raw.source),
+    source_kind: sourceKind,
+    source: replyRescueSource(raw.source, sourceKind),
     model_identity: stringValue(raw.model_identity, "Reply Rescue model"),
     provider_location: replyRescueProviderLocation(raw.provider_location),
     output,
