@@ -30,7 +30,31 @@ Source: [Vida public product page](https://web-prod.vida.app/).
 | [Reactive Resume](https://github.com/amruthpillai/reactive-resume) | MIT; structured editing, real-time preview, JSON Resume import, multiple export formats, self-hosting, and client-side PDF generation. | Its large web/auth/server stack is not needed for the local first slice. Layout UX is a reference; its data model is not factual provenance. |
 | [OpenResume](https://github.com/xitanggg/open-resume) | Local-browser builder, real-time PDF preview, PDF parsing, and a parser-readability check demonstrate a useful import/render/parse loop. | It is AGPL-3.0 and therefore a behavior-only reference here. Its ATS and hiring-success statements are vendor claims, not independent validation. No source code is copied. |
 | [RenderCV](https://github.com/rendercv/rendercv) | MIT; schema-driven YAML/JSON input, strict validation, reproducible/version-controlled documents, and typography-oriented rendering. | Its renderer/dependency stack is not adopted before a packaging and license review. A deterministic internal HTML preview is the smaller initial step. |
+| [CVAurum](https://github.com/akhil-dara/cvaurum) | MIT; a small, emerging browser-local builder using IndexedDB, Zod-validated imports, JSON Resume round trips, a dedicated native-print route, and separate preview/parser-text views. | Its local structured edit/preview/import boundary is useful. The repository is new and small, and its ATS, parser-vendor emulation, score, and export-fidelity statements are project claims rather than independent quality evidence. |
 | [Resume Matcher docs](https://github.com/srbhr/Resume-Matcher-Docs) | Apache-2.0 documentation for parsing résumés and job descriptions and comparing keywords/key terms/embeddings. | Match scores are exploratory relevance signals only. They cannot justify unsupported claims, keyword stuffing, or an “ATS pass” promise. |
+| [CareerProof](https://github.com/wyl000bdml-sys/CareerProof) | MIT; an early template/agent-skill repository separates a multi-source evidence vault, confidentiality and ownership metadata, direct/transferable/unsupported matches, and missing evidence. | At the research date it has three commits and one star, so it is a mechanism prompt, not a mature baseline. OpenChronicle uses independently designed schemas and tests; no skill or prompt text is transplanted. |
+
+## Research update: provenance helps only inside its evidence boundary
+
+[Career-Aware Resume Tailoring via Multi-Source RAG with Provenance Tracking](https://arxiv.org/abs/2605.05257)
+reports a 2026 pilot on one candidate and nine job descriptions. Retrieval over a
+longitudinal career vault improved the paper's ATS-style score for six
+domain-aligned descriptions, but reduced it for two descriptions whose required
+domain evidence was absent. The paper explicitly says that these scores do not
+reproduce proprietary ATS implementations and that provenance accuracy and
+longitudinal utility were not quantitatively evaluated.
+
+This is useful boundary evidence, not a product-effectiveness result. Résumé
+Rescue therefore:
+
+- abstains and displays `missing_evidence` when the admitted fact set does not
+  support a requirement, rather than retrieving a superficially similar fact;
+- keeps requirement coverage distinct from factual support and never reports a
+  proprietary-ATS or hiring-probability claim;
+- exposes provenance in the review interface instead of keeping it as hidden
+  generation metadata; and
+- requires multi-profile, adversarial, human-annotated evaluation before any
+  claim about tailoring quality beyond the frozen fixture.
 
 ## Selected source model
 
@@ -157,4 +181,3 @@ as proof of ATS or hiring success.
 5. Add reviewed document extraction, then JSON Resume import/export mapping.
 6. Consider PDF/DOCX export after packaging evaluation. Application submission
    remains outside Stage 2.
-
