@@ -264,9 +264,15 @@ privacy UX is validated on a signed macOS build.
   with digest-CAS supersession, closed fact/provenance/conflict schemas, and a
   deterministic exact-text projection whose requirement mappings remain
   explicitly `manual_mapping_unverified`. Profile or opportunity changes make
-  prior projections unavailable. The frozen evaluator, native review/preview,
-  reviewed import, and document export remain open; drafts and all send/submit
-  authority remain later, separate capabilities.
+  prior projections unavailable. The frozen 18-case source/projection
+  evaluator now separates exact factual preservation, provenance/conflict and
+  action/injection gates from selection, missing-evidence, candidate-mapping,
+  warning, and exclusion quality under `benchmarks/vida-resume-rescue-v1`.
+  The exact projection passes the frozen local gate; the safe untailored
+  base-profile comparator preserves facts but fails targeting quality. Native
+  review/preview, supervised no-tool rewriting, reviewed import, and document
+  export remain open; drafts and all send/submit authority remain later,
+  separate capabilities.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only
