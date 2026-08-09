@@ -34,6 +34,29 @@ Source: [Vida public product page](https://web-prod.vida.app/).
 | [Resume Matcher docs](https://github.com/srbhr/Resume-Matcher-Docs) | Apache-2.0 documentation for parsing résumés and job descriptions and comparing keywords/key terms/embeddings. | Match scores are exploratory relevance signals only. They cannot justify unsupported claims, keyword stuffing, or an “ATS pass” promise. |
 | [CareerProof](https://github.com/wyl000bdml-sys/CareerProof) | MIT; an early template/agent-skill repository separates a multi-source evidence vault, confidentiality and ownership metadata, direct/transferable/unsupported matches, and missing evidence. | At the research date it has three commits and one star, so it is a mechanism prompt, not a mature baseline. OpenChronicle uses independently designed schemas and tests; no skill or prompt text is transplanted. |
 
+## Research update: one document tree must drive preview and export
+
+The 2026 [Reactive Resume v5.1 release](https://github.com/AmruthPillai/Reactive-Resume/releases/tag/v5.1.0)
+moved PDF creation into the browser with `@react-pdf/renderer` and renders the
+live preview through PDF.js from the same document tree. The stated reason is
+to remove preview-versus-download drift. OpenChronicle adopts the invariant,
+not that dependency stack: one deterministic renderer produces the preview
+HTML, plain-text extraction mirror, digest, and later export input.
+
+The old [JSON Resume `resume-cli` repository](https://github.com/jsonresume/resume-cli)
+was archived in June 2026 and active development moved into the
+[`jsonresume.org` monorepo](https://github.com/jsonresume/jsonresume.org/tree/master/packages/cli).
+It still demonstrates schema validation followed by themed HTML/PDF export,
+but the move is another reason to keep OpenChronicle's internal renderer and
+schema version pinned rather than executing third-party themes as trusted code.
+
+The [W3C CSS Paged Media Level 3 draft](https://www.w3.org/TR/css-page-3/)
+defines page boxes, size, orientation, and margins, but remains a Working Draft
+and leaves physical sheet handling to user agents. The first renderer therefore
+uses a fixed, no-network HTML/CSS template and records its version. PDF is not
+called deterministic until a pinned engine passes text-order, overflow,
+pagination, and byte/document-diff acceptance on macOS packaging.
+
 ## Research update: provenance helps only inside its evidence boundary
 
 [Career-Aware Resume Tailoring via Multi-Source RAG with Provenance Tracking](https://arxiv.org/abs/2605.05257)
