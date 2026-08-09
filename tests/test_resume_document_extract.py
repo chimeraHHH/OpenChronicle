@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import io
+import json
+import os
+import subprocess
+import sys
+import time
 import zipfile
 from dataclasses import replace
 from xml.sax.saxutils import escape
 
 import pytest
 
+import openchronicle.resume_rescue.document_extract as document_extract_module
 from openchronicle.resume_rescue.document_extract import (
     MAX_PDF_PAGES,
     MAX_SOURCE_BYTES,
@@ -296,3 +302,115 @@ def test_admission_rejects_duplicate_selection_and_naive_timestamp() -> None:
             [selection],
             reviewed_at="2026-08-09T20:30:00",
         )
+
+
+def test_worker_environment_drops_credentials_and_proxy_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "secret")
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.test")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "secret")
+
+    environment = document_extract_module._worker_environment()
+
+    assert set(environment) <= {
+        "LANG",
+        "LC_ALL",
+        "PATH",
+        "PYTHONIOENCODING",
+        "PYTHONNOUSERSITE",
+        "PYTHONUTF8",
+        "SYSTEMROOT",
+    }
+    assert all("KEY" not in name and "PROXY" not in name for name in environment)
+
+
+def test_worker_rejects_unknown_or_duplicate_response_fields(monkeypatch) -> None:
+    source = _pdf([[(50, 720, "Exact text")]])
+    unknown_response = json.dumps(
+        {"schema_version": 1, "ok": True, "review": {}, "unexpected": True}
+    )
+    monkeypatch.setattr(
+        document_extract_module,
+        "_document_worker_command",
+        lambda: [sys.executable, "-c", f"print({unknown_response!r})"],
+    )
+    with pytest.raises(DocumentExtractionError, match="response"):
+        extract_document(source, source_format="pdf")
+
+    duplicate_response = '{"schema_version":1,"schema_version":1,"ok":false,"error":"x"}'
+    monkeypatch.setattr(
+        document_extract_module,
+        "_document_worker_command",
+        lambda: [sys.executable, "-c", f"print({duplicate_response!r})"],
+    )
+    with pytest.raises(DocumentExtractionError, match="response"):
+        extract_document(source, source_format="pdf")
+
+
+def test_worker_timeout_kills_process_group(monkeypatch, tmp_path) -> None:
+    pid_path = tmp_path / "worker.pid"
+    script = (
+        "import os,pathlib,time;"
+        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()));"
+        "time.sleep(60)"
+    )
+    monkeypatch.setattr(
+        document_extract_module,
+        "_document_worker_command",
+        lambda: [sys.executable, "-c", script],
+    )
+    monkeypatch.setattr(document_extract_module, "WORKER_TIMEOUT_SECONDS", 0.5)
+
+    with pytest.raises(DocumentExtractionError, match="timed out"):
+        extract_document(_pdf([[(50, 720, "Text")]]), source_format="pdf")
+
+    pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="process-group cleanup is POSIX-specific")
+def test_successful_worker_response_still_kills_background_descendant(
+    monkeypatch, tmp_path
+) -> None:
+    child_path = tmp_path / "child.pid"
+    script = f"""
+import base64
+import json
+import pathlib
+import subprocess
+import sys
+from openchronicle.resume_rescue.document_extract import _extract_document_in_process
+request = json.loads(sys.stdin.buffer.read())
+child = subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(60)"],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    close_fds=True,
+)
+pathlib.Path({str(child_path)!r}).write_text(str(child.pid))
+review = _extract_document_in_process(
+    base64.b64decode(request["source_base64"]),
+    source_format=request["format"],
+)
+sys.stdout.write(json.dumps({{"schema_version": 1, "ok": True, "review": review.to_dict()}}))
+"""
+    monkeypatch.setattr(
+        document_extract_module,
+        "_document_worker_command",
+        lambda: [sys.executable, "-c", script],
+    )
+
+    review = extract_document(_pdf([[(50, 720, "Text")]]), source_format="pdf")
+
+    assert review.candidates[0]["text"] == "Text"
+    child_pid = int(child_path.read_text(encoding="utf-8"))
+    for _ in range(20):
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        subprocess.run(["kill", "-KILL", str(child_pid)], check=False)
+        pytest.fail("document worker descendant survived the successful response")
