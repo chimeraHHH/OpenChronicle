@@ -39,7 +39,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 12
+PROTOCOL_VERSION = 13
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -179,6 +179,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "resume_rescue.admit_json": _resume_rescue_admit_json,
         "resume_rescue.export_json": _resume_rescue_export_json,
         "resume_rescue.export_docx": _resume_rescue_export_docx,
+        "resume_rescue.export_pdf": _resume_rescue_export_pdf,
         "resume_rescue.review_document": _resume_rescue_review_document,
         "resume_rescue.admit_document": _resume_rescue_admit_document,
         "provenance.trace": _provenance_trace,
@@ -621,6 +622,24 @@ def _resume_rescue_export_docx(params: dict[str, Any]) -> dict[str, Any]:
     cfg = config_mod.load()
     with fts.cursor() as conn:
         exported = ResumeRescueService(conn, cfg).export_docx(
+            _bounded_string(params["projection_id"], 128, nonempty=True),
+            expected_preview_document_digest=_bounded_string(
+                params["expected_preview_document_digest"], 64, nonempty=True
+            ),
+        )
+        return {
+            "export": {
+                **exported.metadata(),
+                "content_base64": base64.b64encode(exported.content).decode("ascii"),
+            }
+        }
+
+
+def _resume_rescue_export_pdf(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"projection_id", "expected_preview_document_digest"})
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        exported = ResumeRescueService(conn, cfg).export_pdf(
             _bounded_string(params["projection_id"], 128, nonempty=True),
             expected_preview_document_digest=_bounded_string(
                 params["expected_preview_document_digest"], 64, nonempty=True

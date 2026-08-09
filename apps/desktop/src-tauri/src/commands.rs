@@ -52,6 +52,7 @@ const MAX_JSON_RESUME_SOURCE_BYTES: usize = 500_000;
 const MAX_JSON_RESUME_CANDIDATES: usize = 2_000;
 const MAX_RESUME_DOCUMENT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_RESUME_DOCX_EXPORT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_RESUME_PDF_EXPORT_BYTES: usize = 10 * 1024 * 1024;
 const MAX_RESUME_DOCUMENT_VAULT_ITEMS: usize = 4;
 const MAX_RESUME_DOCUMENT_VAULT_BYTES: usize = 32 * 1024 * 1024;
 const RESUME_DOCUMENT_VAULT_TTL: Duration = Duration::from_secs(30 * 60);
@@ -564,6 +565,14 @@ pub(crate) struct ResumeExportDocxRequest {
     pub expected_preview_document_digest: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeExportPdfRequest {
+    pub projection_id: String,
+    pub expected_artifact_digest: String,
+    pub expected_preview_document_digest: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct ForgetPreview {
     candidate_id: String,
@@ -667,7 +676,7 @@ struct ResumeDocumentReviewResponse {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ResumeNativeDocxExportPayload {
+struct ResumeNativeExportPayload {
     schema_version: u64,
     projection_id: String,
     artifact_digest: String,
@@ -686,8 +695,8 @@ struct ResumeNativeDocxExportPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ResumeNativeDocxExportResponse {
-    export: ResumeNativeDocxExportPayload,
+struct ResumeNativeExportResponse {
+    export: ResumeNativeExportPayload,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1090,6 +1099,24 @@ pub async fn export_resume_rescue_docx(
 }
 
 #[tauri::command]
+pub async fn export_resume_rescue_pdf(
+    app: AppHandle,
+    request: ResumeExportPdfRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.projection_id)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    validate_resume_digest(&request.expected_preview_document_digest)?;
+    tauri::async_runtime::spawn_blocking(move || export_resume_pdf_blocking(&app, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The Résumé Rescue PDF export worker stopped unexpectedly.",
+            )
+        })?
+}
+
+#[tauri::command]
 pub async fn trace_provenance(request: TraceProvenanceRequest) -> Result<Value, DesktopError> {
     validate_kind(&request.kind)?;
     validate_reference_id(&request.artifact_id)?;
@@ -1475,7 +1502,7 @@ fn export_resume_docx_blocking(
         "expected_preview_document_digest": request.expected_preview_document_digest,
     });
     let value = bridge::call_blocking(Operation::ResumeRescueExportDocx, params)?;
-    let response: ResumeNativeDocxExportResponse = serde_json::from_value(value).map_err(|_| {
+    let response: ResumeNativeExportResponse = serde_json::from_value(value).map_err(|_| {
         DesktopError::new(
             "BRIDGE_PROTOCOL_ERROR",
             "The desktop bridge returned an invalid Résumé Rescue DOCX export.",
@@ -1508,6 +1535,55 @@ fn export_resume_docx_blocking(
         "preview_document_digest": request.expected_preview_document_digest,
         "content_digest": response.export.content_digest,
         "format": "docx",
+        "file_name": file_name,
+        "byte_count": content.len(),
+        "created": true,
+        "action_capability": "none",
+    }))
+}
+
+fn export_resume_pdf_blocking(
+    app: &AppHandle,
+    request: ResumeExportPdfRequest,
+) -> Result<Value, DesktopError> {
+    let params = serde_json::json!({
+        "projection_id": request.projection_id,
+        "expected_preview_document_digest": request.expected_preview_document_digest,
+    });
+    let value = bridge::call_blocking(Operation::ResumeRescueExportPdf, params)?;
+    let response: ResumeNativeExportResponse = serde_json::from_value(value).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid Résumé Rescue PDF export.",
+        )
+    })?;
+    let content = validate_resume_pdf_export(&response.export, &request)?;
+
+    let default_name = format!("resume-{}.pdf", safe_export_stem(&request.projection_id));
+    let mut dialog = FileDialog::new()
+        .add_filter("PDF document", &["pdf"])
+        .set_can_create_directories(true)
+        .set_file_name(default_name)
+        .set_title("Export a new Résumé Rescue PDF file");
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let path = dialog.save_file().ok_or_else(|| {
+        DesktopError::new("USER_CANCELLED", "Résumé Rescue PDF export was cancelled.")
+    })?;
+    validate_resume_pdf_path(&path)?;
+    write_new_pdf_export(&path, &content)?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("resume.pdf");
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "projection_id": request.projection_id,
+        "artifact_digest": request.expected_artifact_digest,
+        "preview_document_digest": request.expected_preview_document_digest,
+        "content_digest": response.export.content_digest,
+        "format": "pdf",
         "file_name": file_name,
         "byte_count": content.len(),
         "created": true,
@@ -1859,6 +1935,56 @@ fn write_new_docx_export(path: &Path, content: &[u8]) -> Result<(), DesktopError
     Ok(())
 }
 
+fn validate_resume_pdf_path(path: &Path) -> Result<(), DesktopError> {
+    if !path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case("pdf"))
+    {
+        return Err(DesktopError::new(
+            "INVALID_EXPORT_PATH",
+            "Résumé Rescue PDF exports require a .pdf file name.",
+        ));
+    }
+    Ok(())
+}
+
+fn write_new_pdf_export(path: &Path, content: &[u8]) -> Result<(), DesktopError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            DesktopError::new(
+                "EXPORT_EXISTS",
+                "The selected export path already exists; choose a new file name.",
+            )
+        } else {
+            DesktopError::new(
+                "EXPORT_FAILED",
+                "The Résumé Rescue PDF file could not be created.",
+            )
+        }
+    })?;
+    if file
+        .write_all(content)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(DesktopError::new(
+            "EXPORT_FAILED",
+            "The Résumé Rescue PDF file could not be written completely.",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_resume_json_admission(request: &ResumeAdmitJsonRequest) -> Result<(), DesktopError> {
     validate_json_resume_source_text(&request.source_text)?;
     validate_resume_digest(&request.expected_review_digest)?;
@@ -2027,7 +2153,7 @@ fn validate_resume_document_review(
 }
 
 fn validate_resume_docx_export(
-    export: &ResumeNativeDocxExportPayload,
+    export: &ResumeNativeExportPayload,
     request: &ResumeExportDocxRequest,
 ) -> Result<Vec<u8>, DesktopError> {
     let maximum_encoded = MAX_RESUME_DOCX_EXPORT_BYTES.div_ceil(3) * 4;
@@ -2067,6 +2193,67 @@ fn validate_resume_docx_export(
         return Err(invalid_docx_export());
     }
     validate_docx_archive(&content)?;
+    Ok(content)
+}
+
+fn validate_resume_pdf_export(
+    export: &ResumeNativeExportPayload,
+    request: &ResumeExportPdfRequest,
+) -> Result<Vec<u8>, DesktopError> {
+    let maximum_encoded = MAX_RESUME_PDF_EXPORT_BYTES.div_ceil(3) * 4;
+    if export.schema_version != 1
+        || export.projection_id != request.projection_id
+        || export.renderer_version != 1
+        || export.native_export_version != 1
+        || export.template_id != "openchronicle-classic-v1"
+        || export.format != "pdf"
+        || export.media_type != "application/pdf"
+        || export.extension != "pdf"
+        || export.action_capability != "none"
+        || export.byte_count == 0
+        || export.byte_count > MAX_RESUME_PDF_EXPORT_BYTES as u64
+        || export.content_base64.len() > maximum_encoded
+        || !constant_time_equal(
+            export.artifact_digest.as_bytes(),
+            request.expected_artifact_digest.as_bytes(),
+        )
+        || !constant_time_equal(
+            export.preview_document_digest.as_bytes(),
+            request.expected_preview_document_digest.as_bytes(),
+        )
+        || validate_resume_digest(&export.content_digest).is_err()
+    {
+        return Err(invalid_pdf_export());
+    }
+    let content = base64::engine::general_purpose::STANDARD
+        .decode(export.content_base64.as_bytes())
+        .map_err(|_| invalid_pdf_export())?;
+    let digest = sha256_hex(&content);
+    let trimmed = content
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())
+        .map_or(&content[..0], |index| &content[..=index]);
+    if content.len() as u64 != export.byte_count
+        || !content.starts_with(b"%PDF-")
+        || !trimmed.ends_with(b"%%EOF")
+        || [
+            b"/AcroForm".as_slice(),
+            b"/EmbeddedFile".as_slice(),
+            b"/JavaScript".as_slice(),
+            b"/Launch".as_slice(),
+            b"/OpenAction".as_slice(),
+            b"/RichMedia".as_slice(),
+        ]
+        .iter()
+        .any(|marker| {
+            content
+                .windows(marker.len())
+                .any(|window| window == *marker)
+        })
+        || !constant_time_equal(export.content_digest.as_bytes(), digest.as_bytes())
+    {
+        return Err(invalid_pdf_export());
+    }
     Ok(content)
 }
 
@@ -2174,6 +2361,13 @@ fn invalid_docx_export() -> DesktopError {
     DesktopError::new(
         "BRIDGE_PROTOCOL_ERROR",
         "The desktop bridge returned an invalid Résumé Rescue DOCX export.",
+    )
+}
+
+fn invalid_pdf_export() -> DesktopError {
+    DesktopError::new(
+        "BRIDGE_PROTOCOL_ERROR",
+        "The desktop bridge returned an invalid Résumé Rescue PDF export.",
     )
 }
 
@@ -3429,7 +3623,7 @@ mod tests {
             expected_artifact_digest: "a".repeat(64),
             expected_preview_document_digest: "b".repeat(64),
         };
-        let mut export = ResumeNativeDocxExportPayload {
+        let mut export = ResumeNativeExportPayload {
             schema_version: 1,
             projection_id: request.projection_id.clone(),
             artifact_digest: request.expected_artifact_digest.clone(),
@@ -3507,6 +3701,88 @@ mod tests {
                 std::fs::metadata(&path).expect("export metadata").mode() & 0o777,
                 0o600
             );
+        }
+    }
+
+    #[test]
+    fn pdf_export_is_identity_digest_and_passive_structure_bound() {
+        let content = b"%PDF-1.7\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n".to_vec();
+        let request = ResumeExportPdfRequest {
+            projection_id: "projection-1".to_owned(),
+            expected_artifact_digest: "a".repeat(64),
+            expected_preview_document_digest: "b".repeat(64),
+        };
+        let mut export = pdf_export_fixture(&content, &request);
+        assert_eq!(
+            validate_resume_pdf_export(&export, &request).expect("valid PDF export"),
+            content
+        );
+
+        export.artifact_digest = "c".repeat(64);
+        assert_eq!(
+            validate_resume_pdf_export(&export, &request)
+                .expect_err("artifact swap must fail")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+
+        let active = b"%PDF-1.7\n1 0 obj<</OpenAction 2 0 R>>endobj\n%%EOF\n".to_vec();
+        let active_export = pdf_export_fixture(&active, &request);
+        assert_eq!(
+            validate_resume_pdf_export(&active_export, &request)
+                .expect_err("active PDF must fail")
+                .code,
+            "BRIDGE_PROTOCOL_ERROR"
+        );
+    }
+
+    #[test]
+    fn pdf_export_creates_private_file_without_overwriting() {
+        let directory = tempfile::tempdir().expect("temporary export directory");
+        let path = directory.path().join("reviewed-resume.pdf");
+        let content = b"%PDF-1.7\n%%EOF\n";
+        assert!(validate_resume_pdf_path(&path).is_ok());
+        assert!(validate_resume_pdf_path(&directory.path().join("resume.docx")).is_err());
+
+        write_new_pdf_export(&path, content).expect("new PDF export");
+        assert_eq!(std::fs::read(&path).expect("read PDF export"), content);
+        assert_eq!(
+            write_new_pdf_export(&path, b"replacement")
+                .expect_err("existing file must not be overwritten")
+                .code,
+            "EXPORT_EXISTS"
+        );
+        assert_eq!(std::fs::read(&path).expect("read preserved PDF"), content);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(
+                std::fs::metadata(&path).expect("export metadata").mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    fn pdf_export_fixture(
+        content: &[u8],
+        request: &ResumeExportPdfRequest,
+    ) -> ResumeNativeExportPayload {
+        ResumeNativeExportPayload {
+            schema_version: 1,
+            projection_id: request.projection_id.clone(),
+            artifact_digest: request.expected_artifact_digest.clone(),
+            preview_document_digest: request.expected_preview_document_digest.clone(),
+            renderer_version: 1,
+            native_export_version: 1,
+            template_id: "openchronicle-classic-v1".to_owned(),
+            format: "pdf".to_owned(),
+            media_type: "application/pdf".to_owned(),
+            extension: "pdf".to_owned(),
+            byte_count: content.len() as u64,
+            content_digest: sha256_hex(content),
+            action_capability: "none".to_owned(),
+            content_base64: base64::engine::general_purpose::STANDARD.encode(content),
         }
     }
 

@@ -60,6 +60,7 @@ pub fn run() {
             commands::get_resume_rescue_json_export,
             commands::export_resume_rescue_json,
             commands::export_resume_rescue_docx,
+            commands::export_resume_rescue_pdf,
             commands::trace_provenance,
             commands::resolve_evidence,
             commands::set_capture_paused,

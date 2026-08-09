@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -35,6 +36,8 @@ from openchronicle.provenance.models import (
     timeline_block_digest,
 )
 from openchronicle.reply_rescue import store as reply_rescue_store
+from openchronicle.resume_rescue.native_export import ResumeNativeExport
+from openchronicle.resume_rescue.service import ResumeRescueService
 from openchronicle.services.capture_control import PauseStateConflict, set_paused
 from openchronicle.services.evidence import EvidenceResolver
 from openchronicle.services.memory import MemoryService
@@ -999,6 +1002,45 @@ def test_resume_rescue_bridge_composes_exact_review_artifact_and_invalidates_sta
     )
     assert stale_docx_code == 2
     assert stale_docx["error"]["code"] == "VERSION_CONFLICT"
+
+    def fake_pdf_export(
+        _service: ResumeRescueService,
+        projection_id: str,
+        *,
+        expected_preview_document_digest: str,
+    ) -> ResumeNativeExport:
+        assert projection_id == projection["id"]
+        assert expected_preview_document_digest == preview["document_digest"]
+        content = b"%PDF-1.7\n1 0 obj<</Type/Catalog>>endobj\n%%EOF\n"
+        return ResumeNativeExport(
+            projection_id=projection["id"],
+            artifact_digest=projection["artifact_digest"],
+            preview_document_digest=preview["document_digest"],
+            format="pdf",
+            media_type="application/pdf",
+            extension="pdf",
+            content=content,
+            content_digest=hashlib.sha256(content).hexdigest(),
+        )
+
+    monkeypatch.setattr(ResumeRescueService, "export_pdf", fake_pdf_export)
+    exported_pdf, exported_pdf_code = _request(
+        "resume_rescue.export_pdf",
+        {
+            "projection_id": projection["id"],
+            "expected_preview_document_digest": preview["document_digest"],
+        },
+    )
+    assert exported_pdf_code == 0
+    pdf_export = exported_pdf["result"]["export"]
+    pdf_bytes = base64.b64decode(pdf_export.pop("content_base64"), validate=True)
+    assert pdf_bytes.startswith(b"%PDF-")
+    assert pdf_export["projection_id"] == projection["id"]
+    assert pdf_export["artifact_digest"] == projection["artifact_digest"]
+    assert pdf_export["preview_document_digest"] == preview["document_digest"]
+    assert pdf_export["format"] == "pdf"
+    assert pdf_export["byte_count"] == len(pdf_bytes)
+    assert pdf_export["action_capability"] == "none"
 
     malformed_preview, malformed_preview_code = _request(
         "resume_rescue.preview",
