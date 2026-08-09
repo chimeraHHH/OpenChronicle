@@ -72,6 +72,17 @@ class ResumeRewriteJob:
             content_hash=self.projection_artifact_digest,
         )
 
+    @property
+    def output_ref(self) -> EvidenceRef:
+        if self.status != "ready" or not self.output_digest:
+            raise ValueError("resume rewrite output is not ready")
+        return EvidenceRef(
+            kind="resume_rewrite",
+            id=self.id,
+            timestamp=self.updated_at,
+            content_hash=self.output_digest,
+        )
+
 
 class ResumeRewriteConflict(RuntimeError):
     """A rewrite job changed or a worker lost its lease."""
@@ -355,6 +366,12 @@ def retry(conn: sqlite3.Connection, *, job_id: str, expected_version: int) -> Re
 
 def delete(conn: sqlite3.Connection, *, job_id: str, expected_version: int) -> None:
     with _atomic(conn, "resume_rewrite_delete"):
+        dependent = conn.execute(
+            "SELECT 1 FROM resume_rewrite_versions WHERE rewrite_job_id=? LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        if dependent is not None:
+            raise ResumeRewriteConflict("resume rewrite has reviewed versions")
         row = conn.execute(
             "SELECT version FROM resume_rewrite_jobs WHERE id=?", (job_id,)
         ).fetchone()

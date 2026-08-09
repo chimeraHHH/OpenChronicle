@@ -16,7 +16,7 @@ from ..privacy.egress import model_egress_lock
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef
 from ..writer import llm as llm_mod
-from . import rewrite_store, store
+from . import review_store, rewrite_store, store
 from .document_extract import (
     DocumentExtractionError,
     DocumentImportReview,
@@ -476,6 +476,90 @@ class ResumeRescueService:
             expected_version=expected_version,
         )
 
+    def decide_rewrite(
+        self,
+        job_id: str,
+        *,
+        proposal_id: str,
+        expected_proposal_digest: str,
+        expected_job_version: int,
+        expected_head_id: str,
+        expected_artifact_digest: str,
+        decision: str,
+    ) -> tuple[review_store.ResumeRewriteVersion, bool]:
+        self._require_enabled()
+        job = self.get_rewrite(job_id)
+        if job is None or job.status != "ready":
+            raise review_store.ResumeRewriteReviewConflict("resume rewrite output changed")
+        return review_store.decide(
+            self.conn,
+            job_id=job_id,
+            proposal_id=proposal_id,
+            expected_proposal_digest=expected_proposal_digest,
+            expected_job_version=expected_job_version,
+            expected_head_id=expected_head_id,
+            expected_artifact_digest=expected_artifact_digest,
+            decision=decision,
+        )
+
+    def get_rewrite_head(self, job_id: str) -> review_store.ResumeRewriteVersion | None:
+        version = review_store.get_head(self.conn, job_id)
+        return version if version is not None and self._review_current(version) else None
+
+    def list_rewrite_versions(
+        self, job_id: str, *, limit: int = 50
+    ) -> list[review_store.ResumeRewriteVersion]:
+        return [
+            version
+            for version in review_store.list_versions(self.conn, job_id=job_id, limit=limit)
+            if self._review_current(version)
+        ]
+
+    def restore_rewrite(
+        self,
+        *,
+        target_version_id: str,
+        expected_head_id: str,
+        expected_artifact_digest: str,
+    ) -> review_store.ResumeRewriteVersion:
+        target = review_store.get(self.conn, target_version_id)
+        if target is None or not self._review_current(target):
+            raise review_store.ResumeRewriteReviewConflict("resume rewrite restore target changed")
+        return review_store.restore(
+            self.conn,
+            target_version_id=target_version_id,
+            expected_head_id=expected_head_id,
+            expected_artifact_digest=expected_artifact_digest,
+        )
+
+    def preview_rewrite(self, version_id: str) -> ResumePreview:
+        version, profile = self._review_document_sources(version_id)
+        return render_preview(profile=profile, projection=version)
+
+    def export_rewrite_json(self, version_id: str) -> JsonResumeExport:
+        version, profile = self._review_document_sources(version_id)
+        return export_projection_json_resume(profile=profile, projection=version)
+
+    def export_rewrite_docx(
+        self, version_id: str, *, expected_preview_document_digest: str
+    ) -> ResumeNativeExport:
+        version, profile = self._review_document_sources(version_id)
+        tree = build_document_tree(profile=profile, projection=version)
+        preview = render_preview_tree(tree)
+        if not hmac.compare_digest(preview.document_digest, expected_preview_document_digest):
+            raise review_store.ResumeRewriteReviewConflict("resume rewrite preview changed")
+        return render_docx_export(tree, preview_document_digest=preview.document_digest)
+
+    def export_rewrite_pdf(
+        self, version_id: str, *, expected_preview_document_digest: str
+    ) -> ResumeNativeExport:
+        version, profile = self._review_document_sources(version_id)
+        tree = build_document_tree(profile=profile, projection=version)
+        preview = render_preview_tree(tree)
+        if not hmac.compare_digest(preview.document_digest, expected_preview_document_digest):
+            raise review_store.ResumeRewriteReviewConflict("resume rewrite preview changed")
+        return render_pdf_export(tree, preview_document_digest=preview.document_digest)
+
     def preview(self, projection_id: str) -> ResumePreview:
         projection = self.get_projection(projection_id)
         if projection is None:
@@ -540,6 +624,30 @@ class ResumeRescueService:
         if not hmac.compare_digest(preview.document_digest, expected_preview_document_digest):
             raise store.ResumeRescueConflict("resume rescue preview changed")
         return render_pdf_export(tree, preview_document_digest=preview.document_digest)
+
+    def _review_document_sources(
+        self, version_id: str
+    ) -> tuple[review_store.ResumeRewriteVersion, store.ProfileVersion]:
+        version = review_store.get(self.conn, version_id)
+        if version is None or not self._review_current(version):
+            raise review_store.ResumeRewriteReviewConflict("resume rewrite version changed")
+        profile = store.get_profile_version(self.conn, version.profile_id, version.profile_version)
+        if profile is None:
+            raise review_store.ResumeRewriteReviewConflict("resume rewrite profile changed")
+        return version, profile
+
+    def _review_current(self, version: review_store.ResumeRewriteVersion) -> bool:
+        base = self.get_projection(version.base_projection_id)
+        job = self.get_rewrite(version.rewrite_job_id)
+        if (
+            base is None
+            or job is None
+            or job.status != "ready"
+            or base.artifact_digest != version.base_artifact_digest
+            or job.output_digest != version.rewrite_output_digest
+        ):
+            return False
+        return provenance_store.is_current(self.conn, version.ref)
 
     def _rewrite_current(self, job: rewrite_store.ResumeRewriteJob) -> bool:
         projection = self.get_projection(job.projection_id)

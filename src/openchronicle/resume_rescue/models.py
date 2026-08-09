@@ -54,6 +54,15 @@ ARTIFACT_FIELDS = {
     "excluded_fact_ids",
     "warnings",
 }
+REWRITE_BINDING_FIELDS = {
+    "base_projection_id",
+    "base_artifact_digest",
+    "rewrite_job_id",
+    "rewrite_output_digest",
+    "decision_version",
+    "decisions",
+}
+REWRITE_DECISION_FIELDS = {"proposal_id", "proposal_digest", "fact_id", "status"}
 
 VALID_SECTIONS = {
     "summary",
@@ -307,13 +316,22 @@ def build_exact_artifact(
 
 
 def validate_artifact(value: object) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != ARTIFACT_FIELDS:
+    if not isinstance(value, dict):
+        raise ResumeSchemaError("resume artifact must use the closed schema")
+    generation_mode = value.get("generation_mode")
+    expected_fields = (
+        ARTIFACT_FIELDS
+        if generation_mode == "deterministic_exact_projection"
+        else ARTIFACT_FIELDS | {"rewrite_binding"}
+    )
+    if set(value) != expected_fields:
         raise ResumeSchemaError("resume artifact must use the closed schema")
     if (
         value.get("schema_version") != 1
         or value.get("workflow") != "resume_rescue"
         or value.get("action_capability") != "none"
-        or value.get("generation_mode") != "deterministic_exact_projection"
+        or generation_mode
+        not in {"deterministic_exact_projection", "supervised_rewrite_projection"}
     ):
         raise ResumeSchemaError("resume artifact identity is invalid")
     profile_binding = value.get("profile_binding")
@@ -351,7 +369,13 @@ def validate_artifact(value: object) -> dict[str, Any]:
         items_raw = raw.get("items")
         if kind not in VALID_SECTIONS or kind in seen_sections or not isinstance(items_raw, list):
             raise ResumeSchemaError("resume artifact section is invalid")
-        items = [_validate_artifact_item(item) for item in items_raw]
+        items = [
+            _validate_artifact_item(
+                item,
+                allow_rewrite=generation_mode == "supervised_rewrite_projection",
+            )
+            for item in items_raw
+        ]
         if any(item["fact_id"] in selected_ids for item in items):
             raise ResumeSchemaError("resume artifact fact IDs must be unique")
         selected_ids.extend(item["fact_id"] for item in items)
@@ -400,11 +424,30 @@ def validate_artifact(value: object) -> dict[str, Any]:
     warnings = _string_list(
         value.get("warnings"), "artifact warnings", maximum_items=20, maximum_chars=2_000
     )
-    return {
+    rewrite_binding = None
+    if generation_mode == "supervised_rewrite_projection":
+        rewrite_binding = _validate_rewrite_binding(
+            value.get("rewrite_binding"), selected_ids=set(selected_ids)
+        )
+        accepted_fact_ids = {
+            item["fact_id"] for item in rewrite_binding["decisions"] if item["status"] == "accepted"
+        }
+        for section in sections:
+            for item in section["items"]:
+                expected_transformation = (
+                    "accepted_model_rewrite"
+                    if item["fact_id"] in accepted_fact_ids
+                    else "selected_exact"
+                )
+                if item["transformation"] != expected_transformation:
+                    raise ResumeSchemaError(
+                        "resume rewrite transformation differs from its decision ledger"
+                    )
+    result = {
         "schema_version": 1,
         "workflow": "resume_rescue",
         "action_capability": "none",
-        "generation_mode": "deterministic_exact_projection",
+        "generation_mode": generation_mode,
         "profile_binding": {"id": profile_id, "version": profile_version, "digest": profile_hash},
         "opportunity_binding": {
             "id": opportunity_id,
@@ -419,6 +462,9 @@ def validate_artifact(value: object) -> dict[str, Any]:
         "excluded_fact_ids": excluded,
         "warnings": warnings,
     }
+    if rewrite_binding is not None:
+        result["rewrite_binding"] = rewrite_binding
+    return result
 
 
 def _validate_fact(value: object) -> dict[str, Any]:
@@ -567,7 +613,7 @@ def _validate_conflict(value: object, fact_ids: set[str]) -> dict[str, Any]:
     }
 
 
-def _validate_artifact_item(value: object) -> dict[str, Any]:
+def _validate_artifact_item(value: object, *, allow_rewrite: bool) -> dict[str, Any]:
     expected = {
         "fact_id",
         "text",
@@ -578,7 +624,11 @@ def _validate_artifact_item(value: object) -> dict[str, Any]:
     }
     if not isinstance(value, dict) or set(value) != expected:
         raise ResumeSchemaError("resume artifact item must use the closed schema")
-    if value.get("transformation") != "selected_exact":
+    transformation = value.get("transformation")
+    allowed_transformations = {"selected_exact"}
+    if allow_rewrite:
+        allowed_transformations.add("accepted_model_rewrite")
+    if transformation not in allowed_transformations:
         raise ResumeSchemaError("resume artifact transformation is invalid")
     confidentiality = value.get("confidentiality")
     ownership = value.get("ownership_scope")
@@ -591,10 +641,58 @@ def _validate_artifact_item(value: object) -> dict[str, Any]:
     return {
         "fact_id": _identifier(value.get("fact_id"), "artifact fact id"),
         "text": _text(value.get("text"), "artifact fact text", maximum=8_000),
-        "transformation": "selected_exact",
+        "transformation": transformation,
         "confidentiality": confidentiality,
         "ownership_scope": ownership,
         "provenance": provenance,
+    }
+
+
+def _validate_rewrite_binding(value: object, *, selected_ids: set[str]) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != REWRITE_BINDING_FIELDS:
+        raise ResumeSchemaError("resume rewrite binding must use the closed schema")
+    version = value.get("decision_version")
+    if type(version) is not int or version < 1:
+        raise ResumeSchemaError("resume rewrite decision version is invalid")
+    raw_decisions = value.get("decisions")
+    if not isinstance(raw_decisions, list) or not raw_decisions or len(raw_decisions) > 200:
+        raise ResumeSchemaError("resume rewrite decisions must be a bounded list")
+    decisions: list[dict[str, str]] = []
+    proposal_ids: set[str] = set()
+    fact_ids: set[str] = set()
+    for raw in raw_decisions:
+        if not isinstance(raw, dict) or set(raw) != REWRITE_DECISION_FIELDS:
+            raise ResumeSchemaError("resume rewrite decision must use the closed schema")
+        proposal_id = _identifier(raw.get("proposal_id"), "rewrite proposal id")
+        proposal_hash = _digest(raw.get("proposal_digest"), "rewrite proposal digest")
+        fact_id = _identifier(raw.get("fact_id"), "rewrite fact id")
+        status = raw.get("status")
+        if (
+            proposal_id in proposal_ids
+            or fact_id in fact_ids
+            or fact_id not in selected_ids
+            or status not in {"accepted", "rejected"}
+        ):
+            raise ResumeSchemaError("resume rewrite decision binding is invalid")
+        proposal_ids.add(proposal_id)
+        fact_ids.add(fact_id)
+        decisions.append(
+            {
+                "proposal_id": proposal_id,
+                "proposal_digest": proposal_hash,
+                "fact_id": fact_id,
+                "status": status,
+            }
+        )
+    return {
+        "base_projection_id": _identifier(value.get("base_projection_id"), "base projection id"),
+        "base_artifact_digest": _digest(value.get("base_artifact_digest"), "base artifact digest"),
+        "rewrite_job_id": _identifier(value.get("rewrite_job_id"), "rewrite job id"),
+        "rewrite_output_digest": _digest(
+            value.get("rewrite_output_digest"), "rewrite output digest"
+        ),
+        "decision_version": version,
+        "decisions": decisions,
     }
 
 

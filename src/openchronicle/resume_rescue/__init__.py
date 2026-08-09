@@ -15,6 +15,7 @@ from .json_resume import (
     parse_json_resume,
 )
 from .render import ResumePreview
+from .review_store import ResumeRewriteReviewConflict, ResumeRewriteVersion
 from .rewrite import (
     ResumeRewriteValidationError,
     rewrite_output_digest,
@@ -49,6 +50,8 @@ __all__ = [
     "ResumeRewriteEgressDenied",
     "ResumeRewriteConflict",
     "ResumeRewriteJob",
+    "ResumeRewriteReviewConflict",
+    "ResumeRewriteVersion",
     "admit_document_candidates",
     "admit_json_resume_candidates",
     "export_projection_json_resume",

@@ -9,7 +9,9 @@ import pytest
 from openchronicle import config as config_mod
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef
-from openchronicle.resume_rescue import rewrite_store
+from openchronicle.resume_rescue import review_store, rewrite_store
+from openchronicle.resume_rescue.review_store import ResumeRewriteReviewConflict
+from openchronicle.resume_rescue.rewrite import rewrite_proposal_digest
 from openchronicle.resume_rescue.rewrite_generation import ResumeRewriteEgressDenied
 from openchronicle.resume_rescue.service import ResumeRescueService
 from openchronicle.store import fts
@@ -316,3 +318,55 @@ def test_provider_failure_is_sanitized_and_provenance_tamper_hides_job(
         )
         assert service.get_rewrite(failed.id) is None
         assert service.list_rewrites() == []
+
+
+def test_profile_change_after_generation_blocks_review_decision(ac_root: Path) -> None:
+    cfg = _cfg()
+    with fts.cursor() as conn:
+        service = ResumeRescueService(
+            conn,
+            cfg,
+            llm_caller=lambda *_args, **_kwargs: _Response(_output()),
+        )
+        projection = _projection(service)
+        _queue(service, projection)
+        ready = service.process_next_rewrite()
+        assert ready is not None and ready.output is not None
+        proposal = ready.output["proposals"][0]
+        profile = service.get_profile("rewrite-profile")
+        assert profile is not None
+        service.save_profile(
+            profile_id=profile.profile_id,
+            display_name=profile.profile["display_name"],
+            locale=profile.profile["locale"],
+            facts=[
+                *profile.profile["facts"],
+                {
+                    "id": "fact-after-generation",
+                    "section": "skill",
+                    "text": "Reviewed Python skill.",
+                    "confidentiality": "private",
+                    "ownership_scope": "individual",
+                    "provenance": [
+                        {
+                            "kind": "manual_reviewed",
+                            "reviewed_at": "2026-08-09T11:00:00+08:00",
+                        }
+                    ],
+                },
+            ],
+            expected_version=profile.version,
+        )
+
+        with pytest.raises(ResumeRewriteReviewConflict, match="output changed"):
+            service.decide_rewrite(
+                ready.id,
+                proposal_id=proposal["proposal_id"],
+                expected_proposal_digest=rewrite_proposal_digest(proposal),
+                expected_job_version=ready.version,
+                expected_head_id="",
+                expected_artifact_digest=projection.artifact_digest,
+                decision="accepted",
+            )
+
+        assert review_store.list_versions(conn, job_id=ready.id) == []

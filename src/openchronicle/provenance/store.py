@@ -277,6 +277,15 @@ def availability(conn: sqlite3.Connection, ref: EvidenceRef) -> str:
         from ..resume_rescue import store as resume_rescue_store
 
         return "available" if resume_rescue_store.get_projection(conn, ref.id) else "missing"
+    if ref.kind == "resume_rewrite":
+        from ..resume_rescue import rewrite_store
+
+        row = rewrite_store.get(conn, ref.id)
+        return "available" if row is not None and row.status == "ready" else "missing"
+    if ref.kind == "resume_rewrite_version":
+        from ..resume_rescue import review_store
+
+        return "available" if review_store.get(conn, ref.id) else "missing"
     return "unknown"
 
 
@@ -362,6 +371,16 @@ def current_content_hash(conn: sqlite3.Connection, ref: EvidenceRef) -> str | No
         from ..resume_rescue import store as resume_rescue_store
 
         row = resume_rescue_store.get_projection(conn, ref.id)
+        return row.artifact_digest if row is not None else None
+    if ref.kind == "resume_rewrite":
+        from ..resume_rescue import rewrite_store
+
+        row = rewrite_store.get(conn, ref.id)
+        return row.output_digest if row is not None and row.status == "ready" else None
+    if ref.kind == "resume_rewrite_version":
+        from ..resume_rescue import review_store
+
+        row = review_store.get(conn, ref.id)
         return row.artifact_digest if row is not None else None
     return None
 

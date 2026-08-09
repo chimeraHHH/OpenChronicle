@@ -225,6 +225,12 @@ def rewrite_output_digest(value: dict[str, Any]) -> str:
     return canonical_digest({"schema": "resume-rewrite-model-output-v1", "output": value})
 
 
+def rewrite_proposal_digest(value: dict[str, Any]) -> str:
+    """Bind one review decision to the exact locally validated proposal."""
+
+    return canonical_digest({"schema": "resume-rewrite-proposal-v1", "proposal": value})
+
+
 def _validate_proposal(
     value: object,
     *,

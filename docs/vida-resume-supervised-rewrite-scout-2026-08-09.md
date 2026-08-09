@@ -91,6 +91,25 @@ an ATS optimizer, or a final application agent.
    an application, or claim an ATS/hiring outcome. `action_capability` remains
    `none`.
 
+### Review/version follow-up rescout
+
+Before implementing the decision ledger, the repository heads were checked
+again rather than silently inheriting moving code. Resume Matcher, CVAurum,
+and resuml remained at the pins above. Reactive Resume had advanced by two
+commits to [`efd950b`](https://github.com/AmruthPillai/Reactive-Resume/tree/efd950bd9394975201655fefb8c47f0edb44d273);
+the relevant delta fixes agent-run cancellation semantics and does not change
+the previously reviewed proposal/history contract. The implementation remains
+based on the earlier pinned behavior review and copies no repository code.
+
+[RFC 6902](https://www.rfc-editor.org/rfc/rfc6902) was also checked as the
+standards baseline. Its `replace` operation requires the target to exist and
+its error handling treats a failed operation as a failed patch. OpenChronicle
+adopts that fail-closed precondition but deliberately does not persist generic
+array-index JSON Patches: each decision binds a stable `fact_id`, exact source
+text, and proposal digest, then creates one immutable version. This avoids
+index drift after section reordering and makes the no-apply-all boundary
+structural rather than a UI convention.
+
 ## Why the first model pass is deliberately narrow
 
 The deterministic exact projection already performs factual selection and
@@ -141,4 +160,3 @@ Implement the frozen contract in this order:
 5. desktop before/after/provenance review without apply-all; and
 6. deterministic adversarial evaluator followed by a separately disclosed
    real-provider quality run.
-

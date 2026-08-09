@@ -111,6 +111,39 @@ CREATE INDEX IF NOT EXISTS idx_resume_rewrite_queue
     ON resume_rewrite_jobs(status, created_at_us, id);
 CREATE INDEX IF NOT EXISTS idx_resume_rewrite_recent
     ON resume_rewrite_jobs(created_at_us DESC, id);
+
+CREATE TABLE IF NOT EXISTS resume_rewrite_versions (
+    id TEXT PRIMARY KEY,
+    lineage_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    parent_id TEXT NOT NULL,
+    action TEXT NOT NULL CHECK (action IN ('decision', 'restore')),
+    proposal_id TEXT NOT NULL,
+    proposal_digest TEXT NOT NULL,
+    restore_target_id TEXT NOT NULL,
+    decision TEXT NOT NULL CHECK (decision IN ('accepted', 'rejected', 'restored')),
+    base_projection_id TEXT NOT NULL,
+    base_artifact_digest TEXT NOT NULL,
+    rewrite_job_id TEXT NOT NULL,
+    rewrite_output_digest TEXT NOT NULL,
+    decisions_json TEXT NOT NULL,
+    artifact_json TEXT NOT NULL,
+    artifact_digest TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    created_at_us INTEGER NOT NULL,
+    row_digest TEXT NOT NULL,
+    UNIQUE(lineage_id, version)
+);
+CREATE INDEX IF NOT EXISTS idx_resume_rewrite_versions_lineage
+    ON resume_rewrite_versions(lineage_id, version DESC);
+CREATE TABLE IF NOT EXISTS resume_rewrite_heads (
+    lineage_id TEXT PRIMARY KEY,
+    current_id TEXT NOT NULL,
+    current_version INTEGER NOT NULL,
+    current_artifact_digest TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    row_digest TEXT NOT NULL
+);
 """
 
 
