@@ -12,6 +12,12 @@ from ..config import Config
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef
 from . import store
+from .document_extract import (
+    DocumentExtractionError,
+    DocumentImportReview,
+    admit_document_candidates,
+    extract_document,
+)
 from .json_resume import (
     JsonResumeError,
     JsonResumeExport,
@@ -27,8 +33,8 @@ from .render import ResumePreview, render_preview
 class ResumeRescueService:
     """Explicit local operations over reviewed résumé sources.
 
-    Model-backed tailoring and document import intentionally follow the frozen
-    evaluator. This first slice admits only objects the caller has reviewed.
+    Model-backed tailoring intentionally follows the frozen evaluator. Source
+    imports admit only exact candidates the caller has reviewed.
     """
 
     def __init__(self, conn: sqlite3.Connection, cfg: Config) -> None:
@@ -122,6 +128,64 @@ class ResumeRescueService:
 
         self._require_enabled()
         return parse_json_resume(source_text)
+
+    def review_document(self, source: bytes, *, source_format: str) -> DocumentImportReview:
+        """Extract an untrusted PDF or DOCX without admitting any fact."""
+
+        self._require_enabled()
+        return extract_document(source, source_format=source_format)
+
+    def admit_document(
+        self,
+        *,
+        source: bytes,
+        source_format: str,
+        expected_review_digest: str,
+        profile_id: str,
+        display_name: str,
+        locale: str,
+        selections: Sequence[dict[str, Any]],
+        expected_version: int | None = None,
+    ) -> tuple[store.ProfileVersion, bool]:
+        """Append explicitly reviewed document excerpts to one profile version."""
+
+        self._require_enabled()
+        if not self._valid_digest(expected_review_digest):
+            raise DocumentExtractionError("document expected review digest is invalid")
+        review = extract_document(source, source_format=source_format)
+        if review.review_digest != expected_review_digest:
+            raise store.ResumeRescueConflict("document review changed")
+        facts = admit_document_candidates(
+            review,
+            source,
+            list(selections),
+            reviewed_at=datetime.now(UTC).isoformat(timespec="microseconds"),
+        )
+        current = store.get_current_profile(self.conn, profile_id)
+        if current is None:
+            existing_facts: list[dict[str, Any]] = []
+            conflicts: list[dict[str, Any]] = []
+        else:
+            if expected_version != current.version:
+                raise store.ResumeRescueConflict("resume profile changed")
+            if (
+                display_name != current.profile["display_name"]
+                or locale != current.profile["locale"]
+            ):
+                raise store.ResumeRescueConflict("resume profile identity changed")
+            existing_facts = list(current.profile["facts"])
+            conflicts = list(current.profile["conflicts"])
+        fact_ids = {fact["id"] for fact in existing_facts}
+        if any(fact["id"] in fact_ids for fact in facts):
+            raise DocumentExtractionError("document fact id already exists")
+        return self.save_profile(
+            profile_id=profile_id,
+            display_name=display_name,
+            locale=locale,
+            facts=[*existing_facts, *facts],
+            conflicts=conflicts,
+            expected_version=expected_version,
+        )
 
     def admit_json_resume(
         self,
