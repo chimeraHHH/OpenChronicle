@@ -29,6 +29,7 @@ from .rewrite_generation import (
 from .rewrite_generation import (
     provider_summary as rewrite_provider_summary,
 )
+from .rewrite_store import ResumeRewriteConflict, ResumeRewriteJob
 from .service import ResumeRescueService
 from .store import OpportunitySnapshot, ProfileVersion, ResumeProjection, ResumeRescueConflict
 
@@ -46,6 +47,8 @@ __all__ = [
     "ResumeRescueService",
     "ResumeRewriteValidationError",
     "ResumeRewriteEgressDenied",
+    "ResumeRewriteConflict",
+    "ResumeRewriteJob",
     "admit_document_candidates",
     "admit_json_resume_candidates",
     "export_projection_json_resume",

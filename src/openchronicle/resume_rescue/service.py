@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import hmac
 import json
+import math
 import sqlite3
-from collections.abc import Sequence
+import uuid
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
 from ..config import Config
+from ..privacy.egress import model_egress_lock
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef
-from . import store
+from ..writer import llm as llm_mod
+from . import rewrite_store, store
 from .document_extract import (
     DocumentExtractionError,
     DocumentImportReview,
@@ -31,6 +35,20 @@ from .models import build_exact_artifact
 from .native_export import ResumeNativeExport, render_docx_export
 from .pdf_export import render_pdf_export
 from .render import ResumePreview, build_document_tree, render_preview, render_preview_tree
+from .rewrite import ResumeRewriteValidationError
+from .rewrite_generation import (
+    TEMPLATE_VERSION as REWRITE_TEMPLATE_VERSION,
+)
+from .rewrite_generation import (
+    ResumeRewriteEgressDenied,
+    build_rewrite_provider_input,
+    generate_rewrite_output,
+    rewrite_template_digest,
+    validate_rewrite_config,
+)
+from .rewrite_generation import (
+    provider_summary as rewrite_provider_summary,
+)
 
 
 class ResumeRescueService:
@@ -40,9 +58,16 @@ class ResumeRescueService:
     imports admit only exact candidates the caller has reviewed.
     """
 
-    def __init__(self, conn: sqlite3.Connection, cfg: Config) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        cfg: Config,
+        *,
+        llm_caller: Callable[..., Any] | None = None,
+    ) -> None:
         self.conn = conn
         self.cfg = cfg
+        self.llm_caller = llm_caller
         store.ensure_schema(conn)
 
     def save_profile(
@@ -284,6 +309,173 @@ class ResumeRescueService:
             if self._projection_current(projection)
         ]
 
+    def rewrite_provider_summary(self) -> dict[str, str]:
+        """Return the model identity and location the user must approve."""
+
+        validate_rewrite_config(self.cfg)
+        return rewrite_provider_summary(self.cfg)
+
+    def queue_rewrite(
+        self,
+        projection_id: str,
+        *,
+        expected_artifact_digest: str,
+        expected_model_identity: str,
+        expected_provider_location: str,
+        remote_egress_authorized: bool,
+    ) -> tuple[rewrite_store.ResumeRewriteJob, bool]:
+        """Queue one exact reviewed projection for a disclosed provider."""
+
+        self._require_enabled()
+        validate_rewrite_config(self.cfg)
+        if not self.cfg.resume_rescue.rewrite_enabled:
+            raise ResumeRewriteEgressDenied("resume rewrite is disabled")
+        if not self._valid_digest(expected_artifact_digest):
+            raise store.ResumeRescueConflict("resume rescue projection changed")
+        projection = self.get_projection(projection_id)
+        if projection is None or not hmac.compare_digest(
+            projection.artifact_digest, expected_artifact_digest
+        ):
+            raise store.ResumeRescueConflict("resume rescue projection changed")
+        provider = rewrite_provider_summary(self.cfg)
+        if (
+            not isinstance(expected_model_identity, str)
+            or not isinstance(expected_provider_location, str)
+            or not hmac.compare_digest(provider["model"], expected_model_identity)
+            or not hmac.compare_digest(provider["location"], expected_provider_location)
+        ):
+            raise ResumeRewriteEgressDenied("resume rewrite provider disclosure changed")
+        if type(remote_egress_authorized) is not bool:
+            raise ResumeRewriteEgressDenied("resume rewrite egress authorization is invalid")
+        if provider["location"] == "remote_or_unknown" and not remote_egress_authorized:
+            raise ResumeRewriteEgressDenied("resume rewrite remote egress is not authorized")
+        provider_input = build_rewrite_provider_input(projection.artifact)
+        self._bounded_json(
+            provider_input,
+            self.cfg.resume_rescue.rewrite_max_input_chars,
+            "rewrite provider input",
+        )
+        return rewrite_store.create(
+            self.conn,
+            projection=projection,
+            provider_input=provider_input,
+            template_version=REWRITE_TEMPLATE_VERSION,
+            template_digest=rewrite_template_digest(),
+            model_identity=provider["model"],
+            provider_location=provider["location"],
+            remote_egress_authorized=remote_egress_authorized,
+        )
+
+    def get_rewrite(self, job_id: str) -> rewrite_store.ResumeRewriteJob | None:
+        job = rewrite_store.get(self.conn, job_id)
+        return job if job is not None and self._rewrite_current(job) else None
+
+    def list_rewrites(self, *, limit: int = 50) -> list[rewrite_store.ResumeRewriteJob]:
+        return [
+            job
+            for job in rewrite_store.list_jobs(self.conn, limit=limit)
+            if self._rewrite_current(job)
+        ]
+
+    def process_next_rewrite(self) -> rewrite_store.ResumeRewriteJob | None:
+        """Generate one proposal set after revalidating every frozen binding."""
+
+        validate_rewrite_config(self.cfg)
+        if not self.cfg.resume_rescue.enabled or not self.cfg.resume_rescue.rewrite_enabled:
+            return None
+        lease_seconds = max(
+            self.cfg.resume_rescue.rewrite_lease_seconds,
+            math.ceil(llm_mod.call_budget_seconds(self.cfg, "resume_rescue")),
+        )
+        if lease_seconds > 21_600:
+            raise ValueError("resume rewrite provider budget exceeds safe lease")
+        lease_token = uuid.uuid4().hex
+        claimed = rewrite_store.claim_next(
+            self.conn,
+            lease_token=lease_token,
+            lease_seconds=lease_seconds,
+        )
+        if claimed is None:
+            return None
+        try:
+            with model_egress_lock():
+                current = rewrite_store.get(self.conn, claimed.id)
+                if (
+                    current is None
+                    or current.status != "leased"
+                    or current.lease_token != lease_token
+                    or not self._rewrite_current(current)
+                ):
+                    raise _ResumeRewriteInputChanged
+                projection = self.get_projection(current.projection_id)
+                if projection is None:
+                    raise _ResumeRewriteInputChanged
+                output = generate_rewrite_output(
+                    self.cfg,
+                    artifact=projection.artifact,
+                    expected_model_identity=current.model_identity,
+                    expected_provider_location=current.provider_location,
+                    remote_egress_authorized=current.remote_egress_authorized,
+                    llm_caller=self.llm_caller,
+                )
+            return rewrite_store.complete(
+                self.conn,
+                job_id=claimed.id,
+                lease_token=lease_token,
+                output=output,
+            )
+        except llm_mod.ProviderCallCancelledError:
+            rewrite_store.release_claim(
+                self.conn,
+                job_id=claimed.id,
+                lease_token=lease_token,
+            )
+            raise
+        except rewrite_store.ResumeRewriteConflict:
+            raise
+        except (_ResumeRewriteInputChanged, ResumeRewriteEgressDenied):
+            return rewrite_store.fail(
+                self.conn,
+                job_id=claimed.id,
+                lease_token=lease_token,
+                error_code="input_changed",
+            )
+        except ResumeRewriteValidationError as exc:
+            return rewrite_store.fail(
+                self.conn,
+                job_id=claimed.id,
+                lease_token=lease_token,
+                error_code=exc.code,
+            )
+        except Exception:  # noqa: BLE001 - durable public state is sanitized
+            return rewrite_store.fail(
+                self.conn,
+                job_id=claimed.id,
+                lease_token=lease_token,
+                error_code="provider_failed",
+            )
+
+    def retry_rewrite(
+        self, job_id: str, *, expected_version: int
+    ) -> rewrite_store.ResumeRewriteJob:
+        validate_rewrite_config(self.cfg)
+        if not self.cfg.resume_rescue.enabled or not self.cfg.resume_rescue.rewrite_enabled:
+            raise ResumeRewriteEgressDenied("resume rewrite is disabled")
+        if self.get_rewrite(job_id) is None:
+            raise rewrite_store.ResumeRewriteConflict("resume rewrite changed")
+        return rewrite_store.retry(
+            self.conn,
+            job_id=job_id,
+            expected_version=expected_version,
+        )
+
+    def delete_rewrite(self, job_id: str, *, expected_version: int) -> None:
+        rewrite_store.delete(
+            self.conn,
+            job_id=job_id,
+            expected_version=expected_version,
+        )
+
     def preview(self, projection_id: str) -> ResumePreview:
         projection = self.get_projection(projection_id)
         if projection is None:
@@ -348,6 +540,32 @@ class ResumeRescueService:
         if not hmac.compare_digest(preview.document_digest, expected_preview_document_digest):
             raise store.ResumeRescueConflict("resume rescue preview changed")
         return render_pdf_export(tree, preview_document_digest=preview.document_digest)
+
+    def _rewrite_current(self, job: rewrite_store.ResumeRewriteJob) -> bool:
+        projection = self.get_projection(job.projection_id)
+        if (
+            projection is None
+            or projection.artifact_digest != job.projection_artifact_digest
+            or projection.created_at != job.projection_created_at
+        ):
+            return False
+        subject = EvidenceRef(kind="resume_rewrite", id=job.id)
+        if provenance_store.direct_sources_checked(self.conn, subject) != [projection.ref]:
+            return False
+        if not provenance_store.is_current(self.conn, projection.ref):
+            return False
+        try:
+            provider = rewrite_provider_summary(self.cfg)
+            return bool(
+                job.template_version == REWRITE_TEMPLATE_VERSION
+                and hmac.compare_digest(job.template_digest, rewrite_template_digest())
+                and hmac.compare_digest(job.model_identity, provider["model"])
+                and hmac.compare_digest(job.provider_location, provider["location"])
+                and job.provider_input == build_rewrite_provider_input(projection.artifact)
+                and (job.provider_location != "remote_or_unknown" or job.remote_egress_authorized)
+            )
+        except (ResumeRewriteValidationError, TypeError, ValueError):
+            return False
 
     def _projection_current(self, projection: store.ResumeProjection) -> bool:
         profile = store.get_current_profile(self.conn, projection.profile_id)
@@ -429,3 +647,7 @@ class ResumeRescueService:
             and len(value) == 64
             and all(character in "0123456789abcdef" for character in value)
         )
+
+
+class _ResumeRewriteInputChanged(RuntimeError):
+    """Internal sentinel for a lease whose frozen source is no longer current."""
