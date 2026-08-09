@@ -32,8 +32,30 @@ Four required checks passed:
 
 The report retained no plaintext markers or raw AX payloads and passed the
 independent verifier in `--allow-incomplete` mode. Its local SHA-256 was
-`12115b4800c7233f2d348ea722b440985db5a264038317f9a1b563cfa6348220`.
+`a565c3bf66cf7264c84d43f3bf6e1b8d12745af6eefb892767dda8dea8b2c6e2`.
 The report itself remains ignored because it is a machine-local audit artifact.
+
+## Real-application compatibility matrix
+
+The same production adapter was then exercised against disposable content in
+installed applications. Only result booleans, closed identities, roles, and
+ranges were retained.
+
+| Application | Source | Result | Closed receipt |
+|---|---|---|---|
+| TextEdit | Dedicated test document | Pass | `com.apple.TextEdit`, `AXTextArea`, ASCII `17+33`; Unicode/emoji `7+25` |
+| Notes | New note containing only a public test marker | Pass | `com.apple.Notes`, `AXTextArea`, `0+33` |
+| Safari | Repository-local textarea fixture, no network | Pass | `com.apple.Safari`, `AXTextArea`, Unicode/emoji `0+46` |
+| VS Code | Not installed on the acceptance machine | Unavailable | No result claimed |
+
+Safari initially exposed its file URL address field as the focused
+`AXTextField`; the adapter did not confuse that 116-unit selection with page
+content. After the local textarea was explicitly focused, its exact selection
+passed. This is expected focus binding, not a fallback.
+
+TextEdit auto-saved the dedicated test document and Notes auto-saved the test
+note. They contain only the public matrix markers, but were not deleted without
+the user's explicit cleanup approval.
 
 ## Exact commands
 
@@ -55,8 +77,7 @@ checks failed and the later timeline block was not produced, so downstream
 prompt/sink and rapid-focus checks were skipped. Those failures are not hidden
 or counted as selection passes; they remain separate Stage 0 audit work.
 
-Prompt Rescue's next source-binding gate is a manual real-application matrix
-covering TextEdit, Notes, Safari, and VS Code, including Unicode ranges and a
-focus-change stress case. The prepared-prompt quality gate still requires a
-reachable, explicitly configured provider; no model score is synthesized from
-the native acceptance run.
+Prompt Rescue's next source-binding gate is VS Code compatibility on a machine
+where it is installed plus a real-application focus-change stress case. The
+prepared-prompt quality gate still requires a reachable, explicitly configured
+provider; no model score is synthesized from the native acceptance run.

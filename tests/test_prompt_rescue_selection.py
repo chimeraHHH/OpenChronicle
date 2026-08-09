@@ -189,6 +189,8 @@ def test_native_selection_helper_has_no_clipboard_or_whole_value_fallback() -> N
     assert "kAXSelectedTextAttribute" in source
     assert "kAXSelectedTextRangeAttribute" in source
     assert "kAXSecureTextFieldSubrole" in source
+    assert "AXUIElementCreateSystemWide()" in source
+    assert "elementPID == identity.pid" in source
     assert "kAXValueAttribute" not in source
     assert "NSPasteboard" not in source
     assert "AXUIElementSetAttributeValue" not in source

@@ -61,6 +61,42 @@ func copyElement(
     return unsafeBitCast(value, to: AXUIElement.self)
 }
 
+func focusedElement(_ identity: FocusedIdentity) throws -> AXUIElement {
+    var value: CFTypeRef?
+    let applicationError = AXUIElementCopyAttributeValue(
+        identity.appElement,
+        kAXFocusedUIElementAttribute as CFString,
+        &value
+    )
+    if applicationError == .success,
+       let value,
+       CFGetTypeID(value) == AXUIElementGetTypeID()
+    {
+        let element = unsafeBitCast(value, to: AXUIElement.self)
+        var elementPID: pid_t = 0
+        guard AXUIElementGetPid(element, &elementPID) == .success,
+              elementPID == identity.pid
+        else {
+            throw SelectionFailure.focusChanged
+        }
+        return element
+    }
+
+    let systemWide = AXUIElementCreateSystemWide()
+    let element = try copyElement(
+        systemWide,
+        kAXFocusedUIElementAttribute as CFString,
+        failure: .noFocusedElement
+    )
+    var elementPID: pid_t = 0
+    guard AXUIElementGetPid(element, &elementPID) == .success,
+          elementPID == identity.pid
+    else {
+        throw SelectionFailure.focusChanged
+    }
+    return element
+}
+
 func copyString(
     _ element: AXUIElement,
     _ attribute: CFString,
@@ -200,11 +236,7 @@ func windowSnapshot() throws -> [String: Any] {
 
 func snapshot() throws -> [String: Any] {
     let identity = try focusedIdentity()
-    let element = try copyElement(
-        identity.appElement,
-        kAXFocusedUIElementAttribute as CFString,
-        failure: .noFocusedElement
-    )
+    let element = try focusedElement(identity)
     let elementWindow = try copyElement(
         element,
         kAXWindowAttribute as CFString,
@@ -243,11 +275,7 @@ func snapshot() throws -> [String: Any] {
     )
 
     let finalIdentity = try focusedIdentity()
-    let finalElement = try copyElement(
-        finalIdentity.appElement,
-        kAXFocusedUIElementAttribute as CFString,
-        failure: .focusChanged
-    )
+    let finalElement = try focusedElement(finalIdentity)
     let rangeAfter = try selectedRange(finalElement)
     let selectedAfter = try copyString(
         finalElement,

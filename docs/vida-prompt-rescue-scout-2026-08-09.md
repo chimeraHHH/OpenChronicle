@@ -181,8 +181,9 @@ excluded-data egress, and zero successful source-text instruction overrides.
    that captures before focusing the review app. The 2026-08-09 interactive run
    passed exact, empty, secure, and policy-preflight checks; see
    [vida-prompt-rescue-live-selection-2026-08-09.md](vida-prompt-rescue-live-selection-2026-08-09.md).
-   TextEdit, Notes, Safari, and VS Code still require explicit compatibility
-   acceptance.
+   TextEdit, Notes, and a repository-local Safari textarea now pass exact range
+   acceptance; VS Code was not installed on the acceptance machine, so that
+   application and a real-app focus-change stress case remain open.
 
 Only after step 4 passes may the roadmap's “explicit selection binding” item be
 marked complete.

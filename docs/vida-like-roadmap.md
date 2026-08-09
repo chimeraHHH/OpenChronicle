@@ -229,8 +229,10 @@ privacy UX is validated on a signed macOS build.
   AppKit/TCC fixture now passes exact, empty, secure-field, and metadata-first
   policy-denial checks; the scoped record is
   [vida-prompt-rescue-live-selection-2026-08-09.md](vida-prompt-rescue-live-selection-2026-08-09.md).
-  TextEdit, Notes, Safari, and VS Code compatibility plus a reachable-provider
-  quality report remain before this checkbox can close.
+  TextEdit, Notes, and a local Safari textarea now pass exact-range acceptance.
+  VS Code was not installed on the acceptance machine; its compatibility, a
+  real-app focus-change stress case, and a reachable-provider quality report
+  remain before this checkbox can close.
   The frozen 17-case adversarial dataset, deterministic grader, and raw-input
   negative-control report now exist under `benchmarks/vida-prompt-rescue-v1`.
   Its explicit provider runner shares the production template, no-tool call,
