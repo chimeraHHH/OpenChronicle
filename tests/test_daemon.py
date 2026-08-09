@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 
 from openchronicle import cli, daemon, paths
 from openchronicle import config as config_mod
+from openchronicle.prompt_rescue import worker as prompt_rescue_worker
 from openchronicle.provenance.models import EvidenceRef, content_digest
 from openchronicle.services.memory import MemoryService
 from openchronicle.store import entries as entries_store
@@ -602,6 +603,44 @@ async def test_suggestion_worker_receives_same_capture_activity_gate(
     assert len(observed_gate) == 1
     assert manager.force_end_reasons == ["daemon-shutdown"]
     assert cancelled == started
+
+
+@pytest.mark.asyncio
+async def test_prompt_rescue_worker_is_supervised_only_when_enabled(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: set[str] = set()
+    cancelled: set[str] = set()
+    _install_manager(monkeypatch)
+    _patch_standard_workers(monkeypatch, started=started, cancelled=cancelled)
+    monkeypatch.setattr(
+        prompt_rescue_worker,
+        "run_forever",
+        _blocking_worker("prompt-rescue", started=started, cancelled=cancelled),
+    )
+
+    cfg = config_mod.Config()
+    cfg.reducer.enabled = False
+    cfg.prompt_rescue.enabled = True
+    cfg.mcp.auto_start = False
+    stop = asyncio.Event()
+    expected = {
+        "capture",
+        "session",
+        "daily-safety-net",
+        "timeline",
+        "prompt-rescue",
+    }
+
+    run_task = asyncio.create_task(daemon._run(cfg, stop_event=stop))
+    while not expected.issubset(started):
+        await asyncio.sleep(0)
+    stop.set()
+    await run_task
+
+    assert started == expected
+    assert cancelled == expected
 
 
 @pytest.mark.asyncio

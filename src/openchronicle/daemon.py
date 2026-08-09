@@ -899,6 +899,15 @@ async def _run(
                         name="suggestions",
                     )
                 )
+            if effective_cfg.prompt_rescue.enabled:
+                from .prompt_rescue import worker as prompt_rescue_worker
+
+                tasks.append(
+                    asyncio.create_task(
+                        prompt_rescue_worker.run_forever(effective_cfg),
+                        name="prompt-rescue",
+                    )
+                )
             # Both loops intentionally return immediately when the reducer is
             # disabled. Do not supervise tasks that are configured not to run:
             # an early normal return is otherwise indistinguishable from a

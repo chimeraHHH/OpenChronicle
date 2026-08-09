@@ -154,6 +154,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     _migrate_capture_schema(conn)
     from ..daily_wrap import store as daily_wrap_store
     from ..memory_candidates import store as candidate_store
+    from ..prompt_rescue import store as prompt_rescue_store
     from ..provenance import store as provenance_store
     from ..session import store as session_store
     from ..suggestions import store as suggestion_store
@@ -164,6 +165,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     session_store.ensure_schema(conn)
     provenance_store.ensure_schema(conn)
     candidate_store.ensure_schema(conn)
+    prompt_rescue_store.ensure_schema(conn)
     daily_wrap_store.ensure_schema(conn)
     suggestion_store.ensure_schema(conn)
     classifier_jobs.ensure_schema(conn)

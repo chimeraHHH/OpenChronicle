@@ -35,6 +35,9 @@ api_key_env = "OPENAI_API_KEY"
 [models.daily_wrap]   # grounded day synthesis; JSON-only and no tools
 # Accuracy-sensitive; unsupported items are rejected by deterministic validation.
 
+[models.prompt_rescue] # explicit rough-prompt preparation; JSON-only and no tools
+# This model receives only the text and constraints the user reviews and queues.
+
 [models.compact]      # file compaction — accuracy matters
 # e.g. same as classifier
 ```
@@ -66,6 +69,7 @@ Stage → purpose:
 | `reducer` | active-session flushes + session end + due retry/safety net | Turns a session's timeline blocks into time-ranged event-daily entries. |
 | `classifier` | periodic active-session passes + terminal catch-up | Reads event-daily entries + context and stages evidence-linked candidates; it cannot write Markdown. |
 | `daily_wrap` | post-midnight or explicit CLI run | Produces a bounded, evidence-backed JSON review with no tools. |
+| `prompt_rescue` | explicit, opt-in queued jobs | Rewrites reviewed manual input into a bounded prepared artifact; it cannot use tools, paste, or submit. |
 | `compact` | after commits that flag files | Rewrites a fat file; rejects if >5% noun-phrase loss. |
 
 ### Fully local with Ollama
@@ -353,6 +357,26 @@ grace window, and rechecks for late evidence at `retry_seconds` intervals. The
 same day, timezone, and input digest are returned from cache; changed evidence
 creates a new revision on the same canonical row. See
 [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md).
+
+## `[prompt_rescue]`
+
+```toml
+[prompt_rescue]
+enabled = false          # opt in; the configured model receives reviewed user text
+poll_seconds = 5        # 1..300; durable queued-job cadence
+lease_seconds = 300     # 30..21600 minimum; raised to the model call budget
+max_input_chars = 20000 # bound over the complete declared input
+max_output_chars = 30000
+```
+
+Prompt Rescue starts disabled and accepts only an explicitly reviewed
+`manual_paste` source in the first slice. The daemon claims jobs through a
+durable lease, calls `[models.prompt_rescue]` with JSON mode and no tools, and
+stores a closed prepared-artifact schema. A ready artifact can be reviewed,
+edited, copied, retried after a visible sanitized failure, or permanently
+deleted. It has no capability to paste into another app or submit on the
+user's behalf. The current slice does not claim that pasted text is bound to
+an external macOS selection; that requires a later trusted selection adapter.
 
 ## `[search]`
 

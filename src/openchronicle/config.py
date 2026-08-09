@@ -183,6 +183,16 @@ class SuggestionConfig:
 
 
 @dataclass
+class PromptRescueConfig:
+    # Explicitly enabled because a configured remote model receives user text.
+    enabled: bool = False
+    poll_seconds: int = 5
+    lease_seconds: int = 300
+    max_input_chars: int = 20_000
+    max_output_chars: int = 30_000
+
+
+@dataclass
 class SearchConfig:
     default_top_k: int = 5
     filter_superseded_by_default: bool = True
@@ -210,6 +220,7 @@ class Config:
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     daily_wrap: DailyWrapConfig = field(default_factory=DailyWrapConfig)
     suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
+    prompt_rescue: PromptRescueConfig = field(default_factory=PromptRescueConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
@@ -270,6 +281,10 @@ def load(path: Path | None = None) -> Config:
         memory=_build_dataclass(MemoryConfig, _as_dict(raw.get("memory"))),
         daily_wrap=_build_dataclass(DailyWrapConfig, _as_dict(raw.get("daily_wrap"))),
         suggestions=_build_dataclass(SuggestionConfig, _as_dict(raw.get("suggestions"))),
+        prompt_rescue=_build_dataclass(
+            PromptRescueConfig,
+            _as_dict(raw.get("prompt_rescue")),
+        ),
         search=_build_dataclass(SearchConfig, _as_dict(raw.get("search"))),
         mcp=_build_dataclass(MCPConfig, _as_dict(raw.get("mcp"))),
     )
@@ -308,6 +323,10 @@ api_key_env = "OPENAI_API_KEY"
 [models.daily_wrap]
 # Evidence-backed end-of-day synthesis. This stage has no tools and receives
 # only bounded, policy-filtered activity excerpts.
+
+[models.prompt_rescue]
+# Explicit rough-prompt preparation. This stage has no tools. Enabling the
+# workflow may send exactly the reviewed manual input to this configured model.
 
 [capture]
 event_driven = true           # capture on window/app/typing events via mac-ax-watcher
@@ -386,6 +405,13 @@ work_resumption_min_gap_minutes = 15
 work_resumption_max_gap_hours = 12
 work_resumption_activation_minutes = 10
 work_resumption_settle_seconds = 20       # quiet time after the latest persisted capture
+
+[prompt_rescue]
+enabled = false                 # explicit opt-in; configured remote models receive user text
+poll_seconds = 5                # durable queued-job cadence (1..300)
+lease_seconds = 300             # minimum lease; auto-raised to provider call budget
+max_input_chars = 20000         # rough prompt plus declared context remains bounded
+max_output_chars = 30000        # improved prompt bound
 
 [search]
 default_top_k = 5

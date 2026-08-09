@@ -217,8 +217,11 @@ privacy UX is validated on a signed macOS build.
   moments, so timing-only optimization is stopped.
 - [ ] Prompt Rescue prepared-artifact slice with explicit selection binding and
   no automatic submission. The external scout and implementation contract are
-  complete; implementation starts with an honestly labeled manual-paste source
-  and does not satisfy the exact macOS selection gate by itself.
+  complete. Its durable, lease-fenced backend now accepts an honestly labeled
+  manual-paste source, records model/provider disclosure and provenance, calls
+  a strict JSON/no-tool generator, and supports bounded retry, CAS edit, and
+  hard delete. The desktop review surface and exact macOS selection adapter
+  remain; manual paste does not satisfy the selection gate by itself.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
   send/submit capability.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
