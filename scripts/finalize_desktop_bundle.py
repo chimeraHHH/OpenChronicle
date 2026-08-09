@@ -18,6 +18,9 @@ from typing import Any
 
 import build_desktop_sidecar as sidecar_builder
 
+APP_STARTUP_TIMEOUT_SECONDS = 20
+APP_STABILITY_SECONDS = 1
+
 ROOT = Path(__file__).resolve().parents[1]
 APP = (
     ROOT
@@ -356,11 +359,18 @@ def _launch_smoke(main: Path) -> dict[str, Any]:
             env=environment,
         )
         try:
-            time.sleep(5)
+            started = time.monotonic()
+            deadline = started + APP_STARTUP_TIMEOUT_SECONDS
+            while not (data / "config.toml").is_file() or not (data / "index.db").is_file():
+                if process.poll() is not None:
+                    raise RuntimeError("desktop bundle app exited during launch smoke")
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("desktop bundle app did not complete its bridge startup")
+                time.sleep(0.1)
+            startup_seconds = time.monotonic() - started
+            time.sleep(APP_STABILITY_SECONDS)
             if process.poll() is not None:
-                raise RuntimeError("desktop bundle app exited during launch smoke")
-            if not (data / "config.toml").is_file() or not (data / "index.db").is_file():
-                raise RuntimeError("desktop bundle app did not complete its bridge startup")
+                raise RuntimeError("desktop bundle app exited after bridge startup")
         finally:
             if process.poll() is None:
                 process.terminate()
@@ -371,7 +381,13 @@ def _launch_smoke(main: Path) -> dict[str, Any]:
                 stdout, stderr = process.communicate(timeout=5)
         if stdout or stderr:
             raise RuntimeError("desktop bundle app emitted startup diagnostics")
-    return {"duration_seconds": 5, "isolated_data_root": True, "passed": True}
+    return {
+        "startup_seconds": round(startup_seconds, 3),
+        "stability_seconds": APP_STABILITY_SECONDS,
+        "timeout_seconds": APP_STARTUP_TIMEOUT_SECONDS,
+        "isolated_data_root": True,
+        "passed": True,
+    }
 
 
 def _verify_architecture(executable: Path, triple: str) -> None:

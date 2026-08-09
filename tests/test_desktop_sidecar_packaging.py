@@ -66,3 +66,6 @@ def test_npm_bundle_pipeline_builds_app_then_runs_finalizer() -> None:
     assert "--config src-tauri/tauri.bundle.conf.json --bundles app" in command
     assert command.endswith("python ../../scripts/finalize_desktop_bundle.py")
     assert FINALIZER.is_file()
+    finalizer_source = FINALIZER.read_text(encoding="utf-8")
+    assert "APP_STARTUP_TIMEOUT_SECONDS = 20" in finalizer_source
+    assert "APP_STABILITY_SECONDS = 1" in finalizer_source
