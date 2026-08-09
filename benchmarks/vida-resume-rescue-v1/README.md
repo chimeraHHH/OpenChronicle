@@ -60,3 +60,13 @@ transitions before recording a local evidence decision. PDF bytes are not a
 determinism gate because engine metadata can change while extracted text,
 layout, and pixels remain identical. This audit neither enables product PDF
 export nor proves fidelity on another browser, OS, or font installation.
+
+## Reviewed document ingress
+
+The `document-extraction/` contract freezes the next PDF/DOCX source boundary
+before implementation. Its 20 synthetic cases cover page/bounding-box and
+OOXML part/block provenance, uncertain reading order, image-only PDFs,
+encryption, corruption, byte/page/ZIP expansion limits, external
+relationships, active content, hostile instructions, digest tampering, and
+profile CAS races. Candidates are review-only and initially unselected; the
+contract grants no model, OCR, network, tool, upload, or application authority.
