@@ -159,6 +159,32 @@ impl ResumeDocumentVault {
             entry.in_use = false;
         }
     }
+
+    fn discard(&self, token: &str, expected_review_digest: &str) -> Result<bool, DesktopError> {
+        let mut entries = self.entries.lock().map_err(|_| {
+            DesktopError::new(
+                "DOCUMENT_REVIEW_UNAVAILABLE",
+                "The local document review vault is unavailable.",
+            )
+        })?;
+        purge_expired_document_entries(&mut entries);
+        let Some(entry) = entries.get(token) else {
+            return Ok(false);
+        };
+        if entry.in_use
+            || !constant_time_equal(
+                entry.review_digest.as_bytes(),
+                expected_review_digest.as_bytes(),
+            )
+        {
+            return Err(DesktopError::new(
+                "DOCUMENT_REVIEW_CHANGED",
+                "The document review changed; review the source again.",
+            ));
+        }
+        entries.remove(token);
+        Ok(true)
+    }
 }
 
 fn purge_expired_document_entries(entries: &mut HashMap<String, ResumeDocumentVaultEntry>) {
@@ -510,6 +536,13 @@ pub(crate) struct ResumeAdmitDocumentRequest {
     pub selections: Vec<ResumeJsonSelectionRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_version: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeDiscardDocumentRequest {
+    pub review_token: String,
+    pub expected_review_digest: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -958,6 +991,22 @@ pub async fn admit_resume_rescue_document(
                 "The résumé document admission worker stopped unexpectedly.",
             )
         })?
+}
+
+#[tauri::command]
+pub fn discard_resume_rescue_document(
+    vault: State<'_, ResumeDocumentVault>,
+    request: ResumeDiscardDocumentRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_document_review_reference(
+        &request.review_token,
+        &request.expected_review_digest,
+    )?;
+    let discarded = vault.discard(&request.review_token, &request.expected_review_digest)?;
+    Ok(serde_json::json!({
+        "review_token": request.review_token,
+        "discarded": discarded,
+    }))
 }
 
 #[tauri::command]
@@ -1686,17 +1735,10 @@ fn validate_resume_json_admission(request: &ResumeAdmitJsonRequest) -> Result<()
 fn validate_resume_document_admission(
     request: &ResumeAdmitDocumentRequest,
 ) -> Result<(), DesktopError> {
-    if request.review_token.len() != 32
-        || !request
-            .review_token
-            .bytes()
-            .all(|value| value.is_ascii_hexdigit())
-    {
-        return Err(DesktopError::invalid_request(
-            "The résumé document review token is invalid.",
-        ));
-    }
-    validate_resume_digest(&request.expected_review_digest)?;
+    validate_resume_document_review_reference(
+        &request.review_token,
+        &request.expected_review_digest,
+    )?;
     validate_resume_identifier(&request.profile_id)?;
     validate_multiline_text(&request.display_name, 512, false)?;
     validate_bounded_text(&request.locale, 64, true)?;
@@ -1732,6 +1774,18 @@ fn validate_resume_document_admission(
         }
     }
     Ok(())
+}
+
+fn validate_resume_document_review_reference(
+    review_token: &str,
+    expected_review_digest: &str,
+) -> Result<(), DesktopError> {
+    if review_token.len() != 32 || !review_token.bytes().all(|value| value.is_ascii_hexdigit()) {
+        return Err(DesktopError::invalid_request(
+            "The résumé document review token is invalid.",
+        ));
+    }
+    validate_resume_digest(expected_review_digest)
 }
 
 fn validate_json_resume_source_text(source_text: &str) -> Result<(), DesktopError> {
@@ -2944,7 +2998,18 @@ mod tests {
 
         vault.finish(&token, &source_digest, false);
         assert!(vault.begin(&token, &review_digest).is_ok());
-        vault.finish(&token, &source_digest, true);
+        vault.finish(&token, &source_digest, false);
+        assert!(vault
+            .discard(&token, &"b".repeat(64))
+            .expect_err("changed discard digest must fail")
+            .code
+            .eq("DOCUMENT_REVIEW_CHANGED"));
+        assert!(vault
+            .discard(&token, &review_digest)
+            .expect("discard reviewed source"));
+        assert!(!vault
+            .discard(&token, &review_digest)
+            .expect("discard is idempotent"));
         assert_eq!(
             vault
                 .begin(&token, &review_digest)

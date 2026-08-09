@@ -7,6 +7,7 @@ import type {
   ForgetPreview,
   JsonResumeExport,
   OpenedJsonResumeReview,
+  OpenedResumeDocumentReview,
   PromptRescueJob,
   PromptRescueJobSummary,
   ReplyRescueJob,
@@ -468,6 +469,54 @@ export function openedJsonResumeReview(): OpenedJsonResumeReview {
       warnings: ["No candidate enters the master profile until explicitly admitted."],
       action_capability: "none",
       review_digest: "a".repeat(64),
+    },
+  };
+}
+
+export function openedResumeDocumentReview(): OpenedResumeDocumentReview {
+  const candidateDigest = "b".repeat(64);
+  const sourceDigest = "c".repeat(64);
+  return {
+    review_token: "a".repeat(32),
+    review: {
+      schema_version: 1,
+      format: "pdf",
+      extractor: { version: 1, method: "pdfplumber-0.11.10-geometry-v1" },
+      source: {
+        id: `resume-document-${sourceDigest.slice(0, 32)}`,
+        digest: sourceDigest,
+        byte_count: 12_345,
+      },
+      candidates: [
+        {
+          id: `document-candidate-${candidateDigest.slice(0, 32)}`,
+          text: "Built a local-first import boundary.",
+          text_digest: "d".repeat(64),
+          locator: {
+            kind: "page_bbox",
+            page: 1,
+            section: "pdf/page/1/bbox/50.000,72.000,320.000,88.000",
+            start: 0,
+            end: 36,
+            bbox: [50, 72, 320, 88],
+          },
+          extraction_method: "pdfplumber-0.11.10-geometry-v1",
+          candidate_digest: candidateDigest,
+        },
+      ],
+      omissions: [{ code: "images_not_extracted", count: 1 }],
+      warnings: [
+        {
+          code: "untrusted_document_text",
+          message: "Document text is untrusted data; embedded instructions were not executed.",
+        },
+        {
+          code: "reading_order_requires_review",
+          message: "PDF reading order is inferred from geometry and requires review.",
+        },
+      ],
+      action_capability: "none",
+      review_digest: "e".repeat(64),
     },
   };
 }

@@ -31,6 +31,7 @@ import {
   jsonResumeExport,
   maliciousText,
   openedJsonResumeReview,
+  openedResumeDocumentReview,
   provenanceTrace,
   promptRescueJob,
   promptRescueSummary,
@@ -124,6 +125,13 @@ function commandResult(command: string) {
   if (command === "open_resume_rescue_json") return openedJsonResumeReview();
   if (command === "admit_resume_rescue_json") {
     return { profile: resumeProfileVersion(), created: true };
+  }
+  if (command === "open_resume_rescue_document") return openedResumeDocumentReview();
+  if (command === "admit_resume_rescue_document") {
+    return { profile: resumeProfileVersion(), created: false };
+  }
+  if (command === "discard_resume_rescue_document") {
+    return { review_token: openedResumeDocumentReview().review_token, discarded: true };
   }
   if (command === "get_resume_rescue_json_export") {
     return { export: jsonResumeExport() };
@@ -255,6 +263,80 @@ describe("trusted console", () => {
         },
       }),
     );
+  });
+
+  it("keeps extracted document lines unchecked and admits with an opaque review token", async () => {
+    const user = userEvent.setup();
+    const opened = openedResumeDocumentReview();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Résumé Rescue/i }));
+    await user.click(screen.getByRole("button", { name: "Choose PDF or DOCX…" }));
+
+    expect(
+      await screen.findByText("Built a local-first import boundary."),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Page 1 · bbox 50, 72, 320, 88/)).toBeInTheDocument();
+    expect(screen.getByText(/1 image\(s\) were not extracted/)).toBeInTheDocument();
+    const candidate = screen.getByRole("checkbox", {
+      name: `Select document line ${opened.review.candidates[0]!.id}`,
+    });
+    expect(candidate).not.toBeChecked();
+    expect(
+      screen.getByRole("button", { name: "Admit selected document facts" }),
+    ).toBeDisabled();
+
+    await user.click(candidate);
+    await user.click(
+      screen.getByRole("button", { name: "Admit selected document facts" }),
+    );
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("admit_resume_rescue_document", {
+        request: {
+          review_token: opened.review_token,
+          expected_review_digest: opened.review.review_digest,
+          profile_id: resumeProfileVersion().id,
+          display_name: resumeProfileVersion().profile.display_name,
+          locale: resumeProfileVersion().profile.locale,
+          selections: [
+            {
+              candidate_id: opened.review.candidates[0]!.id,
+              fact_id: "document-pdf-1",
+              section: "experience",
+              confidentiality: "private",
+              ownership_scope: "individual",
+            },
+          ],
+          expected_version: resumeProfileVersion().version,
+        },
+      }),
+    );
+    expect(
+      tauri.invoke.mock.calls.some(([, args]) =>
+        (JSON.stringify(args) ?? "").includes("%PDF"),
+      ),
+    ).toBe(false);
+  });
+
+  it("discards document source bytes when review is cancelled", async () => {
+    const user = userEvent.setup();
+    const opened = openedResumeDocumentReview();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Résumé Rescue/i }));
+    await user.click(screen.getByRole("button", { name: "Choose PDF or DOCX…" }));
+    await screen.findByText("Built a local-first import boundary.");
+    await user.click(screen.getByRole("button", { name: "Discard review" }));
+
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("discard_resume_rescue_document", {
+        request: {
+          review_token: opened.review_token,
+          expected_review_digest: opened.review.review_digest,
+        },
+      }),
+    );
+    expect(screen.queryByText("Built a local-first import boundary.")).not.toBeInTheDocument();
   });
 
   it("reviews and copies a manual reply without mailbox or send capability", async () => {

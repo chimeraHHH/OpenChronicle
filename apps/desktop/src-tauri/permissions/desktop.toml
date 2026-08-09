@@ -43,4 +43,5 @@ permissions = [
   "allow-export-resume-rescue-json",
   "allow-open-resume-rescue-document",
   "allow-admit-resume-rescue-document",
+  "allow-discard-resume-rescue-document",
 ]

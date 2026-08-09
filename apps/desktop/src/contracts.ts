@@ -10,9 +10,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 10 adds reviewed JSON Resume interoperability
-// without adding upload, application, submission, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 10 as const;
+// WebView result projection. Version 11 adds reviewed PDF/DOCX extraction without
+// exposing source bytes or adding upload, application, submission, or send capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 11 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -394,6 +394,75 @@ export interface JsonResumeSelection {
   section: ResumeSectionKind;
   confidentiality: ResumeConfidentiality;
   ownership_scope: ResumeOwnership;
+}
+
+export interface ResumeDocumentPageLocator {
+  kind: "page_bbox";
+  page: number;
+  section: string;
+  start: number;
+  end: number;
+  bbox: [number, number, number, number];
+}
+
+export interface ResumeDocumentPartLocator {
+  kind: "part_block";
+  page: 0;
+  section: string;
+  start: number;
+  end: number;
+  part: string;
+  block: number;
+  block_kind: string;
+}
+
+export type ResumeDocumentLocator =
+  | ResumeDocumentPageLocator
+  | ResumeDocumentPartLocator;
+
+export interface ResumeDocumentCandidate {
+  id: string;
+  text: string;
+  text_digest: string;
+  locator: ResumeDocumentLocator;
+  extraction_method: string;
+  candidate_digest: string;
+}
+
+export type ResumeDocumentOmission =
+  | { code: "images_not_extracted"; count: number }
+  | {
+      code: "supplementary_parts_not_extracted";
+      parts: string[];
+    };
+
+export interface ResumeDocumentWarning {
+  code:
+    | "docx_pagination_unavailable"
+    | "duplicate_candidate_text"
+    | "external_relationship_ignored"
+    | "no_extractable_text"
+    | "ocr_required"
+    | "reading_order_requires_review"
+    | "untrusted_document_text";
+  message: string;
+}
+
+export interface ResumeDocumentImportReview {
+  schema_version: 1;
+  format: "pdf" | "docx";
+  extractor: { version: 1; method: string };
+  source: { id: string; digest: string; byte_count: number };
+  candidates: ResumeDocumentCandidate[];
+  omissions: ResumeDocumentOmission[];
+  warnings: ResumeDocumentWarning[];
+  action_capability: "none";
+  review_digest: string;
+}
+
+export interface OpenedResumeDocumentReview {
+  review_token: string;
+  review: ResumeDocumentImportReview;
 }
 
 export interface JsonResumeExport {

@@ -56,6 +56,7 @@ pub fn run() {
             commands::admit_resume_rescue_json,
             commands::open_resume_rescue_document,
             commands::admit_resume_rescue_document,
+            commands::discard_resume_rescue_document,
             commands::get_resume_rescue_json_export,
             commands::export_resume_rescue_json,
             commands::trace_provenance,

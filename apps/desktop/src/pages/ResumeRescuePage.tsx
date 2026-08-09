@@ -7,6 +7,7 @@ import type {
   JsonResumeExport,
   JsonResumeSelection,
   OpenedJsonResumeReview,
+  OpenedResumeDocumentReview,
   ResumeConfidentiality,
   ResumeFact,
   ResumeOpportunity,
@@ -84,6 +85,13 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   const [jsonDisplayName, setJsonDisplayName] = useState("");
   const [jsonLocale, setJsonLocale] = useState("");
   const [jsonExport, setJsonExport] = useState<JsonResumeExport | null>(null);
+  const [documentImport, setDocumentImport] =
+    useState<OpenedResumeDocumentReview | null>(null);
+  const [documentDecisions, setDocumentDecisions] = useState<JsonCandidateDecision[]>([]);
+  const [documentUseNewProfile, setDocumentUseNewProfile] = useState(false);
+  const [documentTargetProfileId, setDocumentTargetProfileId] = useState("");
+  const [documentDisplayName, setDocumentDisplayName] = useState("");
+  const [documentLocale, setDocumentLocale] = useState("");
 
   async function refresh() {
     const next = await api.getResumeRescueState();
@@ -117,6 +125,18 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
       current = false;
     };
   }, [api]);
+
+  useEffect(() => {
+    if (!documentImport) return;
+    return () => {
+      void api
+        .discardResumeDocument(
+          documentImport.review_token,
+          documentImport.review.review_digest,
+        )
+        .catch(() => undefined);
+    };
+  }, [api, documentImport]);
 
   const selectedProfile = state?.profiles.find((profile) => profile.id === selectedProfileId);
   const selectedOpportunity = state?.opportunities.find(
@@ -235,6 +255,139 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
       setJsonDecisions([]);
       await refresh();
       setSelectedProfileId(result.profile.id);
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openResumeDocument() {
+    clearMessages();
+    setBusy("document-import-open");
+    try {
+      if (documentImport) {
+        await api.discardResumeDocument(
+          documentImport.review_token,
+          documentImport.review.review_digest,
+        );
+        setDocumentImport(null);
+        setDocumentDecisions([]);
+      }
+      const opened = await api.openResumeDocument();
+      const target = selectedProfile ?? state?.profiles[0];
+      setDocumentImport(opened);
+      setDocumentDecisions(
+        opened.review.candidates.map((candidate, index) => ({
+          selected: false,
+          candidate_id: candidate.id,
+          fact_id: `document-${opened.review.format}-${index + 1}`,
+          section: "experience",
+          confidentiality: "private",
+          ownership_scope: "individual",
+        })),
+      );
+      setDocumentUseNewProfile(!target);
+      setDocumentTargetProfileId(target?.id ?? "");
+      setDocumentDisplayName(target?.profile.display_name ?? "");
+      setDocumentLocale(target?.profile.locale ?? "");
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function updateDocumentDecision(
+    candidateId: string,
+    changes: Partial<JsonCandidateDecision>,
+  ) {
+    setDocumentDecisions((current) =>
+      current.map((decision) =>
+        decision.candidate_id === candidateId ? { ...decision, ...changes } : decision,
+      ),
+    );
+  }
+
+  function selectDocumentTarget(value: string) {
+    if (value === "__new__") {
+      setDocumentUseNewProfile(true);
+      setDocumentTargetProfileId("");
+      setDocumentDisplayName("");
+      setDocumentLocale("");
+      return;
+    }
+    const profile = state?.profiles.find((item) => item.id === value);
+    setDocumentUseNewProfile(false);
+    setDocumentTargetProfileId(profile?.id ?? "");
+    setDocumentDisplayName(profile?.profile.display_name ?? "");
+    setDocumentLocale(profile?.profile.locale ?? "");
+  }
+
+  async function admitResumeDocument() {
+    if (!documentImport) return;
+    clearMessages();
+    const selections = documentDecisions
+      .filter((decision) => decision.selected)
+      .map(({ selected: _selected, ...selection }) => ({
+        ...selection,
+        fact_id: selection.fact_id.trim(),
+      }));
+    const target = documentUseNewProfile
+      ? undefined
+      : state?.profiles.find((profile) => profile.id === documentTargetProfileId);
+    const profileId =
+      (documentUseNewProfile ? documentTargetProfileId : target?.id)?.trim() ?? "";
+    const factIds = selections.map((selection) => selection.fact_id);
+    if (
+      !selections.length ||
+      !profileId ||
+      !documentDisplayName.trim() ||
+      factIds.some((id) => !id) ||
+      new Set(factIds).size !== factIds.length ||
+      factIds.some((id) => target?.profile.facts.some((fact) => fact.id === id))
+    ) {
+      setError(
+        "Select at least one candidate and use non-empty fact IDs that are unique in the target profile.",
+      );
+      return;
+    }
+    setBusy("document-import-admit");
+    try {
+      const result = await api.admitResumeDocument(
+        documentImport.review_token,
+        documentImport.review.review_digest,
+        profileId,
+        documentDisplayName.trim(),
+        documentLocale.trim(),
+        selections,
+        target?.version,
+      );
+      setNotice(
+        `Admitted ${selections.length} reviewed document fact${selections.length === 1 ? "" : "s"} into profile version ${result.profile.version}.`,
+      );
+      setDocumentImport(null);
+      setDocumentDecisions([]);
+      await refresh();
+      setSelectedProfileId(result.profile.id);
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function cancelResumeDocument() {
+    if (!documentImport) return;
+    clearMessages();
+    setBusy("document-import-discard");
+    try {
+      await api.discardResumeDocument(
+        documentImport.review_token,
+        documentImport.review.review_digest,
+      );
+      setDocumentImport(null);
+      setDocumentDecisions([]);
     } catch (reason: unknown) {
       setError(displayError(reason));
     } finally {
@@ -778,6 +931,259 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
           <p className="empty-callout">
             The native picker accepts a regular UTF-8 JSON file up to 500 KB. Import starts with
             every candidate unchecked.
+          </p>
+        )}
+      </section>
+
+      <section
+        className="settings-section resume-rescue__document-import"
+        aria-labelledby="resume-document-import-heading"
+      >
+        <div className="section-heading-row">
+          <div>
+            <p className="eyebrow">Reviewed document extraction</p>
+            <h2 id="resume-document-import-heading">Import PDF or DOCX</h2>
+            <p className="muted">
+              Extract bounded local text with source locations, inspect every line, then admit
+              only checked facts. Original document bytes never enter this page or the profile
+              store.
+            </p>
+          </div>
+          <button
+            className="button button--secondary"
+            disabled={!state?.enabled || Boolean(busy)}
+            onClick={() => void openResumeDocument()}
+            type="button"
+          >
+            {busy === "document-import-open" ? "Opening…" : "Choose PDF or DOCX…"}
+          </button>
+        </div>
+        {documentImport ? (
+          <div className="resume-rescue__document-review">
+            <div className="info-panel">
+              <strong>
+                {documentImport.review.candidates.length} unreviewed extracted lines
+              </strong>
+              <p>
+                {documentImport.review.format.toUpperCase()} · source bytes:{" "}
+                {documentImport.review.source.byte_count} · extractor:{" "}
+                {documentImport.review.extractor.method}
+              </p>
+              <p>
+                Source digest: <code>{documentImport.review.source.digest}</code>
+              </p>
+            </div>
+            <div className="resume-rescue__json-target">
+              <label className="field">
+                <span>Target profile</span>
+                <select
+                  onChange={(event) => selectDocumentTarget(event.currentTarget.value)}
+                  value={
+                    documentUseNewProfile ? "__new__" : documentTargetProfileId
+                  }
+                >
+                  {state?.profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.profile.display_name} · v{profile.version}
+                    </option>
+                  ))}
+                  <option value="__new__">Create a new reviewed profile</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Stable profile ID</span>
+                <input
+                  disabled={!documentUseNewProfile}
+                  maxLength={128}
+                  onChange={(event) =>
+                    setDocumentTargetProfileId(event.currentTarget.value)
+                  }
+                  value={documentTargetProfileId}
+                />
+              </label>
+              <label className="field">
+                <span>Display name</span>
+                <input
+                  disabled={!documentUseNewProfile}
+                  maxLength={512}
+                  onChange={(event) => setDocumentDisplayName(event.currentTarget.value)}
+                  value={documentDisplayName}
+                />
+              </label>
+              <label className="field">
+                <span>Locale (optional)</span>
+                <input
+                  disabled={!documentUseNewProfile}
+                  maxLength={64}
+                  onChange={(event) => setDocumentLocale(event.currentTarget.value)}
+                  value={documentLocale}
+                />
+              </label>
+            </div>
+            <div className="resume-rescue__json-candidates">
+              {documentImport.review.candidates.map((candidate) => {
+                const decision = documentDecisions.find(
+                  (item) => item.candidate_id === candidate.id,
+                );
+                if (!decision) return null;
+                const location =
+                  candidate.locator.kind === "page_bbox"
+                    ? `Page ${candidate.locator.page} · bbox ${candidate.locator.bbox.join(", ")}`
+                    : `${candidate.locator.part} · block ${candidate.locator.block} (${candidate.locator.block_kind})`;
+                return (
+                  <article className="resume-rescue__json-candidate" key={candidate.id}>
+                    <div className="section-heading-row">
+                      <label className="resume-rescue__check">
+                        <input
+                          aria-label={`Select document line ${candidate.id}`}
+                          checked={decision.selected}
+                          onChange={(event) =>
+                            updateDocumentDecision(candidate.id, {
+                              selected: event.currentTarget.checked,
+                            })
+                          }
+                          type="checkbox"
+                        />
+                        <span>
+                          <strong>
+                            <UntrustedText>{candidate.text}</UntrustedText>
+                          </strong>
+                          <small>{location}</small>
+                        </span>
+                      </label>
+                      <StatusBadge tone="warning">Exact extracted text</StatusBadge>
+                    </div>
+                    <details className="lineage-details">
+                      <summary>Source binding</summary>
+                      <p>
+                        Characters {candidate.locator.start}–{candidate.locator.end} · text digest{" "}
+                        <code>{candidate.text_digest}</code>
+                      </p>
+                    </details>
+                    <div className="resume-rescue__json-decision">
+                      <label className="field">
+                        <span>Fact ID</span>
+                        <input
+                          disabled={!decision.selected}
+                          maxLength={128}
+                          onChange={(event) =>
+                            updateDocumentDecision(candidate.id, {
+                              fact_id: event.currentTarget.value,
+                            })
+                          }
+                          value={decision.fact_id}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Section</span>
+                        <select
+                          disabled={!decision.selected}
+                          onChange={(event) =>
+                            updateDocumentDecision(candidate.id, {
+                              section: event.currentTarget.value as ResumeSectionKind,
+                            })
+                          }
+                          value={decision.section}
+                        >
+                          {sectionOrder.map((section) => (
+                            <option key={section} value={section}>{section}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Confidentiality</span>
+                        <select
+                          disabled={!decision.selected}
+                          onChange={(event) =>
+                            updateDocumentDecision(candidate.id, {
+                              confidentiality: event.currentTarget
+                                .value as ResumeConfidentiality,
+                            })
+                          }
+                          value={decision.confidentiality}
+                        >
+                          <option value="public">public</option>
+                          <option value="private">private</option>
+                          <option value="confidential">confidential</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Ownership</span>
+                        <select
+                          disabled={!decision.selected}
+                          onChange={(event) =>
+                            updateDocumentDecision(candidate.id, {
+                              ownership_scope: event.currentTarget.value as ResumeOwnership,
+                            })
+                          }
+                          value={decision.ownership_scope}
+                        >
+                          <option value="individual">individual</option>
+                          <option value="shared">shared</option>
+                          <option value="organization">organization</option>
+                          <option value="unspecified">unspecified</option>
+                        </select>
+                      </label>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            <details className="lineage-details">
+              <summary>
+                Omission ledger ({documentImport.review.omissions.length})
+              </summary>
+              <ul>
+                {documentImport.review.omissions.map((item, index) => (
+                  <li key={`${item.code}-${index}`}>
+                    {item.code === "images_not_extracted"
+                      ? `${item.count} image(s) were not extracted.`
+                      : `Parts not extracted: ${item.parts.join(", ")}`}
+                  </li>
+                ))}
+              </ul>
+            </details>
+            <div className="warning-panel">
+              <h3>Extraction limits and warnings</h3>
+              <ul>
+                {documentImport.review.warnings.map((warning) => (
+                  <li key={warning.code}>
+                    <strong>{warning.code}</strong>: <UntrustedText>{warning.message}</UntrustedText>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="button-row">
+              <button
+                className="button button--primary"
+                disabled={
+                  busy === "document-import-admit" ||
+                  !documentDecisions.some((decision) => decision.selected)
+                }
+                onClick={() => void admitResumeDocument()}
+                type="button"
+              >
+                {busy === "document-import-admit"
+                  ? "Admitting…"
+                  : "Admit selected document facts"}
+              </button>
+              <button
+                className="button button--ghost"
+                disabled={Boolean(busy)}
+                onClick={() => void cancelResumeDocument()}
+                type="button"
+              >
+                {busy === "document-import-discard" ? "Discarding…" : "Discard review"}
+              </button>
+              <span className="muted">
+                Unchecked lines and the original document are discarded, not persisted.
+              </span>
+            </div>
+          </div>
+        ) : (
+          <p className="empty-callout">
+            The native picker accepts regular PDF or DOCX files up to 8 MB. Images are omitted;
+            every extracted line starts unchecked.
           </p>
         )}
       </section>

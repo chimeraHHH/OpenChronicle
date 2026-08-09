@@ -14,6 +14,7 @@ import type {
   JsonResumeSelection,
   JsonResumeUpstreamSchema,
   OpenedJsonResumeReview,
+  OpenedResumeDocumentReview,
   PrivacySnapshot,
   PromptRescueJob,
   PromptRescueJobSummary,
@@ -48,6 +49,8 @@ import type {
   ResumeRescueArtifact,
   ResumeRescueState,
   ResumeSectionKind,
+  ResumeDocumentImportReview,
+  ResumeDocumentLocator,
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
@@ -136,6 +139,15 @@ const jsonResumeMappings = new Set([
   "exact_field",
   "deterministic_composite",
   "openchronicle_extension_exact",
+] as const);
+const resumeDocumentWarningCodes = new Set([
+  "docx_pagination_unavailable",
+  "duplicate_candidate_text",
+  "external_relationship_ignored",
+  "no_extractable_text",
+  "ocr_required",
+  "reading_order_requires_review",
+  "untrusted_document_text",
 ] as const);
 const wrapCategories: WrapCategory[] = [
   "completed",
@@ -1532,6 +1544,289 @@ export function normalizeOpenedJsonResumeReview(value: unknown): OpenedJsonResum
   return { source_text: sourceText, review };
 }
 
+function boundedResumeDocumentString(
+  value: unknown,
+  maximum: number,
+  detail: string,
+): string {
+  const result = stringValue(value, detail);
+  if (!result || result.length > maximum || result.includes("\0")) {
+    return protocolError(detail);
+  }
+  return result;
+}
+
+function resumeDocumentInteger(
+  value: unknown,
+  minimum: number,
+  maximum: number,
+  detail: string,
+): number {
+  const result = numberValue(value, detail);
+  if (!Number.isSafeInteger(result) || result < minimum || result > maximum) {
+    return protocolError(detail);
+  }
+  return result;
+}
+
+function resumeDocumentLocator(value: unknown, format: "pdf" | "docx"): ResumeDocumentLocator {
+  if (format === "pdf") {
+    const raw = closedObject(
+      value,
+      ["kind", "page", "section", "start", "end", "bbox"],
+      "résumé PDF candidate locator",
+    );
+    if (stringValue(raw.kind, "résumé PDF locator kind") !== "page_bbox") {
+      return protocolError("résumé PDF locator kind");
+    }
+    const page = resumeDocumentInteger(raw.page, 1, 50, "résumé PDF locator page");
+    const start = resumeDocumentInteger(raw.start, 0, 9_999_999, "résumé locator start");
+    const end = resumeDocumentInteger(raw.end, 1, 10_000_000, "résumé locator end");
+    const values = arrayValue(raw.bbox, "résumé PDF locator bounds");
+    if (end <= start || values.length !== 4) return protocolError("résumé PDF locator bounds");
+    const bbox = values.map((item) => numberValue(item, "résumé PDF locator coordinate"));
+    if (
+      bbox.some((item) => item < 0 || item > 100_000) ||
+      bbox[0]! > bbox[2]! ||
+      bbox[1]! > bbox[3]!
+    ) {
+      return protocolError("résumé PDF locator bounds");
+    }
+    return {
+      kind: "page_bbox",
+      page,
+      section: boundedResumeDocumentString(raw.section, 512, "résumé locator section"),
+      start,
+      end,
+      bbox: [bbox[0]!, bbox[1]!, bbox[2]!, bbox[3]!],
+    };
+  }
+  const raw = closedObject(
+    value,
+    ["kind", "page", "section", "start", "end", "part", "block", "block_kind"],
+    "résumé DOCX candidate locator",
+  );
+  if (
+    stringValue(raw.kind, "résumé DOCX locator kind") !== "part_block" ||
+    numberValue(raw.page, "résumé DOCX locator page") !== 0
+  ) {
+    return protocolError("résumé DOCX locator kind");
+  }
+  const start = resumeDocumentInteger(raw.start, 0, 9_999_999, "résumé locator start");
+  const end = resumeDocumentInteger(raw.end, 1, 10_000_000, "résumé locator end");
+  if (end <= start) return protocolError("résumé DOCX locator span");
+  const part = boundedResumeDocumentString(raw.part, 256, "résumé DOCX locator part");
+  const blockKind = boundedResumeDocumentString(
+    raw.block_kind,
+    128,
+    "résumé DOCX locator block kind",
+  );
+  if (
+    !/^word\/(?:document|header\d+|footer\d+)\.xml$/.test(part) ||
+    (blockKind !== "paragraph" && !/^table_row_\d+$/.test(blockKind))
+  ) {
+    return protocolError("résumé DOCX locator binding");
+  }
+  return {
+    kind: "part_block",
+    page: 0,
+    section: boundedResumeDocumentString(raw.section, 512, "résumé locator section"),
+    start,
+    end,
+    part,
+    block: resumeDocumentInteger(raw.block, 0, 100_000, "résumé DOCX locator block"),
+    block_kind: blockKind,
+  };
+}
+
+export function normalizeOpenedResumeDocumentReview(
+  value: unknown,
+): OpenedResumeDocumentReview {
+  const response = closedObject(
+    value,
+    ["review_token", "review"],
+    "opened résumé document review",
+  );
+  const reviewToken = stringValue(response.review_token, "résumé document review token");
+  if (!/^[a-f0-9]{32}$/.test(reviewToken)) {
+    return protocolError("résumé document review token");
+  }
+  const raw = closedObject(
+    response.review,
+    [
+      "schema_version",
+      "format",
+      "extractor",
+      "source",
+      "candidates",
+      "omissions",
+      "warnings",
+      "action_capability",
+      "review_digest",
+    ],
+    "résumé document review",
+  );
+  const format = stringValue(raw.format, "résumé document format");
+  if (format !== "pdf" && format !== "docx") {
+    return protocolError("résumé document format");
+  }
+  const extractor = closedObject(
+    raw.extractor,
+    ["version", "method"],
+    "résumé document extractor",
+  );
+  const method = boundedResumeDocumentString(
+    extractor.method,
+    128,
+    "résumé document extraction method",
+  );
+  if (
+    numberValue(raw.schema_version, "résumé document review schema") !== 1 ||
+    numberValue(extractor.version, "résumé document extractor version") !== 1 ||
+    stringValue(raw.action_capability, "résumé document review action") !== "none" ||
+    (format === "docx"
+      ? method !== "ooxml-bounded-blocks-v1"
+      : !/^pdfplumber-\d+(?:\.\d+){1,3}-geometry-v1$/.test(method))
+  ) {
+    return protocolError("résumé document review contract");
+  }
+  const source = closedObject(
+    raw.source,
+    ["id", "digest", "byte_count"],
+    "résumé document source binding",
+  );
+  const sourceDigest = resumeDigest(source.digest, "résumé document source digest");
+  const sourceId = stringValue(source.id, "résumé document source id");
+  const sourceByteCount = resumeDocumentInteger(
+    source.byte_count,
+    1,
+    8 * 1024 * 1024,
+    "résumé document source byte count",
+  );
+  if (sourceId !== `resume-document-${sourceDigest.slice(0, 32)}`) {
+    return protocolError("résumé document source binding");
+  }
+  const candidateValues = arrayValue(raw.candidates, "résumé document candidates");
+  if (candidateValues.length > 2_000) return protocolError("résumé document candidates");
+  const candidateIds = new Set<string>();
+  let extractedCharacters = 0;
+  const candidates = candidateValues.map((value) => {
+    const candidate = closedObject(
+      value,
+      ["id", "text", "text_digest", "locator", "extraction_method", "candidate_digest"],
+      "résumé document candidate",
+    );
+    const candidateDigest = resumeDigest(
+      candidate.candidate_digest,
+      "résumé document candidate digest",
+    );
+    const id = stringValue(candidate.id, "résumé document candidate id");
+    const text = boundedResumeDocumentString(candidate.text, 8_000, "résumé document text");
+    extractedCharacters += text.length;
+    if (
+      id !== `document-candidate-${candidateDigest.slice(0, 32)}` ||
+      candidateIds.has(id) ||
+      stringValue(candidate.extraction_method, "résumé document candidate extractor") !== method
+    ) {
+      return protocolError("résumé document candidate binding");
+    }
+    candidateIds.add(id);
+    return {
+      id,
+      text,
+      text_digest: resumeDigest(candidate.text_digest, "résumé document text digest"),
+      locator: resumeDocumentLocator(candidate.locator, format),
+      extraction_method: method,
+      candidate_digest: candidateDigest,
+    };
+  });
+  if (extractedCharacters > 500_000) {
+    return protocolError("résumé document extracted text size");
+  }
+  const omissionValues = arrayValue(raw.omissions, "résumé document omissions");
+  if (omissionValues.length > 100) return protocolError("résumé document omissions");
+  const omissions: ResumeDocumentImportReview["omissions"] = omissionValues.map((value) => {
+    const object = objectValue(value, "résumé document omission");
+    const code = stringValue(object.code, "résumé document omission code");
+    if (code === "images_not_extracted") {
+      const omission = closedObject(
+        object,
+        ["code", "count"],
+        "résumé document image omission",
+      );
+      return {
+        code,
+        count: resumeDocumentInteger(
+          omission.count,
+          1,
+          100_000,
+          "résumé document omitted image count",
+        ),
+      };
+    }
+    if (code === "supplementary_parts_not_extracted") {
+      const omission = closedObject(
+        object,
+        ["code", "parts"],
+        "résumé document part omission",
+      );
+      const parts = stringArray(omission.parts, "résumé document omitted parts");
+      const allowed = new Set([
+        "word/comments.xml",
+        "word/footnotes.xml",
+        "word/endnotes.xml",
+      ]);
+      if (
+        !parts.length ||
+        parts.length > allowed.size ||
+        new Set(parts).size !== parts.length ||
+        parts.some((part) => !allowed.has(part))
+      ) {
+        return protocolError("résumé document omitted parts");
+      }
+      return { code, parts };
+    }
+    return protocolError("résumé document omission code");
+  });
+  const warningValues = arrayValue(raw.warnings, "résumé document warnings");
+  if (warningValues.length > 20) return protocolError("résumé document warnings");
+  const warningCodes = new Set<string>();
+  const warnings: ResumeDocumentImportReview["warnings"] = warningValues.map((value) => {
+    const warning = closedObject(
+      value,
+      ["code", "message"],
+      "résumé document warning",
+    );
+    const code = allowedString(
+      warning.code,
+      resumeDocumentWarningCodes,
+      "résumé document warning code",
+    );
+    if (warningCodes.has(code)) return protocolError("résumé document warning duplication");
+    warningCodes.add(code);
+    return {
+      code,
+      message: boundedResumeDocumentString(
+        warning.message,
+        512,
+        "résumé document warning message",
+      ),
+    };
+  });
+  const review: ResumeDocumentImportReview = {
+    schema_version: 1,
+    format,
+    extractor: { version: 1, method },
+    source: { id: sourceId, digest: sourceDigest, byte_count: sourceByteCount },
+    candidates,
+    omissions,
+    warnings,
+    action_capability: "none",
+    review_digest: resumeDigest(raw.review_digest, "résumé document review digest"),
+  };
+  return { review_token: reviewToken, review };
+}
+
 export function normalizeJsonResumeExport(value: unknown): JsonResumeExport {
   const response = closedObject(value, ["export"], "JSON Resume export response");
   const raw = closedObject(
@@ -2448,6 +2743,61 @@ export const desktopApi = {
           return protocolError("JSON Resume admitted profile identity");
         }
         return result;
+      },
+    ),
+  openResumeDocument: () =>
+    requestWithoutPayload(
+      "open_resume_rescue_document",
+      normalizeOpenedResumeDocumentReview,
+    ),
+  admitResumeDocument: (
+    reviewToken: string,
+    expectedReviewDigest: string,
+    profileId: string,
+    displayName: string,
+    locale: string,
+    selections: JsonResumeSelection[],
+    expectedVersion?: number,
+  ) =>
+    request(
+      "admit_resume_rescue_document",
+      {
+        review_token: reviewToken,
+        expected_review_digest: expectedReviewDigest,
+        profile_id: profileId,
+        display_name: displayName,
+        locale,
+        selections,
+        ...(expectedVersion === undefined ? {} : { expected_version: expectedVersion }),
+      },
+      (value) => {
+        const result = normalizeResumeProfileMutation(value);
+        if (result.profile.id !== profileId) {
+          return protocolError("résumé document admitted profile identity");
+        }
+        return result;
+      },
+    ),
+  discardResumeDocument: (reviewToken: string, expectedReviewDigest: string) =>
+    request(
+      "discard_resume_rescue_document",
+      {
+        review_token: reviewToken,
+        expected_review_digest: expectedReviewDigest,
+      },
+      (value) => {
+        const result = closedObject(
+          value,
+          ["review_token", "discarded"],
+          "discarded résumé document review",
+        );
+        if (stringValue(result.review_token, "résumé document review token") !== reviewToken) {
+          return protocolError("discarded résumé document review identity");
+        }
+        return {
+          review_token: reviewToken,
+          discarded: booleanValue(result.discarded, "résumé document discard state"),
+        };
       },
     ),
   getResumeJsonExport: (projectionId: string, expectedArtifactDigest: string) =>

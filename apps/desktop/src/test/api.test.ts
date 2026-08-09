@@ -29,6 +29,7 @@ import {
   jsonResumeExport,
   maliciousText,
   openedJsonResumeReview,
+  openedResumeDocumentReview,
   provenanceTrace,
   promptRescueJob,
   replyRescueJob,
@@ -46,8 +47,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks reviewed JSON Resume interoperability as bridge protocol v10", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(10);
+  it("tracks reviewed document interoperability as bridge protocol v11", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(11);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -394,6 +395,78 @@ describe("desktop bridge adapters", () => {
         exported.projection_binding.artifact_digest,
       ),
     ).rejects.toMatchObject({ code: "BRIDGE_PROTOCOL_ERROR" });
+  });
+
+  it("reviews opaque-token document candidates before exact profile admission", async () => {
+    const opened = openedResumeDocumentReview();
+    tauri.invoke.mockResolvedValueOnce(opened);
+
+    const review = await desktopApi.openResumeDocument();
+
+    expect(review).toEqual(opened);
+    expect(review).not.toHaveProperty("source_bytes");
+    expect(review.review.candidates[0]?.locator).toMatchObject({
+      kind: "page_bbox",
+      page: 1,
+    });
+    expect(tauri.invoke).toHaveBeenLastCalledWith("open_resume_rescue_document");
+
+    const profile = resumeProfileVersion();
+    tauri.invoke.mockResolvedValueOnce({ profile, created: false });
+    const selection = {
+      candidate_id: opened.review.candidates[0]!.id,
+      fact_id: "fact-document-1",
+      section: "experience" as const,
+      confidentiality: "private" as const,
+      ownership_scope: "individual" as const,
+    };
+    await desktopApi.admitResumeDocument(
+      opened.review_token,
+      opened.review.review_digest,
+      profile.id,
+      profile.profile.display_name,
+      profile.profile.locale,
+      [selection],
+      profile.version,
+    );
+    expect(tauri.invoke).toHaveBeenLastCalledWith("admit_resume_rescue_document", {
+      request: {
+        review_token: opened.review_token,
+        expected_review_digest: opened.review.review_digest,
+        profile_id: profile.id,
+        display_name: profile.profile.display_name,
+        locale: profile.profile.locale,
+        selections: [selection],
+        expected_version: profile.version,
+      },
+    });
+
+    tauri.invoke.mockResolvedValueOnce({
+      review_token: opened.review_token,
+      discarded: true,
+    });
+    expect(
+      await desktopApi.discardResumeDocument(
+        opened.review_token,
+        opened.review.review_digest,
+      ),
+    ).toEqual({ review_token: opened.review_token, discarded: true });
+
+    tauri.invoke.mockResolvedValueOnce({
+      ...opened,
+      review: {
+        ...opened.review,
+        candidates: [
+          {
+            ...opened.review.candidates[0],
+            locator: { ...opened.review.candidates[0]!.locator, page: 0 },
+          },
+        ],
+      },
+    });
+    await expect(desktopApi.openResumeDocument()).rejects.toMatchObject({
+      code: "BRIDGE_PROTOCOL_ERROR",
+    });
   });
 
   it("queues reviewed manual input and maps only a no-action prepared artifact", async () => {

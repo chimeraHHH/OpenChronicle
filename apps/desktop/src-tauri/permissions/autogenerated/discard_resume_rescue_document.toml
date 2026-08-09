@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discard-resume-rescue-document"
+description = "Enables the discard_resume_rescue_document command without any pre-configured scope."
+commands.allow = ["discard_resume_rescue_document"]
+
+[[permission]]
+identifier = "deny-discard-resume-rescue-document"
+description = "Denies the discard_resume_rescue_document command without any pre-configured scope."
+commands.deny = ["discard_resume_rescue_document"]
