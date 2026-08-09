@@ -12,8 +12,10 @@ permissions = [
   "allow-get-reply-rescue",
   "allow-get-resume-rescue-state",
   "allow-get-resume-rescue-preview",
+  "allow-get-resume-rescue-pdf-preview",
   "allow-get-resume-rescue-json-export",
   "allow-get-resume-rescue-rewrite-preview",
+  "allow-get-resume-rescue-rewrite-pdf-preview",
   "allow-get-resume-rescue-rewrite-json-export",
 ]
 

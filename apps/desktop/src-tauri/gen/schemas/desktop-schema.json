@@ -177,10 +177,10 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`\n- `allow-get-resume-rescue-preview`\n- `allow-get-resume-rescue-json-export`\n- `allow-get-resume-rescue-rewrite-preview`\n- `allow-get-resume-rescue-rewrite-json-export`",
+          "description": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`\n- `allow-get-resume-rescue-preview`\n- `allow-get-resume-rescue-pdf-preview`\n- `allow-get-resume-rescue-json-export`\n- `allow-get-resume-rescue-rewrite-preview`\n- `allow-get-resume-rescue-rewrite-pdf-preview`\n- `allow-get-resume-rescue-rewrite-json-export`",
           "type": "string",
           "const": "desktop-read",
-          "markdownDescription": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`\n- `allow-get-resume-rescue-preview`\n- `allow-get-resume-rescue-json-export`\n- `allow-get-resume-rescue-rewrite-preview`\n- `allow-get-resume-rescue-rewrite-json-export`"
+          "markdownDescription": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`\n- `allow-get-reply-rescue`\n- `allow-get-resume-rescue-state`\n- `allow-get-resume-rescue-preview`\n- `allow-get-resume-rescue-pdf-preview`\n- `allow-get-resume-rescue-json-export`\n- `allow-get-resume-rescue-rewrite-preview`\n- `allow-get-resume-rescue-rewrite-pdf-preview`\n- `allow-get-resume-rescue-rewrite-json-export`"
         },
         {
           "description": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`\n- `allow-queue-prompt-rescue`\n- `allow-edit-prompt-rescue`\n- `allow-retry-prompt-rescue`\n- `allow-delete-prompt-rescue`\n- `allow-queue-reply-rescue`\n- `allow-edit-reply-rescue`\n- `allow-retry-reply-rescue`\n- `allow-delete-reply-rescue`\n- `allow-save-resume-rescue-profile`\n- `allow-save-resume-rescue-opportunity`\n- `allow-replace-resume-rescue-opportunity`\n- `allow-compose-resume-rescue-exact`\n- `allow-export-resume-rescue-html`\n- `allow-open-resume-rescue-json`\n- `allow-admit-resume-rescue-json`\n- `allow-export-resume-rescue-json`\n- `allow-open-resume-rescue-document`\n- `allow-admit-resume-rescue-document`\n- `allow-discard-resume-rescue-document`\n- `allow-export-resume-rescue-docx`\n- `allow-export-resume-rescue-pdf`\n- `allow-queue-resume-rescue-rewrite`\n- `allow-retry-resume-rescue-rewrite`\n- `allow-delete-resume-rescue-rewrite`\n- `allow-decide-resume-rescue-rewrite`\n- `allow-restore-resume-rescue-rewrite`\n- `allow-export-resume-rescue-rewrite-json`\n- `allow-export-resume-rescue-rewrite-docx`\n- `allow-export-resume-rescue-rewrite-pdf`",
@@ -339,6 +339,12 @@
           "markdownDescription": "Enables the get_resume_rescue_json_export command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_resume_rescue_pdf_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-resume-rescue-pdf-preview",
+          "markdownDescription": "Enables the get_resume_rescue_pdf_preview command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_resume_rescue_preview command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-resume-rescue-preview",
@@ -349,6 +355,12 @@
           "type": "string",
           "const": "allow-get-resume-rescue-rewrite-json-export",
           "markdownDescription": "Enables the get_resume_rescue_rewrite_json_export command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the get_resume_rescue_rewrite_pdf_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-resume-rescue-rewrite-pdf-preview",
+          "markdownDescription": "Enables the get_resume_rescue_rewrite_pdf_preview command without any pre-configured scope."
         },
         {
           "description": "Enables the get_resume_rescue_rewrite_preview command without any pre-configured scope.",
@@ -627,6 +639,12 @@
           "markdownDescription": "Denies the get_resume_rescue_json_export command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_resume_rescue_pdf_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-resume-rescue-pdf-preview",
+          "markdownDescription": "Denies the get_resume_rescue_pdf_preview command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_resume_rescue_preview command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-resume-rescue-preview",
@@ -637,6 +655,12 @@
           "type": "string",
           "const": "deny-get-resume-rescue-rewrite-json-export",
           "markdownDescription": "Denies the get_resume_rescue_rewrite_json_export command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the get_resume_rescue_rewrite_pdf_preview command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-resume-rescue-rewrite-pdf-preview",
+          "markdownDescription": "Denies the get_resume_rescue_rewrite_pdf_preview command without any pre-configured scope."
         },
         {
           "description": "Denies the get_resume_rescue_rewrite_preview command without any pre-configured scope.",
