@@ -18,12 +18,15 @@ import {
   bridgeCandidateMutation,
   bridgeResolvedEvidence,
   bridgeSnapshot,
+  bridgePromptRescueJob,
+  bridgePromptRescueQueue,
   bridgeSuggestionMutation,
   bridgeWrapGet,
   candidateDetail,
   forgetPreview,
   maliciousText,
   provenanceTrace,
+  promptRescueJob,
   suggestion,
   wrapDetail,
 } from "./fixtures";
@@ -33,8 +36,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks side-effect-free suggestions as bridge protocol v3", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(3);
+  it("tracks the no-action Prompt Rescue surface as bridge protocol v4", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(4);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -48,6 +51,7 @@ describe("desktop bridge adapters", () => {
         candidate_limit: 100,
         wrap_limit: 30,
         suggestion_limit: 50,
+        prompt_rescue_limit: 50,
       },
     });
     expect(result.daemon).toMatchObject({ state: "running", health: "healthy", pid: 1234 });
@@ -69,6 +73,63 @@ describe("desktop bridge adapters", () => {
       id: "sg-1",
       workflow: "work_resumption",
       artifact: { action_capability: "none" },
+    });
+    expect(result.prompt_rescue).toMatchObject({
+      enabled: true,
+      provider: { model: "ollama/test-local", location: "local" },
+    });
+  });
+
+  it("queues reviewed manual input and maps only a no-action prepared artifact", async () => {
+    tauri.invoke.mockResolvedValueOnce(bridgePromptRescueQueue());
+
+    const queued = await desktopApi.queuePromptRescue({
+      roughPrompt: "make a release note",
+      target: "Engineering",
+      audience: "Reviewers",
+      constraints: ["Use supplied facts only"],
+      desiredFormat: "Markdown",
+    });
+
+    expect(tauri.invoke).toHaveBeenCalledWith("queue_prompt_rescue", {
+      request: {
+        rough_prompt: "make a release note",
+        target: "Engineering",
+        audience: "Reviewers",
+        constraints: ["Use supplied facts only"],
+        desired_format: "Markdown",
+      },
+    });
+    expect(queued.job.output).toMatchObject({
+      workflow: "prompt_rescue",
+      action_capability: "none",
+    });
+
+    tauri.invoke.mockResolvedValueOnce(
+      bridgePromptRescueJob(
+        promptRescueJob({
+          output: {
+            ...promptRescueJob().output!,
+            action_capability: "none",
+            improved_prompt: "Reviewed edit",
+          },
+          version: 4,
+          output_edited: true,
+        }),
+      ),
+    );
+    const edited = await desktopApi.editPromptRescue(
+      "prompt-rescue-1",
+      3,
+      "Reviewed edit",
+    );
+    expect(edited).toMatchObject({ version: 4, output_edited: true });
+    expect(tauri.invoke).toHaveBeenLastCalledWith("edit_prompt_rescue", {
+      request: {
+        job_id: "prompt-rescue-1",
+        expected_version: 3,
+        improved_prompt: "Reviewed edit",
+      },
     });
   });
 

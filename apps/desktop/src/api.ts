@@ -10,6 +10,11 @@ import type {
   EvidenceRef,
   ForgetPreview,
   PrivacySnapshot,
+  PromptRescueJob,
+  PromptRescueJobSummary,
+  PromptRescueOutput,
+  PromptRescueProviderLocation,
+  PromptRescueStatus,
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
@@ -43,6 +48,16 @@ const suggestionStatuses = new Set<SuggestionStatus>([
   "accepted",
   "dismissed",
   "expired",
+]);
+const promptRescueStatuses = new Set<PromptRescueStatus>([
+  "queued",
+  "leased",
+  "ready",
+  "failed",
+]);
+const promptRescueProviderLocations = new Set<PromptRescueProviderLocation>([
+  "local",
+  "remote_or_unknown",
 ]);
 const wrapCategories: WrapCategory[] = [
   "completed",
@@ -328,6 +343,93 @@ function workResumptionSuggestion(value: unknown): Suggestion {
   };
 }
 
+function promptRescueStatus(value: unknown): PromptRescueStatus {
+  return allowedString(value, promptRescueStatuses, "Prompt Rescue status");
+}
+
+function promptRescueProviderLocation(value: unknown): PromptRescueProviderLocation {
+  return allowedString(
+    value,
+    promptRescueProviderLocations,
+    "Prompt Rescue provider location",
+  );
+}
+
+function promptRescueOutput(value: unknown): PromptRescueOutput | null {
+  if (value === null) return null;
+  const raw = objectValue(value, "Prompt Rescue output");
+  if (
+    numberValue(raw.schema_version, "Prompt Rescue schema version") !== 1 ||
+    stringValue(raw.workflow, "Prompt Rescue workflow") !== "prompt_rescue" ||
+    stringValue(raw.action_capability, "Prompt Rescue action capability") !== "none"
+  ) {
+    return protocolError("Prompt Rescue prepared-artifact contract");
+  }
+  const improvedPrompt = stringValue(raw.improved_prompt, "improved prompt");
+  if (!improvedPrompt.trim()) return protocolError("improved prompt");
+  return {
+    schema_version: 1,
+    workflow: "prompt_rescue",
+    action_capability: "none",
+    improved_prompt: improvedPrompt,
+    assumptions: stringArray(raw.assumptions, "Prompt Rescue assumptions"),
+    missing_context: stringArray(raw.missing_context, "Prompt Rescue missing context"),
+    changes: stringArray(raw.changes, "Prompt Rescue changes"),
+  };
+}
+
+function promptRescueSummary(value: unknown): PromptRescueJobSummary {
+  const raw = objectValue(value, "Prompt Rescue summary");
+  if (stringValue(raw.source_kind, "Prompt Rescue source kind") !== "manual_paste") {
+    return protocolError("Prompt Rescue source kind");
+  }
+  return {
+    id: stringValue(raw.id, "Prompt Rescue id"),
+    status: promptRescueStatus(raw.status),
+    source_kind: "manual_paste",
+    rough_prompt_preview: stringValue(raw.rough_prompt_preview, "Prompt Rescue preview"),
+    model_identity: stringValue(raw.model_identity, "Prompt Rescue model"),
+    provider_location: promptRescueProviderLocation(raw.provider_location),
+    output_edited: booleanValue(raw.output_edited, "Prompt Rescue edited state"),
+    error_code: stringValue(raw.error_code, "Prompt Rescue error code"),
+    attempt_count: numberValue(raw.attempt_count, "Prompt Rescue attempt count"),
+    created_at: stringValue(raw.created_at, "Prompt Rescue created time"),
+    updated_at: stringValue(raw.updated_at, "Prompt Rescue updated time"),
+    version: numberValue(raw.version, "Prompt Rescue version"),
+  };
+}
+
+function promptRescueJob(value: unknown): PromptRescueJob {
+  const raw = objectValue(value, "Prompt Rescue job");
+  if (stringValue(raw.source_kind, "Prompt Rescue source kind") !== "manual_paste") {
+    return protocolError("Prompt Rescue source kind");
+  }
+  const output = promptRescueOutput(raw.output);
+  const status = promptRescueStatus(raw.status);
+  if ((status === "ready") !== (output !== null)) {
+    return protocolError("Prompt Rescue output state");
+  }
+  return {
+    id: stringValue(raw.id, "Prompt Rescue id"),
+    status,
+    source_kind: "manual_paste",
+    rough_prompt: stringValue(raw.rough_prompt, "rough prompt"),
+    target: stringValue(raw.target, "Prompt Rescue target"),
+    audience: stringValue(raw.audience, "Prompt Rescue audience"),
+    constraints: stringArray(raw.constraints, "Prompt Rescue constraints"),
+    desired_format: stringValue(raw.desired_format, "Prompt Rescue desired format"),
+    model_identity: stringValue(raw.model_identity, "Prompt Rescue model"),
+    provider_location: promptRescueProviderLocation(raw.provider_location),
+    output,
+    output_edited: booleanValue(raw.output_edited, "Prompt Rescue edited state"),
+    error_code: stringValue(raw.error_code, "Prompt Rescue error code"),
+    attempt_count: numberValue(raw.attempt_count, "Prompt Rescue attempt count"),
+    created_at: stringValue(raw.created_at, "Prompt Rescue created time"),
+    updated_at: stringValue(raw.updated_at, "Prompt Rescue updated time"),
+    version: numberValue(raw.version, "Prompt Rescue version"),
+  };
+}
+
 function privacySnapshot(raw: JsonRecord, dailyWrap: JsonRecord): PrivacySnapshot {
   return {
     allowed_bundle_ids: stringArray(raw.allowed_bundle_ids, "allowed bundle IDs"),
@@ -361,6 +463,11 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
   const counts = objectValue(raw.counts, "snapshot counts");
   const candidateCounts = objectValue(counts.candidates, "candidate counts");
   const dailyWrap = objectValue(raw.daily_wrap, "Daily Wrap snapshot");
+  const promptRescue = objectValue(raw.prompt_rescue, "Prompt Rescue snapshot");
+  const promptRescueProvider = objectValue(
+    promptRescue.provider,
+    "Prompt Rescue provider",
+  );
   const suggestions = arrayValue(raw.suggestions, "suggestion summaries").map(
     workResumptionSuggestion,
   );
@@ -440,6 +547,16 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
       "suggestions enabled state",
     ),
     suggestions,
+    prompt_rescue: {
+      enabled: booleanValue(promptRescue.enabled, "Prompt Rescue enabled state"),
+      provider: {
+        model: stringValue(promptRescueProvider.model, "Prompt Rescue configured model"),
+        location: promptRescueProviderLocation(promptRescueProvider.location),
+      },
+      jobs: arrayValue(promptRescue.jobs, "Prompt Rescue summaries").map(
+        promptRescueSummary,
+      ),
+    },
     timeline: arrayValue(raw.timeline, "timeline snapshot").map(timelineItem),
     privacy: privacySnapshot(privacy, dailyWrap),
     permissions: [],
@@ -624,6 +741,36 @@ export function normalizeSuggestionMutation(value: unknown): Suggestion {
   return workResumptionSuggestion(raw.suggestion);
 }
 
+export function normalizePromptRescueJob(value: unknown): PromptRescueJob {
+  const raw = objectValue(value, "Prompt Rescue response");
+  return promptRescueJob(raw.job);
+}
+
+export function normalizePromptRescueQueue(value: unknown): {
+  job: PromptRescueJob;
+  created: boolean;
+} {
+  const raw = objectValue(value, "Prompt Rescue queue response");
+  return {
+    job: promptRescueJob(raw.job),
+    created: booleanValue(raw.created, "Prompt Rescue created state"),
+  };
+}
+
+export function normalizePromptRescueDelete(value: unknown): {
+  job_id: string;
+  deleted: true;
+} {
+  const raw = objectValue(value, "Prompt Rescue delete response");
+  if (booleanValue(raw.deleted, "Prompt Rescue deleted state") !== true) {
+    return protocolError("Prompt Rescue deleted state");
+  }
+  return {
+    job_id: stringValue(raw.job_id, "Prompt Rescue deleted id"),
+    deleted: true,
+  };
+}
+
 async function request<T>(command: string, payload: object, normalize: (value: unknown) => T): Promise<T> {
   try {
     const value = await invoke<unknown>(command, { request: payload });
@@ -653,7 +800,13 @@ export const desktopApi = {
   snapshot: () =>
     request(
       "get_snapshot",
-      { timeline_limit: 24, candidate_limit: 100, wrap_limit: 30, suggestion_limit: 50 },
+      {
+        timeline_limit: 24,
+        candidate_limit: 100,
+        wrap_limit: 30,
+        suggestion_limit: 50,
+        prompt_rescue_limit: 50,
+      },
       normalizeSnapshot,
     ),
   getCandidate: (candidateId: string) =>
@@ -769,6 +922,64 @@ export const desktopApi = {
           return protocolError("suggestion mutation identity");
         }
         return suggestion;
+      },
+    ),
+  getPromptRescue: (jobId: string) =>
+    request("get_prompt_rescue", { job_id: jobId }, (value) => {
+      const job = normalizePromptRescueJob(value);
+      if (job.id !== jobId) return protocolError("Prompt Rescue response identity");
+      return job;
+    }),
+  queuePromptRescue: (input: {
+    roughPrompt: string;
+    target: string;
+    audience: string;
+    constraints: string[];
+    desiredFormat: string;
+  }) =>
+    request(
+      "queue_prompt_rescue",
+      {
+        rough_prompt: input.roughPrompt,
+        target: input.target,
+        audience: input.audience,
+        constraints: input.constraints,
+        desired_format: input.desiredFormat,
+      },
+      normalizePromptRescueQueue,
+    ),
+  editPromptRescue: (jobId: string, expectedVersion: number, improvedPrompt: string) =>
+    request(
+      "edit_prompt_rescue",
+      {
+        job_id: jobId,
+        expected_version: expectedVersion,
+        improved_prompt: improvedPrompt,
+      },
+      (value) => {
+        const job = normalizePromptRescueJob(value);
+        if (job.id !== jobId) return protocolError("Prompt Rescue mutation identity");
+        return job;
+      },
+    ),
+  retryPromptRescue: (jobId: string, expectedVersion: number) =>
+    request(
+      "retry_prompt_rescue",
+      { job_id: jobId, expected_version: expectedVersion },
+      (value) => {
+        const job = normalizePromptRescueJob(value);
+        if (job.id !== jobId) return protocolError("Prompt Rescue mutation identity");
+        return job;
+      },
+    ),
+  deletePromptRescue: (jobId: string, expectedVersion: number) =>
+    request(
+      "delete_prompt_rescue",
+      { job_id: jobId, expected_version: expectedVersion },
+      (value) => {
+        const result = normalizePromptRescueDelete(value);
+        if (result.job_id !== jobId) return protocolError("Prompt Rescue delete identity");
+        return result;
       },
     ),
   traceProvenance: (subject: EvidenceRef, maxDepth = 4) =>

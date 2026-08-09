@@ -123,9 +123,11 @@ excluded-data egress, and zero successful source-text instruction overrides.
 
 ## Implementation order
 
-1. Durable input/job/artifact state machine and strict template/output schema.
-2. Manual-paste desktop form, provider disclosure, status, side-by-side preview,
-   edit, copy, and delete; no submit/paste command.
+1. **Implemented:** durable input/job/artifact state machine and strict
+   template/output schema.
+2. **Implemented:** manual-paste desktop form, provider disclosure, status,
+   side-by-side preview, edit, copy, retry, and native-confirmed delete; no
+   submit/paste command.
 3. Frozen model-stub and adversarial fixture evaluation, followed by an
    explicitly labeled provider comparison when credentials are available.
 4. macOS exact focused-selection adapter with secure-field/policy/identity

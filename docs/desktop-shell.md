@@ -34,12 +34,11 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v2** is a strict
-break from v1: Daily Wrap results contain only immutable published-revision
-fields. Mutable scheduler state such as active input digests, attempts, leases,
-errors, and job timestamps is neither restored for compatibility nor forwarded
-by the WebView adapter. A v1 request or response fails closed as an unsupported
-protocol envelope. Stage 1 exposes only:
+The bridge protocol is versioned and allowlisted. Protocol **v4** retains the
+v2 immutable Daily Wrap projection, adds v3 side-effect-free suggestion review,
+and adds the v4 Prompt Rescue prepared-artifact surface. Older requests or
+responses fail closed as unsupported protocol envelopes. The shell exposes
+only:
 
 - a local-only, model-ping-free status snapshot;
 - bounded recent timeline, review-inbox, and Daily Wrap summaries;
@@ -47,12 +46,16 @@ protocol envelope. Stage 1 exposes only:
   checking;
 - two-phase permanent forget with a version- and closure-bound plan digest;
 - exact Daily Wrap reads;
+- bounded Work Resumption cards with acknowledgement/dismissal only;
+- Prompt Rescue manual-input queue/read/edit/retry/delete operations and
+  explicit clipboard copy in the WebView;
 - bounded provenance tracing and exact, policy-aware evidence resolution;
 - compare-and-set pause/resume for **new capture**.
 
 It deliberately does not expose generic process execution, arbitrary files or
 paths, arbitrary SQL, provider/model probing, Daily Wrap generation, bulk
-approval, connectors, message sending, or any other external effect.
+approval, connectors, target-app paste/replacement, message sending, prompt
+submission, or any other external effect.
 
 ## Dangerous-action semantics
 
@@ -63,6 +66,12 @@ approval, connectors, message sending, or any other external effect.
   performs no external action.
 - **Reject proposal** retains review history and source evidence; it is not
   deletion.
+- **Copy reviewed prompt** writes only the reviewed prepared text to the shared
+  clipboard. OpenChronicle does not claim where it will be pasted and has no
+  command to paste or submit it.
+- **Delete Prompt Rescue job** uses a native confirmation and version-bound
+  delete to remove the local rough input, artifact, and provenance edge. It
+  does not alter clipboard contents or another application.
 - **Permanently forget** can remove the candidate, accepted/derived memory
   entries, and affected Daily Wraps. An unchanged candidate-created Markdown
   container is deleted when empty; if it contains surviving canonical entries,
@@ -121,7 +130,7 @@ The design follows the official Tauri guidance for
 ## Current product boundary
 
 Daily Wrap is read-only in the first shell slice. The scheduler retains
-`running/succeeded/failed` internally, but protocol v2 exposes only an
+`running/succeeded/failed` internally, but protocol v4 exposes only an
 authorized published revision (`status="succeeded"`) and its `ready/partial`
 coverage state. Neither field is user acceptance. The UI therefore does not
 present fake Accept/Edit/Ignore actions. A later revision-bound review overlay

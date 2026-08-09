@@ -1,15 +1,63 @@
 export type PageId =
   | "overview"
   | "suggestions"
+  | "prompt-rescue"
   | "review"
   | "daily-wrap"
   | "timeline"
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 3 adds policy-visible, side-effect-free
-// suggestion cards and their exact CAS review command.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 3 as const;
+// WebView result projection. Version 4 adds the bounded Prompt Rescue review
+// surface without adding paste, submit, or target-application capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 4 as const;
+
+export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
+export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
+
+export interface PromptRescueOutput {
+  schema_version: 1;
+  workflow: "prompt_rescue";
+  action_capability: "none";
+  improved_prompt: string;
+  assumptions: string[];
+  missing_context: string[];
+  changes: string[];
+}
+
+export interface PromptRescueJobSummary {
+  id: string;
+  status: PromptRescueStatus;
+  source_kind: "manual_paste";
+  rough_prompt_preview: string;
+  model_identity: string;
+  provider_location: PromptRescueProviderLocation;
+  output_edited: boolean;
+  error_code: string;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+  version: number;
+}
+
+export interface PromptRescueJob
+  extends Omit<PromptRescueJobSummary, "rough_prompt_preview"> {
+  rough_prompt: string;
+  target: string;
+  audience: string;
+  constraints: string[];
+  desired_format: string;
+  output: PromptRescueOutput | null;
+}
+
+export interface PromptRescueSnapshot {
+  enabled: boolean;
+  provider: {
+    model: string;
+    location: PromptRescueProviderLocation;
+  };
+  jobs: PromptRescueJobSummary[];
+}
 
 export type SuggestionStatus =
   | "ready"
@@ -236,6 +284,7 @@ export interface DesktopSnapshot {
   daily_wraps: DailyWrapSummary[];
   suggestions_enabled: boolean;
   suggestions: Suggestion[];
+  prompt_rescue: PromptRescueSnapshot;
   timeline: TimelineItem[];
   privacy: PrivacySnapshot;
   permissions: PermissionState[];

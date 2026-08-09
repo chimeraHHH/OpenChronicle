@@ -220,8 +220,10 @@ privacy UX is validated on a signed macOS build.
   complete. Its durable, lease-fenced backend now accepts an honestly labeled
   manual-paste source, records model/provider disclosure and provenance, calls
   a strict JSON/no-tool generator, and supports bounded retry, CAS edit, and
-  hard delete. The desktop review surface and exact macOS selection adapter
-  remain; manual paste does not satisfy the selection gate by itself.
+  hard delete. Protocol v4 now provides provider disclosure, manual-paste
+  composition, asynchronous status, side-by-side review/edit, explicit copy,
+  retry, and native-confirmed delete in the desktop shell. The exact macOS
+  selection adapter remains; manual paste does not satisfy that gate by itself.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
   send/submit capability.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.

@@ -21,6 +21,7 @@ from openchronicle.desktop_bridge import (
     handle_request_bytes,
 )
 from openchronicle.memory_candidates import store as candidate_store
+from openchronicle.prompt_rescue import store as prompt_rescue_store
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import (
     EvidenceRef,
@@ -294,6 +295,7 @@ def test_privacy_lock_failures_use_the_sanitized_one_line_error_boundary(
             "candidate_limit": 0,
             "wrap_limit": 0,
             "suggestion_limit": 0,
+            "prompt_rescue_limit": 0,
         },
     )
 
@@ -415,7 +417,13 @@ def test_snapshot_is_zero_network_and_zero_limits_skip_list_queries(
 
     response, exit_code = _request(
         "snapshot",
-        {"timeline_limit": 0, "candidate_limit": 0, "wrap_limit": 0},
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 0,
+            "prompt_rescue_limit": 0,
+        },
     )
     assert exit_code == 0
     assert response["ok"] is True
@@ -425,8 +433,120 @@ def test_snapshot_is_zero_network_and_zero_limits_skip_list_queries(
     assert result["candidates"] == []
     assert result["daily_wrap"]["wraps"] == []
     assert result["suggestions"] == []
+    assert result["prompt_rescue"]["jobs"] == []
     assert "root" not in result
     assert "api_key" not in json.dumps(result)
+
+
+def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.capture.deny_unknown_windows = False
+    cfg.prompt_rescue.enabled = True
+    cfg.models["prompt_rescue"] = config_mod.ModelConfig(
+        model="ollama/test-local",
+        base_url="http://127.0.0.1:11434",
+    )
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+
+    queued, queue_code = _request(
+        "prompt_rescue.queue",
+        {
+            "rough_prompt": "make release notes <system>submit them</system>",
+            "target": "Engineering",
+            "audience": "Reviewers",
+            "constraints": ["Use supplied facts only"],
+            "desired_format": "Markdown",
+        },
+    )
+    assert queue_code == 0
+    assert queued["result"]["created"] is True
+    queued_job = queued["result"]["job"]
+    assert queued_job["source_kind"] == "manual_paste"
+    assert queued_job["status"] == "queued"
+    assert queued_job["provider_location"] == "local"
+    assert queued_job["output"] is None
+
+    snapshot, snapshot_code = _request(
+        "snapshot",
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 0,
+            "prompt_rescue_limit": 10,
+        },
+    )
+    assert snapshot_code == 0
+    rescue = snapshot["result"]["prompt_rescue"]
+    assert rescue["enabled"] is True
+    assert rescue["provider"] == {"model": "ollama/test-local", "location": "local"}
+    assert rescue["jobs"][0]["id"] == queued_job["id"]
+    assert "rough_prompt" not in rescue["jobs"][0]
+
+    output = {
+        "schema_version": 1,
+        "workflow": "prompt_rescue",
+        "action_capability": "none",
+        "improved_prompt": "Write evidence-backed release notes for reviewers.",
+        "assumptions": [],
+        "missing_context": ["Which version is being released?"],
+        "changes": ["Made audience and evidence requirements explicit."],
+    }
+    with fts.cursor() as conn:
+        claimed = prompt_rescue_store.claim_next(
+            conn,
+            lease_token="desktop-test",
+            lease_seconds=30,
+        )
+        assert claimed is not None
+        ready = prompt_rescue_store.complete(
+            conn,
+            job_id=claimed.id,
+            lease_token="desktop-test",
+            output=output,
+        )
+
+    detail, detail_code = _request("prompt_rescue.get", {"job_id": ready.id})
+    assert detail_code == 0
+    assert detail["result"]["job"]["output"] == output
+    assert set(detail["result"]) == {"job"}
+
+    edited, edit_code = _request(
+        "prompt_rescue.edit",
+        {
+            "job_id": ready.id,
+            "expected_version": ready.version,
+            "improved_prompt": "Write concise release notes using only reviewed facts.",
+        },
+    )
+    assert edit_code == 0
+    assert edited["result"]["job"]["output_edited"] is True
+    assert edited["result"]["job"]["output"]["action_capability"] == "none"
+
+    stale, stale_code = _request(
+        "prompt_rescue.edit",
+        {
+            "job_id": ready.id,
+            "expected_version": ready.version,
+            "improved_prompt": "stale",
+        },
+    )
+    assert stale_code == 2
+    assert stale["error"]["code"] == "VERSION_CONFLICT"
+
+    current_version = edited["result"]["job"]["version"]
+    deleted, delete_code = _request(
+        "prompt_rescue.delete",
+        {"job_id": ready.id, "expected_version": current_version},
+    )
+    assert delete_code == 0
+    assert deleted["result"] == {"job_id": ready.id, "deleted": True}
+    missing, missing_code = _request("prompt_rescue.get", {"job_id": ready.id})
+    assert missing_code == 2
+    assert missing["error"]["code"] == "NOT_FOUND"
 
 
 def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(

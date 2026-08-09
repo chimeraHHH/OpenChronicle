@@ -18,6 +18,8 @@ import {
   bridgeCandidateGet,
   bridgeCandidateMutation,
   bridgeResolvedEvidence,
+  bridgePromptRescueJob,
+  bridgePromptRescueQueue,
   bridgeSnapshot,
   bridgeSuggestionMutation,
   bridgeWrapGet,
@@ -26,6 +28,7 @@ import {
   forgetPreview,
   maliciousText,
   provenanceTrace,
+  promptRescueJob,
   resolvedEvidence,
   snapshot,
   suggestion,
@@ -45,6 +48,19 @@ function commandResult(command: string) {
   if (command === "transition_suggestion") {
     return bridgeSuggestionMutation(suggestion({ status: "accepted", version: 2 }));
   }
+  if (command === "get_prompt_rescue") return bridgePromptRescueJob();
+  if (command === "queue_prompt_rescue") return bridgePromptRescueQueue();
+  if (command === "edit_prompt_rescue") {
+    return bridgePromptRescueJob(promptRescueJob({ version: 4, output_edited: true }));
+  }
+  if (command === "retry_prompt_rescue") {
+    return bridgePromptRescueJob(
+      promptRescueJob({ status: "queued", output: null, version: 4 }),
+    );
+  }
+  if (command === "delete_prompt_rescue") {
+    return { job_id: "prompt-rescue-1", deleted: true };
+  }
   if (command === "edit_candidate" || command === "approve_candidate" || command === "reject_candidate") {
     return bridgeCandidateMutation();
   }
@@ -58,6 +74,56 @@ beforeEach(() => {
 });
 
 describe("trusted console", () => {
+  it("prepares explicit manual input and copies without paste or submit capability", async () => {
+    const user = userEvent.setup();
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Prompt Rescue/i }));
+    expect(await screen.findByRole("heading", { name: "Prompt Rescue" })).toBeInTheDocument();
+    expect(screen.getByText(/Source: manual paste/i)).toBeInTheDocument();
+    expect(screen.getByText(/cannot paste into another app, submit, or run tools/i)).toBeInTheDocument();
+    expect(screen.getByText(/Configured local provider/i)).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("make a release note")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Copy reviewed prompt" }));
+    expect(writeText).toHaveBeenCalledWith(
+      "Write concise release notes using only reviewed facts.",
+    );
+    expect(screen.getByText(/did not paste or submit it/i)).toBeInTheDocument();
+    expect(
+      tauri.invoke.mock.calls.some(([command]) =>
+        String(command).includes("paste") || String(command).includes("submit"),
+      ),
+    ).toBe(false);
+  });
+
+  it("queues the exact reviewed rough prompt through the bounded desktop command", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: /Prompt Rescue/i }));
+    const rough = screen.getByRole("textbox", { name: "Rough prompt" });
+    await user.type(rough, "Turn these notes into a test plan");
+    await user.click(screen.getByRole("button", { name: "Prepare prompt" }));
+
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("queue_prompt_rescue", {
+        request: {
+          rough_prompt: "Turn these notes into a test plan",
+          target: "",
+          audience: "",
+          constraints: [],
+          desired_format: "",
+        },
+      }),
+    );
+  });
+
   it("renders proactive evidence as inert text and acknowledges without acting", async () => {
     const user = userEvent.setup();
     render(<App />);

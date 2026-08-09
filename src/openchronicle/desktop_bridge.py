@@ -17,6 +17,8 @@ from .daily_wrap import store as daily_wrap_store
 from .daily_wrap.service import DailyWrapService
 from .memory_candidates import store as candidate_store
 from .privacy.egress import privacy_egress_lock
+from .prompt_rescue import store as prompt_rescue_store
+from .prompt_rescue.service import PromptRescueService
 from .provenance import store as provenance_store
 from .provenance.models import EvidenceRef
 from .services.capture_control import PauseStateConflict, set_paused
@@ -29,7 +31,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 MAX_REQUEST_BYTES = 64 * 1024
 
 
@@ -74,6 +76,8 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         return _error("VERSION_CONFLICT", "The reviewed candidate changed."), 2
     except suggestion_store.SuggestionConflict:
         return _error("VERSION_CONFLICT", "The suggestion changed."), 2
+    except prompt_rescue_store.PromptRescueConflict:
+        return _error("VERSION_CONFLICT", "The Prompt Rescue job changed."), 2
     except StalePurgePlan:
         return _error("STALE_PURGE_PLAN", "The deletion preview is stale."), 2
     except PurgeClosureUnverifiable:
@@ -138,6 +142,11 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "candidate.forget_commit": _candidate_forget_commit,
         "wrap.get": _wrap_get,
         "suggestion.transition": _suggestion_transition,
+        "prompt_rescue.get": _prompt_rescue_get,
+        "prompt_rescue.queue": _prompt_rescue_queue,
+        "prompt_rescue.edit": _prompt_rescue_edit,
+        "prompt_rescue.retry": _prompt_rescue_retry,
+        "prompt_rescue.delete": _prompt_rescue_delete,
         "provenance.trace": _provenance_trace,
         "evidence.resolve": _evidence_resolve,
         "capture.set_paused": _capture_set_paused,
@@ -153,12 +162,19 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
 def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
     _fields(
         params,
-        optional={"timeline_limit", "candidate_limit", "wrap_limit", "suggestion_limit"},
+        optional={
+            "timeline_limit",
+            "candidate_limit",
+            "wrap_limit",
+            "suggestion_limit",
+            "prompt_rescue_limit",
+        },
     )
     timeline_limit = _bounded_int(params.get("timeline_limit", 12), 0, 24)
     candidate_limit = _bounded_int(params.get("candidate_limit", 50), 0, 100)
     wrap_limit = _bounded_int(params.get("wrap_limit", 14), 0, 30)
     suggestion_limit = _bounded_int(params.get("suggestion_limit", 20), 0, 50)
+    prompt_rescue_limit = _bounded_int(params.get("prompt_rescue_limit", 20), 0, 50)
     cfg = config_mod.load()
     with fts.cursor() as conn:
         return build_snapshot(
@@ -168,7 +184,84 @@ def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
             candidate_limit=candidate_limit,
             wrap_limit=wrap_limit,
             suggestion_limit=suggestion_limit,
+            prompt_rescue_limit=prompt_rescue_limit,
         )
+
+
+def _prompt_rescue_get(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"job_id"})
+    job_id = _bounded_string(params["job_id"], 128, nonempty=True)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job = PromptRescueService(conn, cfg).get(job_id)
+        if job is None:
+            raise KeyError(job_id)
+        return {"job": _prompt_rescue_payload(job)}
+
+
+def _prompt_rescue_queue(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={
+            "rough_prompt",
+            "target",
+            "audience",
+            "constraints",
+            "desired_format",
+        },
+    )
+    rough_prompt = _bounded_string(params["rough_prompt"], 20_000, nonempty=True)
+    target = _bounded_string(params["target"], 500, nonempty=False)
+    audience = _bounded_string(params["audience"], 500, nonempty=False)
+    constraints = _string_list(params["constraints"], max_items=20, max_length=500)
+    desired_format = _bounded_string(params["desired_format"], 500, nonempty=False)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job, created = PromptRescueService(conn, cfg).queue(
+            rough_prompt=rough_prompt,
+            target=target,
+            audience=audience,
+            constraints=constraints,
+            desired_format=desired_format,
+        )
+        return {"job": _prompt_rescue_payload(job), "created": created}
+
+
+def _prompt_rescue_edit(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"job_id", "expected_version", "improved_prompt"})
+    job_id = _bounded_string(params["job_id"], 128, nonempty=True)
+    expected_version = _bounded_int(params["expected_version"], 1, 2_147_483_647)
+    improved_prompt = _bounded_string(params["improved_prompt"], 30_000, nonempty=True)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job = PromptRescueService(conn, cfg).edit(
+            job_id,
+            expected_version=expected_version,
+            improved_prompt=improved_prompt,
+        )
+        return {"job": _prompt_rescue_payload(job)}
+
+
+def _prompt_rescue_retry(params: dict[str, Any]) -> dict[str, Any]:
+    job_id, expected_version = _prompt_rescue_cas_params(params)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        job = PromptRescueService(conn, cfg).retry(
+            job_id,
+            expected_version=expected_version,
+        )
+        return {"job": _prompt_rescue_payload(job)}
+
+
+def _prompt_rescue_delete(params: dict[str, Any]) -> dict[str, Any]:
+    job_id, expected_version = _prompt_rescue_cas_params(params)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        PromptRescueService(conn, cfg).delete(
+            job_id,
+            expected_version=expected_version,
+        )
+        return {"job_id": job_id, "deleted": True}
 
 
 def _suggestion_transition(params: dict[str, Any]) -> dict[str, Any]:
@@ -381,6 +474,14 @@ def _candidate_cas_params(params: dict[str, Any]) -> tuple[str, int]:
     )
 
 
+def _prompt_rescue_cas_params(params: dict[str, Any]) -> tuple[str, int]:
+    _fields(params, required={"job_id", "expected_version"})
+    return (
+        _bounded_string(params["job_id"], 128, nonempty=True),
+        _bounded_int(params["expected_version"], 1, 2_147_483_647),
+    )
+
+
 def _request_ref(params: dict[str, Any], *, id_field: str) -> EvidenceRef:
     return EvidenceRef(
         kind=_bounded_string(params["kind"], 64, nonempty=True),
@@ -431,6 +532,62 @@ def _suggestion_payload(suggestion) -> dict[str, Any]:
         "detected_at": str(suggestion.detected_at)[:100],
         "expires_at": str(suggestion.expires_at)[:100],
         "feedback_reason": str(suggestion.feedback_reason)[:1_000],
+    }
+
+
+def _prompt_rescue_payload(job) -> dict[str, Any]:
+    output = job.output if isinstance(job.output, dict) else None
+    return {
+        "id": str(job.id)[:128],
+        "status": str(job.status)[:50],
+        "source_kind": str(job.source_kind)[:50],
+        "rough_prompt": str(job.rough_prompt)[:20_000],
+        "target": str(job.target)[:500],
+        "audience": str(job.audience)[:500],
+        "constraints": [str(value)[:500] for value in job.constraints[:20]],
+        "desired_format": str(job.desired_format)[:500],
+        "model_identity": str(job.model_identity)[:256],
+        "provider_location": str(job.provider_location)[:50],
+        "output": _bounded_prompt_rescue_output(output),
+        "output_edited": bool(job.output_edited),
+        "error_code": str(job.error_code)[:50],
+        "attempt_count": int(job.attempt_count),
+        "created_at": str(job.created_at)[:100],
+        "updated_at": str(job.updated_at)[:100],
+        "version": int(job.version),
+    }
+
+
+def _bounded_prompt_rescue_output(output: dict[str, Any] | None) -> dict[str, Any] | None:
+    if output is None:
+        return None
+    return {
+        "schema_version": int(output.get("schema_version") or 0),
+        "workflow": str(output.get("workflow") or "")[:50],
+        "action_capability": str(output.get("action_capability") or "")[:50],
+        "improved_prompt": str(output.get("improved_prompt") or "")[:30_000],
+        "assumptions": [
+            str(value)[:1_000]
+            for value in (
+                output.get("assumptions")
+                if isinstance(output.get("assumptions"), list)
+                else []
+            )[:20]
+        ],
+        "missing_context": [
+            str(value)[:1_000]
+            for value in (
+                output.get("missing_context")
+                if isinstance(output.get("missing_context"), list)
+                else []
+            )[:20]
+        ],
+        "changes": [
+            str(value)[:1_000]
+            for value in (
+                output.get("changes") if isinstance(output.get("changes"), list) else []
+            )[:20]
+        ],
     }
 
 

@@ -177,16 +177,16 @@
       "description": "Permission identifier",
       "oneOf": [
         {
-          "description": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`",
+          "description": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`",
           "type": "string",
           "const": "desktop-read",
-          "markdownDescription": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`"
+          "markdownDescription": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`\n- `allow-get-prompt-rescue`"
         },
         {
-          "description": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`",
+          "description": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`\n- `allow-queue-prompt-rescue`\n- `allow-edit-prompt-rescue`\n- `allow-retry-prompt-rescue`\n- `allow-delete-prompt-rescue`",
           "type": "string",
           "const": "desktop-review",
-          "markdownDescription": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`"
+          "markdownDescription": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`\n- `allow-queue-prompt-rescue`\n- `allow-edit-prompt-rescue`\n- `allow-retry-prompt-rescue`\n- `allow-delete-prompt-rescue`"
         },
         {
           "description": "Enables the approve_candidate command without any pre-configured scope.",
@@ -195,10 +195,22 @@
           "markdownDescription": "Enables the approve_candidate command without any pre-configured scope."
         },
         {
+          "description": "Enables the delete_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-prompt-rescue",
+          "markdownDescription": "Enables the delete_prompt_rescue command without any pre-configured scope."
+        },
+        {
           "description": "Enables the edit_candidate command without any pre-configured scope.",
           "type": "string",
           "const": "allow-edit-candidate",
           "markdownDescription": "Enables the edit_candidate command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the edit_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-edit-prompt-rescue",
+          "markdownDescription": "Enables the edit_prompt_rescue command without any pre-configured scope."
         },
         {
           "description": "Enables the forget_candidate command without any pre-configured scope.",
@@ -219,6 +231,12 @@
           "markdownDescription": "Enables the get_daily_wrap command without any pre-configured scope."
         },
         {
+          "description": "Enables the get_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-get-prompt-rescue",
+          "markdownDescription": "Enables the get_prompt_rescue command without any pre-configured scope."
+        },
+        {
           "description": "Enables the get_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "allow-get-snapshot",
@@ -231,6 +249,12 @@
           "markdownDescription": "Enables the preview_forget_candidate command without any pre-configured scope."
         },
         {
+          "description": "Enables the queue_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-queue-prompt-rescue",
+          "markdownDescription": "Enables the queue_prompt_rescue command without any pre-configured scope."
+        },
+        {
           "description": "Enables the reject_candidate command without any pre-configured scope.",
           "type": "string",
           "const": "allow-reject-candidate",
@@ -241,6 +265,12 @@
           "type": "string",
           "const": "allow-resolve-evidence",
           "markdownDescription": "Enables the resolve_evidence command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the retry_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-retry-prompt-rescue",
+          "markdownDescription": "Enables the retry_prompt_rescue command without any pre-configured scope."
         },
         {
           "description": "Enables the set_capture_paused command without any pre-configured scope.",
@@ -267,10 +297,22 @@
           "markdownDescription": "Denies the approve_candidate command without any pre-configured scope."
         },
         {
+          "description": "Denies the delete_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-prompt-rescue",
+          "markdownDescription": "Denies the delete_prompt_rescue command without any pre-configured scope."
+        },
+        {
           "description": "Denies the edit_candidate command without any pre-configured scope.",
           "type": "string",
           "const": "deny-edit-candidate",
           "markdownDescription": "Denies the edit_candidate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the edit_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-edit-prompt-rescue",
+          "markdownDescription": "Denies the edit_prompt_rescue command without any pre-configured scope."
         },
         {
           "description": "Denies the forget_candidate command without any pre-configured scope.",
@@ -291,6 +333,12 @@
           "markdownDescription": "Denies the get_daily_wrap command without any pre-configured scope."
         },
         {
+          "description": "Denies the get_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-get-prompt-rescue",
+          "markdownDescription": "Denies the get_prompt_rescue command without any pre-configured scope."
+        },
+        {
           "description": "Denies the get_snapshot command without any pre-configured scope.",
           "type": "string",
           "const": "deny-get-snapshot",
@@ -303,6 +351,12 @@
           "markdownDescription": "Denies the preview_forget_candidate command without any pre-configured scope."
         },
         {
+          "description": "Denies the queue_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-queue-prompt-rescue",
+          "markdownDescription": "Denies the queue_prompt_rescue command without any pre-configured scope."
+        },
+        {
           "description": "Denies the reject_candidate command without any pre-configured scope.",
           "type": "string",
           "const": "deny-reject-candidate",
@@ -313,6 +367,12 @@
           "type": "string",
           "const": "deny-resolve-evidence",
           "markdownDescription": "Denies the resolve_evidence command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the retry_prompt_rescue command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-retry-prompt-rescue",
+          "markdownDescription": "Denies the retry_prompt_rescue command without any pre-configured scope."
         },
         {
           "description": "Denies the set_capture_paused command without any pre-configured scope.",

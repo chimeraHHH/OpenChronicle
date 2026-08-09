@@ -5,6 +5,8 @@ import type {
   DailyWrapSummary,
   DesktopSnapshot,
   ForgetPreview,
+  PromptRescueJob,
+  PromptRescueJobSummary,
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
@@ -151,6 +153,60 @@ export function suggestion(overrides: Partial<Suggestion> = {}): Suggestion {
   };
 }
 
+export function promptRescueSummary(
+  overrides: Partial<PromptRescueJobSummary> = {},
+): PromptRescueJobSummary {
+  return {
+    id: "prompt-rescue-1",
+    status: "ready",
+    source_kind: "manual_paste",
+    rough_prompt_preview: "make a release note",
+    model_identity: "ollama/test-local",
+    provider_location: "local",
+    output_edited: false,
+    error_code: "",
+    attempt_count: 1,
+    created_at: "2026-08-08T09:00:00+08:00",
+    updated_at: "2026-08-08T09:01:00+08:00",
+    version: 3,
+    ...overrides,
+  };
+}
+
+export function promptRescueJob(
+  overrides: Partial<PromptRescueJob> = {},
+): PromptRescueJob {
+  const summary = promptRescueSummary();
+  return {
+    id: summary.id,
+    status: summary.status,
+    source_kind: "manual_paste",
+    rough_prompt: "make a release note",
+    target: "Engineering",
+    audience: "Reviewers",
+    constraints: ["Use supplied facts only"],
+    desired_format: "Markdown",
+    model_identity: summary.model_identity,
+    provider_location: summary.provider_location,
+    output: {
+      schema_version: 1,
+      workflow: "prompt_rescue",
+      action_capability: "none",
+      improved_prompt: "Write concise release notes using only reviewed facts.",
+      assumptions: [],
+      missing_context: ["Which version is being released?"],
+      changes: ["Made the audience and evidence constraint explicit."],
+    },
+    output_edited: summary.output_edited,
+    error_code: summary.error_code,
+    attempt_count: summary.attempt_count,
+    created_at: summary.created_at,
+    updated_at: summary.updated_at,
+    version: summary.version,
+    ...overrides,
+  };
+}
+
 export function snapshot(overrides: Partial<DesktopSnapshot> = {}): DesktopSnapshot {
   return {
     generated_at: "2026-08-08T10:00:00+08:00",
@@ -167,6 +223,11 @@ export function snapshot(overrides: Partial<DesktopSnapshot> = {}): DesktopSnaps
     daily_wraps: [wrapSummary()],
     suggestions_enabled: true,
     suggestions: [suggestion()],
+    prompt_rescue: {
+      enabled: true,
+      provider: { model: "ollama/test-local", location: "local" },
+      jobs: [promptRescueSummary()],
+    },
     timeline: [
       {
         id: "block-1",
@@ -339,6 +400,7 @@ export function bridgeSnapshot(value: DesktopSnapshot = snapshot()) {
     },
     suggestions_enabled: value.suggestions_enabled,
     suggestions: value.suggestions,
+    prompt_rescue: value.prompt_rescue,
     generated_at: value.generated_at,
   };
 }
@@ -355,6 +417,14 @@ export function bridgeCandidateMutation(value: Candidate = candidateDetail()) {
 
 export function bridgeSuggestionMutation(value: Suggestion = suggestion()) {
   return { suggestion: value };
+}
+
+export function bridgePromptRescueJob(value: PromptRescueJob = promptRescueJob()) {
+  return { job: value };
+}
+
+export function bridgePromptRescueQueue(value: PromptRescueJob = promptRescueJob()) {
+  return { job: value, created: true };
 }
 
 export function bridgeWrapGet(value: DailyWrap = wrapDetail()) {

@@ -14,6 +14,8 @@ from ..daily_wrap.service import DailyWrapService
 from ..memory_candidates import store as candidate_store
 from ..privacy import policy as privacy_policy
 from ..privacy.egress import privacy_egress_fenced
+from ..prompt_rescue.service import PromptRescueService
+from ..prompt_rescue.service import validate_config as validate_prompt_rescue
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef
 from ..services.context import ContextService
@@ -34,6 +36,7 @@ def build_snapshot(
     candidate_limit: int,
     wrap_limit: int,
     suggestion_limit: int = 20,
+    prompt_rescue_limit: int = 20,
 ) -> dict[str, Any]:
     """Return one bounded product snapshot without probing any model/provider."""
     # Resume only deletion plans the user previously authorized. This is a
@@ -186,6 +189,14 @@ def build_snapshot(
             if suggestion_limit
             else []
         )
+        validate_prompt_rescue(cfg)
+        prompt_rescue_service = PromptRescueService(conn, cfg)
+        prompt_rescue_jobs = (
+            prompt_rescue_service.list(limit=prompt_rescue_limit)
+            if prompt_rescue_limit
+            else []
+        )
+        prompt_rescue_provider = prompt_rescue_service.provider_summary()
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -285,6 +296,30 @@ def build_snapshot(
             for item in suggestions
         ],
         "suggestions_enabled": cfg.suggestions.enabled,
+        "prompt_rescue": {
+            "enabled": cfg.prompt_rescue.enabled,
+            "provider": {
+                "model": str(prompt_rescue_provider["model"])[:256],
+                "location": str(prompt_rescue_provider["location"])[:50],
+            },
+            "jobs": [
+                {
+                    "id": str(job.id)[:128],
+                    "status": str(job.status)[:50],
+                    "source_kind": str(job.source_kind)[:50],
+                    "rough_prompt_preview": " ".join(job.rough_prompt.split())[:240],
+                    "model_identity": str(job.model_identity)[:256],
+                    "provider_location": str(job.provider_location)[:50],
+                    "output_edited": bool(job.output_edited),
+                    "error_code": str(job.error_code)[:50],
+                    "attempt_count": int(job.attempt_count),
+                    "created_at": str(job.created_at)[:100],
+                    "updated_at": str(job.updated_at)[:100],
+                    "version": int(job.version),
+                }
+                for job in prompt_rescue_jobs
+            ],
+        },
         "generated_at": datetime.now().astimezone().isoformat(),
     }
 

@@ -89,7 +89,7 @@ product lacks internal controls.
 | Live cross-app context | Event-driven macOS AX capture, exact window identity, privacy firewall, timeline, and sessions | Complete unlocked real-app/TCC acceptance, packaging, and later platform work. |
 | Long-term preferences and context | Inspectable Markdown, SQLite/FTS, typed candidates, provenance, review, and permanent-forget paths | Add one published-memory/About Me experience with safe edit, supersede, source inspection, export, and deletion. |
 | Daily Wrap | Canonical local-day/timezone wrap, evidence references, revisioning, late-data coverage, CLI/MCP/desktop read | Complete signed desktop validation and improve the consumer experience; scheduling remains opt-in. |
-| Prompt Rescue | No workflow | Add a selected-text/current-context opportunity detector and a prepared prompt artifact that is never submitted automatically. |
+| Prompt Rescue | Durable manual-paste jobs, strict no-tool prepared artifacts, provider disclosure, side-by-side desktop review/edit/copy, retry, and hard delete | Add the exact macOS focused-selection adapter and frozen adversarial/provider evaluation; never submit automatically. |
 | Reply Rescue | No workflow | Detect reply context, use reviewed style memory, prepare a target-bound draft, and never send in the first pilot. |
 | Résumé Rescue | No workflow; the old roadmap reused the name for interruption recovery | Build an explicitly user-started, evidence-backed résumé draft from selected experience/documents and reviewed memory. Never submit an application. |
 | Work resumption | Timeline, sessions, Daily Wrap, and current-context retrieval provide inputs | Keep this OpenChronicle-specific workflow under a distinct name; prepare a last-state/next-step card. |

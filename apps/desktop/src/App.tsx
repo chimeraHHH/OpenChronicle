@@ -10,6 +10,7 @@ import { displayError } from "./format";
 import { DailyWrapPage } from "./pages/DailyWrapPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PrivacyPage } from "./pages/PrivacyPage";
+import { PromptRescuePage } from "./pages/PromptRescuePage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { SuggestionsPage } from "./pages/SuggestionsPage";
 import { TimelinePage } from "./pages/TimelinePage";
@@ -126,6 +127,7 @@ export function App({ api = desktopApi }: AppProps) {
               snapshot.review_counts.applying
             : 0}
           suggestionCount={snapshot?.suggestions.length ?? 0}
+          promptRescueCount={snapshot?.prompt_rescue.jobs.length ?? 0}
         />
         <div className="workspace">
           <div aria-live="polite" className="sr-only" role="status">{announcement}</div>
@@ -171,6 +173,14 @@ export function App({ api = desktopApi }: AppProps) {
               onChanged={refresh}
               onOpenSource={setSourceSubject}
               suggestions={snapshot.suggestions}
+            />
+          ) : null}
+          {snapshot && page === "prompt-rescue" ? (
+            <PromptRescuePage
+              api={api}
+              daemonRunning={snapshot.daemon.state !== "stopped"}
+              onChanged={refresh}
+              rescue={snapshot.prompt_rescue}
             />
           ) : null}
           {snapshot && page === "review" ? (

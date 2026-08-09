@@ -16,6 +16,11 @@ const MAX_TIMELINE_ITEMS: usize = 24;
 const MAX_CANDIDATE_ITEMS: usize = 100;
 const MAX_WRAP_ITEMS: usize = 30;
 const MAX_SUGGESTION_ITEMS: usize = 50;
+const MAX_PROMPT_RESCUE_ITEMS: usize = 50;
+const MAX_PROMPT_RESCUE_INPUT_CHARS: usize = 20_000;
+const MAX_PROMPT_RESCUE_OUTPUT_CHARS: usize = 30_000;
+const MAX_PROMPT_RESCUE_CONTEXT_CHARS: usize = 500;
+const MAX_PROMPT_RESCUE_CONSTRAINTS: usize = 20;
 const MAX_PROVENANCE_DEPTH: u8 = 8;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -29,6 +34,8 @@ pub(crate) struct SnapshotRequest {
     pub wrap_limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_rescue_limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -118,6 +125,37 @@ pub(crate) struct SuggestionTransitionRequest {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PromptRescueGetRequest {
+    pub job_id: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PromptRescueQueueRequest {
+    pub rough_prompt: String,
+    pub target: String,
+    pub audience: String,
+    pub constraints: Vec<String>,
+    pub desired_format: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PromptRescueEditRequest {
+    pub job_id: String,
+    pub expected_version: u64,
+    pub improved_prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct PromptRescueCasRequest {
+    pub job_id: String,
+    pub expected_version: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -213,6 +251,52 @@ pub async fn transition_suggestion(
         validate_multiline_text(reason, MAX_REASON_CHARS, true)?;
     }
     invoke(Operation::SuggestionTransition, &request).await
+}
+
+#[tauri::command]
+pub async fn get_prompt_rescue(request: PromptRescueGetRequest) -> Result<Value, DesktopError> {
+    validate_prompt_rescue_job_id(&request.job_id)?;
+    invoke(Operation::PromptRescueGet, &request).await
+}
+
+#[tauri::command]
+pub async fn queue_prompt_rescue(request: PromptRescueQueueRequest) -> Result<Value, DesktopError> {
+    validate_prompt_rescue_queue(&request)?;
+    invoke(Operation::PromptRescueQueue, &request).await
+}
+
+#[tauri::command]
+pub async fn edit_prompt_rescue(request: PromptRescueEditRequest) -> Result<Value, DesktopError> {
+    validate_prompt_rescue_job_id(&request.job_id)?;
+    validate_prompt_rescue_version(request.expected_version)?;
+    validate_multiline_text(
+        &request.improved_prompt,
+        MAX_PROMPT_RESCUE_OUTPUT_CHARS,
+        false,
+    )?;
+    invoke(Operation::PromptRescueEdit, &request).await
+}
+
+#[tauri::command]
+pub async fn retry_prompt_rescue(request: PromptRescueCasRequest) -> Result<Value, DesktopError> {
+    validate_prompt_rescue_cas(&request)?;
+    invoke(Operation::PromptRescueRetry, &request).await
+}
+
+#[tauri::command]
+pub async fn delete_prompt_rescue(
+    app: AppHandle,
+    request: PromptRescueCasRequest,
+) -> Result<Value, DesktopError> {
+    validate_prompt_rescue_cas(&request)?;
+    tauri::async_runtime::spawn_blocking(move || delete_prompt_rescue_blocking(&app, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The Prompt Rescue deletion worker stopped unexpectedly.",
+            )
+        })?
 }
 
 #[tauri::command]
@@ -330,6 +414,38 @@ fn forget_candidate_blocking(
     bridge::call_blocking(Operation::CandidateForgetCommit, commit_params)
 }
 
+fn delete_prompt_rescue_blocking(
+    app: &AppHandle,
+    request: PromptRescueCasRequest,
+) -> Result<Value, DesktopError> {
+    let mut dialog = MessageDialog::new()
+        .set_description(
+            "This permanently deletes the local rough input and prepared prompt. It cannot be undone, and it does not change text in any other app.",
+        )
+        .set_title("Delete this Prompt Rescue job?")
+        .set_level(MessageLevel::Warning)
+        .set_buttons(MessageButtons::OkCancelCustom(
+            "Delete Permanently".to_owned(),
+            "Cancel".to_owned(),
+        ));
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let confirmed = match dialog.show() {
+        MessageDialogResult::Ok | MessageDialogResult::Yes => true,
+        MessageDialogResult::Custom(label) => label == "Delete Permanently",
+        _ => false,
+    };
+    if !confirmed {
+        return Err(DesktopError::new(
+            "USER_CANCELLED",
+            "Prompt Rescue deletion was cancelled.",
+        ));
+    }
+    let params = checked_value(&request)?;
+    bridge::call_blocking(Operation::PromptRescueDelete, params)
+}
+
 fn checked_value<T: Serialize + ?Sized>(request: &T) -> Result<Value, DesktopError> {
     let encoded = serde_json::to_vec(request)
         .map_err(|_| DesktopError::invalid_request("The request could not be encoded."))?;
@@ -366,9 +482,60 @@ fn validate_snapshot(request: &SnapshotRequest) -> Result<(), DesktopError> {
         || request
             .suggestion_limit
             .is_some_and(|limit| limit > MAX_SUGGESTION_ITEMS)
+        || request
+            .prompt_rescue_limit
+            .is_some_and(|limit| limit > MAX_PROMPT_RESCUE_ITEMS)
     {
         return Err(DesktopError::invalid_request(
             "A snapshot limit exceeds the allowed maximum.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_prompt_rescue_queue(request: &PromptRescueQueueRequest) -> Result<(), DesktopError> {
+    validate_multiline_text(&request.rough_prompt, MAX_PROMPT_RESCUE_INPUT_CHARS, false)?;
+    for value in [&request.target, &request.audience, &request.desired_format] {
+        validate_multiline_text(value, MAX_PROMPT_RESCUE_CONTEXT_CHARS, true)?;
+    }
+    if request.constraints.len() > MAX_PROMPT_RESCUE_CONSTRAINTS {
+        return Err(DesktopError::invalid_request(
+            "The Prompt Rescue request has too many constraints.",
+        ));
+    }
+    for constraint in &request.constraints {
+        validate_multiline_text(constraint, MAX_PROMPT_RESCUE_CONTEXT_CHARS, false)?;
+    }
+    let declared_chars = request.rough_prompt.chars().count()
+        + request.target.chars().count()
+        + request.audience.chars().count()
+        + request.desired_format.chars().count()
+        + request
+            .constraints
+            .iter()
+            .map(|value| value.chars().count())
+            .sum::<usize>();
+    if declared_chars > MAX_PROMPT_RESCUE_INPUT_CHARS {
+        return Err(DesktopError::invalid_request(
+            "The Prompt Rescue input exceeds the allowed size.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_prompt_rescue_cas(request: &PromptRescueCasRequest) -> Result<(), DesktopError> {
+    validate_prompt_rescue_job_id(&request.job_id)?;
+    validate_prompt_rescue_version(request.expected_version)
+}
+
+fn validate_prompt_rescue_job_id(value: &str) -> Result<(), DesktopError> {
+    validate_bounded_text(value, MAX_CANDIDATE_ID_CHARS, false)
+}
+
+fn validate_prompt_rescue_version(value: u64) -> Result<(), DesktopError> {
+    if value == 0 || value > 2_147_483_647 {
+        return Err(DesktopError::invalid_request(
+            "The Prompt Rescue version is invalid.",
         ));
     }
     Ok(())
@@ -521,6 +688,7 @@ mod tests {
             candidate_limit: Some(MAX_CANDIDATE_ITEMS),
             wrap_limit: Some(MAX_WRAP_ITEMS),
             suggestion_limit: Some(MAX_SUGGESTION_ITEMS),
+            prompt_rescue_limit: Some(MAX_PROMPT_RESCUE_ITEMS),
         };
         assert!(validate_snapshot(&valid).is_ok());
 
@@ -532,6 +700,34 @@ mod tests {
             validate_snapshot(&invalid).expect_err("must reject").code,
             "INVALID_REQUEST"
         );
+    }
+
+    #[test]
+    fn prompt_rescue_queue_is_bounded_and_preserves_multiline_input() {
+        let request = PromptRescueQueueRequest {
+            rough_prompt: "Draft a plan\nwith exact checks.".to_owned(),
+            target: "Engineering".to_owned(),
+            audience: "Reviewers".to_owned(),
+            constraints: vec!["Use supplied facts only".to_owned()],
+            desired_format: "Markdown".to_owned(),
+        };
+        assert!(validate_prompt_rescue_queue(&request).is_ok());
+
+        let oversized = PromptRescueQueueRequest {
+            rough_prompt: "x".repeat(MAX_PROMPT_RESCUE_INPUT_CHARS),
+            target: "extra".to_owned(),
+            ..request
+        };
+        assert!(validate_prompt_rescue_queue(&oversized).is_err());
+    }
+
+    #[test]
+    fn prompt_rescue_edit_and_cas_reject_unsupported_values() {
+        assert!(validate_prompt_rescue_version(1).is_ok());
+        assert!(validate_prompt_rescue_version(0).is_err());
+        assert!(validate_prompt_rescue_version(2_147_483_648).is_err());
+        assert!(validate_multiline_text("ready\nfor review", 30_000, false).is_ok());
+        assert!(validate_multiline_text("hidden\0value", 30_000, false).is_err());
     }
 
     #[test]
