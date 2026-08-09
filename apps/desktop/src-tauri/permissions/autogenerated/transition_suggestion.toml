@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-transition-suggestion"
+description = "Enables the transition_suggestion command without any pre-configured scope."
+commands.allow = ["transition_suggestion"]
+
+[[permission]]
+identifier = "deny-transition-suggestion"
+description = "Denies the transition_suggestion command without any pre-configured scope."
+commands.deny = ["transition_suggestion"]

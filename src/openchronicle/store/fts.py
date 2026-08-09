@@ -156,6 +156,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     from ..memory_candidates import store as candidate_store
     from ..provenance import store as provenance_store
     from ..session import store as session_store
+    from ..suggestions import store as suggestion_store
     from ..timeline import store as timeline_store
     from ..writer import classifier_jobs
 
@@ -164,6 +165,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     provenance_store.ensure_schema(conn)
     candidate_store.ensure_schema(conn)
     daily_wrap_store.ensure_schema(conn)
+    suggestion_store.ensure_schema(conn)
     classifier_jobs.ensure_schema(conn)
     _secure_db_files(db_path)
     return conn

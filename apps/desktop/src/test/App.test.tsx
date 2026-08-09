@@ -19,6 +19,7 @@ import {
   bridgeCandidateMutation,
   bridgeResolvedEvidence,
   bridgeSnapshot,
+  bridgeSuggestionMutation,
   bridgeWrapGet,
   candidateDetail,
   candidateSummary,
@@ -27,6 +28,7 @@ import {
   provenanceTrace,
   resolvedEvidence,
   snapshot,
+  suggestion,
   wrapDetail,
   wrapSummary,
 } from "./fixtures";
@@ -40,6 +42,9 @@ function commandResult(command: string) {
   if (command === "preview_forget_candidate") return forgetPreview;
   if (command === "forget_candidate") return { candidate_id: "cand-1", removed_entry: true, removed_file_count: 1, invalidated_wrap_ids: ["daily-wrap-1"] };
   if (command === "set_capture_paused") return { paused: true, changed: true };
+  if (command === "transition_suggestion") {
+    return bridgeSuggestionMutation(suggestion({ status: "accepted", version: 2 }));
+  }
   if (command === "edit_candidate" || command === "approve_candidate" || command === "reject_candidate") {
     return bridgeCandidateMutation();
   }
@@ -53,6 +58,33 @@ beforeEach(() => {
 });
 
 describe("trusted console", () => {
+  it("renders proactive evidence as inert text and acknowledges without acting", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Suggestions" }));
+    expect(await screen.findByRole("heading", { name: "Resume your recent work" })).toBeInTheDocument();
+    expect(screen.getByText(/cannot type, paste, send, or run tools/i)).toBeInTheDocument();
+    expect(screen.getByText("Reviewed the trusted console implementation.").closest("bdi")).not.toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Acknowledge only" }));
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("transition_suggestion", {
+        request: {
+          suggestion_id: "sg-1",
+          expected_version: 1,
+          status: "accepted",
+          reason: "acknowledged_from_desktop",
+        },
+      }),
+    );
+    expect(
+      tauri.invoke.mock.calls.some(([command]) =>
+        ["approve_candidate", "set_capture_paused"].includes(command),
+      ),
+    ).toBe(false);
+  });
+
   it("keeps programmatically focused page landmarks free of a full-page outline", async () => {
     const user = userEvent.setup();
     render(<App />);

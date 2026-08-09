@@ -259,9 +259,7 @@ def test_semantic_duplicate_migration_prefers_fully_current_provenance(
     # predates semantic instant uniqueness.  Its text UNIQUE key permits two
     # offset spellings for the same absolute-time window.
     conn.executescript(timeline_store.SCHEMA)
-    conn.execute(
-        "INSERT INTO timeline_schema_migrations(name) VALUES ('projection-source-v1')"
-    )
+    conn.execute("INSERT INTO timeline_schema_migrations(name) VALUES ('projection-source-v1')")
     provenance_store.ensure_schema(conn)
 
     incomplete_bound_source = EvidenceRef(
@@ -364,6 +362,156 @@ def test_recent_limit_is_applied_after_invalid_projection_filtering() -> None:
     )
 
     assert [block.id for block in timeline_store.query_recent(conn, limit=1)] == [older.id]
+    conn.close()
+
+
+def test_retired_receipt_history_is_not_rescanned_by_producer(monkeypatch) -> None:
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    timeline_store.ensure_schema(conn)
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    total = 2_000
+    for index in range(total):
+        window_start = start + timedelta(minutes=index)
+        binding = (
+            f"capture-{index}.json",
+            f"obs-{index}",
+            f"digest-{index}",
+            window_start.isoformat(),
+        )
+        timeline_store.record_window_receipt(
+            conn,
+            timeline_store.make_window_receipt(
+                window_start=window_start,
+                window_end=window_start + timedelta(minutes=1),
+                bindings=[binding],
+                policy_digest="policy-v1",
+                outcome="policy_excluded",
+                raw_state="retired",
+            ),
+        )
+
+    def unexpected_retired_validation(
+        _conn: sqlite3.Connection,
+        _receipt: timeline_store.WindowReceipt,
+    ) -> bool:
+        raise AssertionError("retired history must not be revalidated by the producer tick")
+
+    monkeypatch.setattr(
+        timeline_store,
+        "window_receipt_is_current",
+        unexpected_retired_validation,
+    )
+    statements: list[str] = []
+    conn.set_trace_callback(statements.append)
+
+    assert (
+        timeline_store.earliest_invalidated_window(
+            conn,
+            (start, start + timedelta(minutes=total)),
+            policy_digest="policy-v2",
+        )
+        is None
+    )
+    selects = [
+        statement for statement in statements if statement.lstrip().upper().startswith("SELECT")
+    ]
+    assert len(selects) <= 8
+    conn.close()
+
+
+def test_live_receipt_is_still_validated_synchronously() -> None:
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    timeline_store.ensure_schema(conn)
+    start = datetime(2026, 8, 9, 10, 0, tzinfo=UTC)
+    binding = ("live.json", "obs-live", "digest-live", start.isoformat())
+    timeline_store.record_window_receipt(
+        conn,
+        timeline_store.make_window_receipt(
+            window_start=start,
+            window_end=start + timedelta(minutes=1),
+            bindings=[binding],
+            policy_digest="policy-v1",
+            outcome="policy_excluded",
+        ),
+    )
+
+    assert timeline_store.earliest_invalidated_window(
+        conn,
+        (start, start + timedelta(minutes=2)),
+        policy_digest="policy-v1",
+    ) == timeline_store.as_instant(start)
+    conn.close()
+
+
+def test_unrooted_block_audit_is_bounded_and_resumable() -> None:
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    timeline_store.ensure_schema(conn)
+    start = datetime(2026, 8, 1, tzinfo=UTC)
+    total = timeline_store._WINDOW_RECEIPT_AUDIT_BATCH + 1
+    for index in range(total):
+        window_start = start + timedelta(minutes=index)
+        block = timeline_store.TimelineBlock(
+            id=f"tlb-audit-{index:04d}",
+            start_time=window_start,
+            end_time=window_start + timedelta(minutes=1),
+            entries=[f"audit fixture {index}"],
+            capture_count=1,
+            source_digest=f"sources-{index}",
+        )
+        timeline_store.insert(conn, block)
+        if index < timeline_store._WINDOW_RECEIPT_AUDIT_BATCH:
+            timeline_store.record_window_receipt(
+                conn,
+                timeline_store.make_window_receipt(
+                    window_start=block.start_time,
+                    window_end=block.end_time,
+                    bindings=[
+                        (
+                            f"capture-{index}.json",
+                            f"obs-{index}",
+                            f"digest-{index}",
+                            window_start.isoformat(),
+                        )
+                    ],
+                    policy_digest="policy-v1",
+                    outcome="block",
+                    block=block,
+                    raw_state="retired",
+                ),
+            )
+
+    processed_range = (start, start + timedelta(minutes=total))
+    assert timeline_store.earliest_invalidated_window(conn, processed_range) is None
+    expected = start + timedelta(minutes=timeline_store._WINDOW_RECEIPT_AUDIT_BATCH)
+    assert timeline_store.earliest_invalidated_window(conn, processed_range) == expected
+    assert (
+        conn.execute(
+            "SELECT block_rowid_cursor FROM timeline_receipt_audit_state WHERE id=1"
+        ).fetchone()[0]
+        == timeline_store._WINDOW_RECEIPT_AUDIT_BATCH
+    )
+    conn.close()
+
+
+def test_unrooted_capture_receipt_is_detected_without_history_scan() -> None:
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    timeline_store.ensure_schema(conn)
+    start = datetime(2026, 8, 9, 11, 0, tzinfo=UTC)
+    timeline_store.record_capture_receipts(
+        conn,
+        bindings=[("orphan.json", "obs-orphan", "digest-orphan", start.isoformat())],
+        window_start=start,
+        window_end=start + timedelta(minutes=1),
+    )
+
+    assert timeline_store.earliest_invalidated_window(
+        conn,
+        (start, start + timedelta(minutes=2)),
+    ) == timeline_store.as_instant(start)
     conn.close()
 
 
@@ -511,9 +659,7 @@ def test_capture_snapshot_keeps_fallback_fold_buckets_separate(ac_root: Path) ->
 
     assert len(grouped) == len(snapshot) == 2
     assert set(grouped) == set(expected)
-    assert {
-        key: captures[0][0].name for key, captures in snapshot.items()
-    } == expected
+    assert {key: captures[0][0].name for key, captures in snapshot.items()} == expected
 
 
 def test_recent_and_since_order_fallback_folds_by_instant() -> None:
@@ -538,12 +684,10 @@ def test_recent_and_since_order_fallback_folds_by_instant() -> None:
         _bind_source(conn, block.id)
         blocks.append(block)
 
-    assert [block.id for block in timeline_store.query_recent(conn, limit=1)] == [
+    assert [block.id for block in timeline_store.query_recent(conn, limit=1)] == [blocks[1].id]
+    assert [block.id for block in timeline_store.query_since(conn, blocks[0].end_time)] == [
         blocks[1].id
     ]
-    assert [
-        block.id for block in timeline_store.query_since(conn, blocks[0].end_time)
-    ] == [blocks[1].id]
     conn.close()
 
 

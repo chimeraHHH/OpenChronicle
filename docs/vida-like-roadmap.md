@@ -23,6 +23,15 @@ The point-in-time official-source research and capability gap map live in
 marketing claims are inputs, not independent quality evidence or permission to
 copy Vida's code, assets, brand, or private implementation.
 
+The broader repository/competitor search, selected comparison baselines, and
+rejected directions live in
+[vida-ecosystem-scout-2026-08-09.md](vida-ecosystem-scout-2026-08-09.md).
+Every product slice must also satisfy the executable gates in
+[vida-parity-evaluation-contract.md](vida-parity-evaluation-contract.md); a demo
+or vendor parity claim is not an acceptance result.
+The selected follow-up for Work Resumption timing is recorded in
+[vida-work-resumption-signal-brief.md](vida-work-resumption-signal-brief.md).
+
 The memory classifier must never receive file, browser, messaging, or other
 side-effecting tools. Screen-derived text is untrusted data, not an instruction
 source.
@@ -177,11 +186,42 @@ privacy UX is validated on a signed macOS build.
 
 ### Stage 2 — Suggest and Prepare
 
-- Privacy-filtered real-time path independent of the minute timeline.
-- Opportunity detectors, ranking, dedupe, cooldown, quiet hours, and daily budget.
-- Prompt Rescue, Reply Rescue, Résumé Rescue, and Work Resumption without side
-  effects.
-- Feedback and proactive-quality evaluation.
+- [x] Durable, evidence-bound Suggestion Kernel with an explicit lifecycle,
+  projection digest, idempotent emission, compare-and-swap review transitions,
+  current-policy checks, cooldown, quiet hours, score threshold, daily budget,
+  and expiry.
+- [x] First Work Resumption slice: a deterministic activity-gap detector,
+  strict no-action artifact contract, opt-in daemon worker, bounded desktop
+  inbox, inert evidence text, source drawer, dismiss, and acknowledge-only.
+  The production worker now also uses a same-sample, suspend-aware capture
+  breakpoint gate and invalidates a prepared card after any newer durable
+  capture. This is a timing safety milestone, not proof that the active-
+  conversation quality failure is solved.
+- [ ] Privacy-filtered real-time detector path independent of the minute
+  timeline. The first Work Resumption slice intentionally consumes verified
+  timeline blocks and therefore does not satisfy this item.
+- [ ] Run the versioned proactive fixture set and publish the reactive versus
+  heuristic versus full-kernel quality/latency/interruption report. The local
+  v1 evaluator and metric contract now exist under
+  `benchmarks/vida-suggestions-v1`; the first dirty pilot improved Kernel
+  precision from 0.40 to 0.50 after an empty-context abstention, but still
+  fails the 0.85 gate and is not a publishable clean result. The bounded
+  breakpoint-gate development result is recorded in
+  `benchmarks/vida-suggestions-v1/analysis/capture-breakpoint-gate-dev.md`;
+  the unchanged canonical decisions confirm comparability, while the missing
+  timestamped trace split prevents a gate-effect claim.
+- [ ] Prompt Rescue prepared-artifact slice with explicit selection binding and
+  no automatic submission.
+- [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
+  send/submit capability.
+- [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
+
+The current kernel is a local preparation plane, not an Action Plane. Its only
+implemented workflow is Work Resumption; the backend rejects unknown artifact
+fields and any `action_capability` other than `none`. Suggestions are disabled
+by default, disappear when their evidence or policy authority changes, and a
+desktop “accept” transition records acknowledgement only. This is an
+implementation milestone, not a Stage 2 or Vida-parity completion claim.
 
 ### Stage 3 — safe Action Plane
 
@@ -259,6 +299,10 @@ action needs a verified postcondition.
 6. Daily Wrap vertical slice. **Implemented on the Stage 1 branch.**
 7. Native review inbox, permissions shell, and source drawer. **Source slice
    implemented; signed macOS release validation remains.**
+8. Side-effect-free Suggestion Kernel and Work Resumption. **The first local,
+   opt-in vertical slice is implemented and cross-stack tested; proactive
+   fixture baselines, the independent real-time path, packaged UX acceptance,
+   and the remaining Vida workflows are still open.**
 
 Generic planning, connectors, and action execution intentionally start only
 after the earlier gates pass.

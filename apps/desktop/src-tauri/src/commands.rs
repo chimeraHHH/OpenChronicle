@@ -15,6 +15,7 @@ const MAX_REASON_CHARS: usize = 1_000;
 const MAX_TIMELINE_ITEMS: usize = 24;
 const MAX_CANDIDATE_ITEMS: usize = 100;
 const MAX_WRAP_ITEMS: usize = 30;
+const MAX_SUGGESTION_ITEMS: usize = 50;
 const MAX_PROVENANCE_DEPTH: u8 = 8;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -26,6 +27,8 @@ pub(crate) struct SnapshotRequest {
     pub candidate_limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wrap_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion_limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -107,6 +110,16 @@ pub(crate) struct CapturePauseRequest {
     pub paused: bool,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SuggestionTransitionRequest {
+    pub suggestion_id: String,
+    pub expected_version: u64,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ForgetPreview {
     candidate_id: String,
@@ -184,6 +197,22 @@ pub async fn forget_candidate(
 pub async fn get_daily_wrap(request: DailyWrapRequest) -> Result<Value, DesktopError> {
     validate_daily_wrap(&request)?;
     invoke(Operation::WrapGet, &request).await
+}
+
+#[tauri::command]
+pub async fn transition_suggestion(
+    request: SuggestionTransitionRequest,
+) -> Result<Value, DesktopError> {
+    validate_candidate_id(&request.suggestion_id)?;
+    if !matches!(request.status.as_str(), "viewed" | "accepted" | "dismissed") {
+        return Err(DesktopError::invalid_request(
+            "The suggestion transition is unavailable.",
+        ));
+    }
+    if let Some(reason) = &request.reason {
+        validate_multiline_text(reason, MAX_REASON_CHARS, true)?;
+    }
+    invoke(Operation::SuggestionTransition, &request).await
 }
 
 #[tauri::command]
@@ -334,6 +363,9 @@ fn validate_snapshot(request: &SnapshotRequest) -> Result<(), DesktopError> {
         || request
             .wrap_limit
             .is_some_and(|limit| limit > MAX_WRAP_ITEMS)
+        || request
+            .suggestion_limit
+            .is_some_and(|limit| limit > MAX_SUGGESTION_ITEMS)
     {
         return Err(DesktopError::invalid_request(
             "A snapshot limit exceeds the allowed maximum.",
@@ -488,6 +520,7 @@ mod tests {
             timeline_limit: Some(MAX_TIMELINE_ITEMS),
             candidate_limit: Some(MAX_CANDIDATE_ITEMS),
             wrap_limit: Some(MAX_WRAP_ITEMS),
+            suggestion_limit: Some(MAX_SUGGESTION_ITEMS),
         };
         assert!(validate_snapshot(&valid).is_ok());
 

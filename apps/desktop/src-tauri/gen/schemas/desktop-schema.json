@@ -183,10 +183,10 @@
           "markdownDescription": "Bounded, local-only reads for the trusted review window.\n#### This permission set includes:\n\n- `allow-get-snapshot`\n- `allow-get-candidate`\n- `allow-preview-forget-candidate`\n- `allow-get-daily-wrap`\n- `allow-trace-provenance`\n- `allow-resolve-evidence`"
         },
         {
-          "description": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`",
+          "description": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`",
           "type": "string",
           "const": "desktop-review",
-          "markdownDescription": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`"
+          "markdownDescription": "Explicit, candidate-scoped review and capture-pause mutations.\n#### This permission set includes:\n\n- `allow-edit-candidate`\n- `allow-approve-candidate`\n- `allow-reject-candidate`\n- `allow-forget-candidate`\n- `allow-set-capture-paused`\n- `allow-transition-suggestion`"
         },
         {
           "description": "Enables the approve_candidate command without any pre-configured scope.",
@@ -255,6 +255,12 @@
           "markdownDescription": "Enables the trace_provenance command without any pre-configured scope."
         },
         {
+          "description": "Enables the transition_suggestion command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transition-suggestion",
+          "markdownDescription": "Enables the transition_suggestion command without any pre-configured scope."
+        },
+        {
           "description": "Denies the approve_candidate command without any pre-configured scope.",
           "type": "string",
           "const": "deny-approve-candidate",
@@ -319,6 +325,12 @@
           "type": "string",
           "const": "deny-trace-provenance",
           "markdownDescription": "Denies the trace_provenance command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transition_suggestion command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transition-suggestion",
+          "markdownDescription": "Denies the transition_suggestion command without any pre-configured scope."
         },
         {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",

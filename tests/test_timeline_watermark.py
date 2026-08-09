@@ -1070,6 +1070,7 @@ def test_clean_timeline_resets_blocks_and_producer_watermark(ac_root: Path) -> N
         assert conn.execute("SELECT COUNT(*) FROM timeline_window_receipts").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM timeline_capture_receipts").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM timeline_window_receipt_epoch").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM timeline_receipt_audit_state").fetchone()[0] == 0
 
 
 def test_clean_timeline_refuses_to_drop_retiring_capture_manifest(ac_root: Path) -> None:

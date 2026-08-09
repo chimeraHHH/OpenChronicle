@@ -7,6 +7,7 @@ import type {
   ForgetPreview,
   ProvenanceTrace,
   ResolvedEvidence,
+  Suggestion,
 } from "../contracts";
 
 export const maliciousText =
@@ -113,6 +114,43 @@ export function wrapDetail(overrides: Partial<DailyWrap> = {}): DailyWrap {
   };
 }
 
+export function suggestion(overrides: Partial<Suggestion> = {}): Suggestion {
+  return {
+    id: "sg-1",
+    workflow: "work_resumption",
+    status: "ready",
+    title: "Resume your recent work",
+    summary: "A verified activity gap was followed by new local activity.",
+    artifact: {
+      schema_version: 1,
+      workflow: "work_resumption",
+      action_capability: "none",
+      interruption: {
+        previous_end: "2026-08-08T09:00:00+08:00",
+        current_start: "2026-08-08T09:30:00+08:00",
+        gap_minutes: 30,
+      },
+      last_verified_state: {
+        untrusted_activity_quote: true,
+        entries: ["Reviewed the trusted console implementation."],
+        apps: ["Code"],
+      },
+      resumption_signal: {
+        untrusted_activity_quote: true,
+        entries: ["Returned to local work."],
+        apps: ["Code"],
+      },
+      recommended_next_step:
+        "Review the last verified state and choose what to continue. OpenChronicle has not executed any action.",
+    },
+    score: 0.9,
+    version: 1,
+    detected_at: "2026-08-08T09:31:00+08:00",
+    expires_at: "2026-08-08T11:31:00+08:00",
+    ...overrides,
+  };
+}
+
 export function snapshot(overrides: Partial<DesktopSnapshot> = {}): DesktopSnapshot {
   return {
     generated_at: "2026-08-08T10:00:00+08:00",
@@ -127,6 +165,8 @@ export function snapshot(overrides: Partial<DesktopSnapshot> = {}): DesktopSnaps
     purge_pending_count: 0,
     candidates: [candidateSummary()],
     daily_wraps: [wrapSummary()],
+    suggestions_enabled: true,
+    suggestions: [suggestion()],
     timeline: [
       {
         id: "block-1",
@@ -297,6 +337,8 @@ export function bridgeSnapshot(value: DesktopSnapshot = snapshot()) {
         },
       })),
     },
+    suggestions_enabled: value.suggestions_enabled,
+    suggestions: value.suggestions,
     generated_at: value.generated_at,
   };
 }
@@ -309,6 +351,10 @@ export function bridgeCandidateGet(value: Candidate = candidateDetail()) {
 export function bridgeCandidateMutation(value: Candidate = candidateDetail()) {
   const { evidence: _evidence, content_preview: _preview, evidence_count: _count, ...candidate } = value;
   return { candidate };
+}
+
+export function bridgeSuggestionMutation(value: Suggestion = suggestion()) {
+  return { suggestion: value };
 }
 
 export function bridgeWrapGet(value: DailyWrap = wrapDetail()) {

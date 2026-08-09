@@ -30,6 +30,7 @@ pub fn run() {
             commands::preview_forget_candidate,
             commands::forget_candidate,
             commands::get_daily_wrap,
+            commands::transition_suggestion,
             commands::trace_provenance,
             commands::resolve_evidence,
             commands::set_capture_paused,

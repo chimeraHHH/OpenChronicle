@@ -21,6 +21,7 @@ from ..services.evidence import EvidenceResolver
 from ..services.memory import MemoryService
 from ..store import files as files_store
 from ..store import fts
+from ..suggestions.service import SuggestionKernel
 from ..timeline import store as timeline_store
 
 
@@ -32,6 +33,7 @@ def build_snapshot(
     timeline_limit: int,
     candidate_limit: int,
     wrap_limit: int,
+    suggestion_limit: int = 20,
 ) -> dict[str, Any]:
     """Return one bounded product snapshot without probing any model/provider."""
     # Resume only deletion plans the user previously authorized. This is a
@@ -176,6 +178,14 @@ def build_snapshot(
             if wrap_limit
             else []
         )
+        suggestions = (
+            SuggestionKernel(conn, cfg).list_visible(
+                statuses=["ready", "viewed"],
+                limit=suggestion_limit,
+            )
+            if suggestion_limit
+            else []
+        )
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -259,6 +269,22 @@ def build_snapshot(
             "timezone": str(cfg.daily_wrap.timezone)[:100],
             "wraps": [_wrap_summary(row) for row in wraps],
         },
+        "suggestions": [
+            {
+                "id": str(item.id)[:128],
+                "workflow": str(item.workflow)[:100],
+                "status": str(item.status)[:50],
+                "title": str(item.title)[:160],
+                "summary": str(item.summary)[:1_000],
+                "artifact": item.artifact,
+                "score": item.score,
+                "version": item.version,
+                "detected_at": str(item.detected_at)[:100],
+                "expires_at": str(item.expires_at)[:100],
+            }
+            for item in suggestions
+        ],
+        "suggestions_enabled": cfg.suggestions.enabled,
         "generated_at": datetime.now().astimezone().isoformat(),
     }
 

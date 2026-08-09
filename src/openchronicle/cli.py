@@ -1699,6 +1699,7 @@ def _clean_timeline() -> int:
             conn.execute("DELETE FROM timeline_capture_receipts")
             conn.execute("DELETE FROM timeline_capture_receipt_state")
             conn.execute("DELETE FROM timeline_window_receipt_epoch")
+            conn.execute("DELETE FROM timeline_receipt_audit_state")
             conn.execute("COMMIT")
         except Exception:  # noqa: BLE001
             if conn.in_transaction:

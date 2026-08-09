@@ -18,11 +18,13 @@ import {
   bridgeCandidateMutation,
   bridgeResolvedEvidence,
   bridgeSnapshot,
+  bridgeSuggestionMutation,
   bridgeWrapGet,
   candidateDetail,
   forgetPreview,
   maliciousText,
   provenanceTrace,
+  suggestion,
   wrapDetail,
 } from "./fixtures";
 
@@ -31,8 +33,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks the immutable Daily Wrap projection as bridge protocol v2", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(2);
+  it("tracks side-effect-free suggestions as bridge protocol v3", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(3);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -41,7 +43,12 @@ describe("desktop bridge adapters", () => {
     const result = await desktopApi.snapshot();
 
     expect(tauri.invoke).toHaveBeenCalledWith("get_snapshot", {
-      request: { timeline_limit: 24, candidate_limit: 100, wrap_limit: 30 },
+      request: {
+        timeline_limit: 24,
+        candidate_limit: 100,
+        wrap_limit: 30,
+        suggestion_limit: 50,
+      },
     });
     expect(result.daemon).toMatchObject({ state: "running", health: "healthy", pid: 1234 });
     expect(result.capture).toMatchObject({ paused: false, state: "active", last_app: "Code" });
@@ -58,6 +65,34 @@ describe("desktop bridge adapters", () => {
       model_mode: "unknown",
     });
     expect(result.permissions).toEqual([]);
+    expect(result.suggestions[0]).toMatchObject({
+      id: "sg-1",
+      workflow: "work_resumption",
+      artifact: { action_capability: "none" },
+    });
+  });
+
+  it("sends an exact suggestion CAS transition without any action command", async () => {
+    tauri.invoke.mockResolvedValue(
+      bridgeSuggestionMutation(suggestion({ status: "accepted", version: 2 })),
+    );
+
+    const result = await desktopApi.transitionSuggestion(
+      "sg-1",
+      1,
+      "accepted",
+      "acknowledged_from_desktop",
+    );
+
+    expect(tauri.invoke).toHaveBeenCalledWith("transition_suggestion", {
+      request: {
+        suggestion_id: "sg-1",
+        expected_version: 1,
+        status: "accepted",
+        reason: "acknowledged_from_desktop",
+      },
+    });
+    expect(result).toMatchObject({ status: "accepted", version: 2 });
   });
 
   it("unwraps candidate reads and keeps their direct evidence", async () => {

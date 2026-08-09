@@ -117,6 +117,14 @@ CREATE TABLE IF NOT EXISTS timeline_window_receipt_epoch (
     window_seconds INTEGER NOT NULL CHECK (window_seconds > 0)
 );
 
+-- Historical blocks without a root receipt are upgrade/recovery seeds. Audit
+-- them incrementally instead of re-validating every retired receipt on every
+-- minute tick. Live and retiring windows are still checked synchronously.
+CREATE TABLE IF NOT EXISTS timeline_receipt_audit_state (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    block_rowid_cursor INTEGER NOT NULL CHECK (block_rowid_cursor >= 0)
+);
+
 CREATE TABLE IF NOT EXISTS timeline_schema_migrations (
     name TEXT PRIMARY KEY
 );
@@ -127,6 +135,7 @@ _INSTANT_WINDOW_MIGRATION = "instant-window-unique-v1"
 _INSTANT_WINDOW_INDEX = "idx_tlb_window_instant_unique"
 _OBSERVATION_DIGEST_MIGRATION = "observation-semantic-digest-v2"
 _WINDOW_RECEIPT_INSTANT_INDEX = "idx_timeline_window_receipt_instant_unique"
+_WINDOW_RECEIPT_AUDIT_BATCH = 256
 
 
 @dataclass
@@ -624,9 +633,7 @@ def _backfill_window_receipt_instant_keys(conn: sqlite3.Connection) -> None:
         except (TypeError, ValueError):
             invalid_rowids.append((row[0],))
             continue
-        groups.setdefault((as_instant(start), as_instant(end)), []).append(
-            (row[0], start, end)
-        )
+        groups.setdefault((as_instant(start), as_instant(end)), []).append((row[0], start, end))
 
     # An old text-keyed draft schema admitted multiple offset spellings of one
     # absolute window. Delete every root in such a group before changing any
@@ -635,10 +642,7 @@ def _backfill_window_receipt_instant_keys(conn: sqlite3.Connection) -> None:
     # member is a unique proof, so dropping the whole group is fail-closed and
     # lets retained child receipts or blocks seed replay.
     duplicate_rowids = [
-        (rowid,)
-        for group in groups.values()
-        if len(group) > 1
-        for rowid, _start, _end in group
+        (rowid,) for group in groups.values() if len(group) > 1 for rowid, _start, _end in group
     ]
     conn.executemany(
         "DELETE FROM timeline_window_receipts WHERE rowid=?",
@@ -1150,8 +1154,7 @@ def delete_window_receipt_for(
     end: datetime,
 ) -> None:
     conn.execute(
-        "DELETE FROM timeline_window_receipts "
-        "WHERE window_start_us=? AND window_end_us=?",
+        "DELETE FROM timeline_window_receipts WHERE window_start_us=? AND window_end_us=?",
         (_instant_us(start), _instant_us(end)),
     )
 
@@ -1380,10 +1383,17 @@ def earliest_invalidated_window(
     processed_from, processed_through = processed_range
     range_start_us = _instant_us(processed_from)
     range_end_us = _instant_us(processed_through)
+
+    # The producer can repair only windows whose raw manifest still exists.
+    # Retired receipts authorize read-time evidence but have no raw captures to
+    # replay, so rescanning and deeply validating the entire retired history on
+    # every tick is both O(history) and unable to converge. Context readers
+    # validate retired receipt/block/source bindings when evidence is used.
     receipt_rows = conn.execute(
         """
         SELECT * FROM timeline_window_receipts
          WHERE window_start_us >= ? AND window_end_us <= ?
+           AND raw_state IN ('live', 'retiring')
          ORDER BY window_start_us, window_end_us
         """,
         (range_start_us, range_end_us),
@@ -1404,63 +1414,172 @@ def earliest_invalidated_window(
     if len(receipts) != len(receipt_rows):
         candidates.append(processed_from)
 
-    # Inspect semantic windows, not individual rows. A quarantined duplicate
-    # beside one current winner is not itself a coverage gap.
-    block_windows: dict[tuple[int, int], tuple[datetime, datetime]] = {}
-    for row in conn.execute(
-        """
-        SELECT start_time, end_time FROM timeline_blocks
-         WHERE julianday(start_time) >= julianday(?)
-           AND julianday(end_time) <= julianday(?)
-        """,
-        (processed_from.isoformat(), processed_through.isoformat()),
-    ):
-        try:
-            raw_start = datetime.fromisoformat(row[0])
-            raw_end = datetime.fromisoformat(row[1])
-            if not _duration_is_valid(raw_start, raw_end):
-                raise ValueError("invalid timeline block duration")
-        except (TypeError, ValueError):
-            candidates.append(processed_from)
-            continue
-        block_windows[(_instant_us(raw_start), _instant_us(raw_end))] = (
-            raw_start,
-            raw_end,
-        )
-    for raw_start, raw_end in block_windows.values():
-        state = window_state(conn, raw_start, raw_end)
-        receipt = window_receipt_for(conn, raw_start, raw_end)
-        if state == "invalid" or receipt is None or not window_receipt_is_current(conn, receipt):
-            candidates.append(raw_start)
+    # Upgrades can contain a historical block without its root outcome receipt.
+    # A durable rowid cursor audits a fixed-size batch per tick. The hot path is
+    # therefore bounded while a complete legacy scan still converges over time.
+    # A semantic duplicate beside a rooted winner is not a gap because roots are
+    # joined by absolute-time window rather than block identity.
+    unrooted_block = _audit_unrooted_timeline_blocks(
+        conn,
+        processed_from=processed_from,
+        processed_through=processed_through,
+    )
+    if unrooted_block is not None:
+        candidates.append(unrooted_block)
 
     # Upgrades may have exact per-capture rows from an earlier producer but no
     # root outcome receipt. These sparse retained windows, not historical empty
     # minutes, are replay seeds.
-    child_windows: dict[tuple[int, int], datetime] = {}
+    orphan_child = _earliest_unrooted_capture_receipt_window(
+        conn,
+        processed_from=processed_from,
+        processed_through=processed_through,
+    )
+    if orphan_child is not None:
+        candidates.append(orphan_child)
+    return min(candidates, key=_instant, default=None)
+
+
+def _audit_unrooted_timeline_blocks(
+    conn: sqlite3.Connection,
+    *,
+    processed_from: datetime,
+    processed_through: datetime,
+) -> datetime | None:
+    cursor_row = conn.execute(
+        "SELECT block_rowid_cursor FROM timeline_receipt_audit_state WHERE id=1"
+    ).fetchone()
+    cursor = cursor_row[0] if cursor_row is not None else 0
+    if type(cursor) is not int or cursor < 0:
+        cursor = 0
+    rows = conn.execute(
+        """
+        SELECT rowid, start_time, end_time
+          FROM timeline_blocks
+         WHERE rowid > ?
+         ORDER BY rowid
+         LIMIT ?
+        """,
+        (cursor, _WINDOW_RECEIPT_AUDIT_BATCH),
+    ).fetchall()
+    if not rows:
+        _set_timeline_receipt_audit_cursor(conn, 0)
+        return None
+
+    range_start_us = _instant_us(processed_from)
+    range_end_us = _instant_us(processed_through)
+    parsed: list[tuple[int, datetime, int, int]] = []
+    for row in rows:
+        rowid = row[0]
+        try:
+            start = datetime.fromisoformat(row[1])
+            end = datetime.fromisoformat(row[2])
+            if type(rowid) is not int or rowid <= 0 or not _duration_is_valid(start, end):
+                raise ValueError("invalid timeline block audit row")
+        except (TypeError, ValueError):
+            _set_timeline_receipt_audit_cursor(conn, max(0, int(rowid or 1) - 1))
+            return processed_from
+        start_us = _instant_us(start)
+        end_us = _instant_us(end)
+        if range_start_us <= start_us and end_us <= range_end_us:
+            parsed.append((rowid, start, start_us, end_us))
+
+    if parsed:
+        values = ",".join("(?, ?, ?)" for _ in parsed)
+        parameters: list[int] = []
+        for rowid, _start, start_us, end_us in parsed:
+            parameters.extend((rowid, start_us, end_us))
+        missing_rowids = {
+            int(row[0])
+            for row in conn.execute(
+                f"""
+                WITH candidates(block_rowid, start_us, end_us) AS (
+                    VALUES {values}
+                )
+                SELECT candidates.block_rowid
+                  FROM candidates
+                  LEFT JOIN timeline_window_receipts AS roots
+                    ON roots.window_start_us = candidates.start_us
+                   AND roots.window_end_us = candidates.end_us
+                 WHERE roots.window_start_us IS NULL
+                """,
+                tuple(parameters),
+            )
+        }
+        missing = [item for item in parsed if item[0] in missing_rowids]
+        if missing:
+            rowid, start, _start_us, _end_us = min(missing, key=lambda item: _instant(item[1]))
+            _set_timeline_receipt_audit_cursor(conn, max(0, rowid - 1))
+            return start
+
+    _set_timeline_receipt_audit_cursor(conn, int(rows[-1][0]))
+    return None
+
+
+def _set_timeline_receipt_audit_cursor(conn: sqlite3.Connection, rowid: int) -> None:
+    conn.execute(
+        """
+        INSERT INTO timeline_receipt_audit_state(id, block_rowid_cursor)
+        VALUES (1, ?)
+        ON CONFLICT(id) DO UPDATE SET block_rowid_cursor=excluded.block_rowid_cursor
+        """,
+        (rowid,),
+    )
+
+
+def _earliest_unrooted_capture_receipt_window(
+    conn: sqlite3.Connection,
+    *,
+    processed_from: datetime,
+    processed_through: datetime,
+) -> datetime | None:
+    range_start_us = _instant_us(processed_from)
+    range_end_us = _instant_us(processed_through)
+    windows: dict[tuple[int, int], datetime] = {}
     for row in conn.execute(
         "SELECT DISTINCT window_start, window_end FROM timeline_capture_receipts"
     ):
         try:
             start = datetime.fromisoformat(row[0])
             end = datetime.fromisoformat(row[1])
+            if not _duration_is_valid(start, end):
+                raise ValueError("invalid capture receipt window")
         except (TypeError, ValueError):
-            candidates.append(processed_from)
-            continue
-        if range_start_us <= _instant_us(start) and _instant_us(end) <= range_end_us:
-            child_windows[(_instant_us(start), _instant_us(end))] = start
-    for (start_us, end_us), start in child_windows.items():
-        if (
-            conn.execute(
-                """
-                SELECT 1 FROM timeline_window_receipts
-                 WHERE window_start_us=? AND window_end_us=?
-                """,
-                (start_us, end_us),
-            ).fetchone()
-            is None
-        ):
-            candidates.append(start)
-    return min(candidates, key=_instant, default=None)
+            return processed_from
+        start_us = _instant_us(start)
+        end_us = _instant_us(end)
+        if range_start_us <= start_us and end_us <= range_end_us:
+            windows[(start_us, end_us)] = start
+
+    ordered = sorted(
+        ((start_us, end_us, start) for (start_us, end_us), start in windows.items()),
+        key=lambda item: _instant(item[2]),
+    )
+    for offset in range(0, len(ordered), _WINDOW_RECEIPT_AUDIT_BATCH):
+        batch = ordered[offset : offset + _WINDOW_RECEIPT_AUDIT_BATCH]
+        values = ",".join("(?, ?, ?)" for _ in batch)
+        parameters: list[int] = []
+        for index, (start_us, end_us, _start) in enumerate(batch):
+            parameters.extend((index, start_us, end_us))
+        missing = conn.execute(
+            f"""
+            WITH candidates(position, start_us, end_us) AS (
+                VALUES {values}
+            )
+            SELECT candidates.position
+              FROM candidates
+              LEFT JOIN timeline_window_receipts AS roots
+                ON roots.window_start_us = candidates.start_us
+               AND roots.window_end_us = candidates.end_us
+             WHERE roots.window_start_us IS NULL
+             ORDER BY candidates.position
+             LIMIT 1
+            """,
+            tuple(parameters),
+        ).fetchone()
+        if missing is not None:
+            return batch[int(missing[0])][2]
+    return None
 
 
 def activate_window_receipt_epoch(

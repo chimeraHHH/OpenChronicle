@@ -22,6 +22,7 @@ from openchronicle.services.memory import MemoryService
 from openchronicle.store import entries as entries_store
 from openchronicle.store import files as files_store
 from openchronicle.store import fts
+from openchronicle.suggestions import worker as suggestion_worker
 from openchronicle.writer import llm as llm_mod
 
 
@@ -532,6 +533,75 @@ async def test_capture_only_excludes_mcp_and_processing_pipeline(
     assert cfg.reducer.enabled is True
     assert manager.force_end_reasons == ["daemon-shutdown"]
     assert not paths.pid_file().exists()
+
+
+@pytest.mark.asyncio
+async def test_suggestion_worker_receives_same_capture_activity_gate(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started: set[str] = set()
+    cancelled: set[str] = set()
+    manager = _install_manager(monkeypatch)
+    _patch_standard_workers(monkeypatch, started=started, cancelled=cancelled)
+    persisted = asyncio.Event()
+    observed_gate: list[object] = []
+
+    async def capture(_cfg, *, pre_capture_hook, timestamp_provider) -> None:
+        started.add("capture")
+        assert callable(timestamp_provider)
+        sample = timestamp_provider.sample()
+        pre_capture_hook(
+            {
+                "timestamp": sample.wall_time.isoformat(),
+                "bundle_id": "com.example.editor",
+                "_persisted_monotonic_tick": sample.monotonic_tick,
+            }
+        )
+        persisted.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.add("capture")
+
+    async def suggestions(_cfg, *, now_provider, activity_gate) -> None:
+        started.add("suggestions")
+        await persisted.wait()
+        assert callable(now_provider)
+        assert activity_gate.latest() is not None
+        observed_gate.append(activity_gate)
+        try:
+            await asyncio.Future()
+        finally:
+            cancelled.add("suggestions")
+
+    monkeypatch.setattr(daemon.capture_scheduler, "run_forever", capture)
+    monkeypatch.setattr(suggestion_worker, "run_forever", suggestions)
+
+    cfg = config_mod.Config()
+    cfg.reducer.enabled = False
+    cfg.suggestions.enabled = True
+    cfg.mcp.auto_start = False
+    stop = asyncio.Event()
+
+    run_task = asyncio.create_task(daemon._run(cfg, stop_event=stop))
+    while (
+        not {
+            "capture",
+            "session",
+            "daily-safety-net",
+            "timeline",
+            "suggestions",
+        }.issubset(started)
+        or not observed_gate
+    ):
+        await asyncio.sleep(0)
+    stop.set()
+    await run_task
+
+    assert len(observed_gate) == 1
+    assert manager.force_end_reasons == ["daemon-shutdown"]
+    assert cancelled == started
 
 
 @pytest.mark.asyncio

@@ -758,6 +758,7 @@ async def _run(
         effective_cfg.mcp.auto_start = False
 
     session_manager = None
+    activity_gate = None
     tasks: list[asyncio.Task] = []
     stop_task: asyncio.Task | None = None
     installed_signals: list[signal.Signals] = []
@@ -838,11 +839,21 @@ async def _run(
             clock=runtime_clock,
         )
 
+        persisted_capture_hook = session_manager.on_persisted_capture
+        if not capture_only and effective_cfg.suggestions.enabled:
+            from .suggestions.activity import CaptureActivityGate
+
+            activity_gate = CaptureActivityGate()
+
+            def persisted_capture_hook(event: dict[str, object]) -> None:
+                session_manager.on_persisted_capture(event)
+                activity_gate.on_persisted_capture(event)
+
         tasks = [
             asyncio.create_task(
                 capture_scheduler.run_forever(
                     effective_cfg.capture,
-                    pre_capture_hook=session_manager.on_persisted_capture,
+                    pre_capture_hook=persisted_capture_hook,
                     timestamp_provider=runtime_clock,
                 ),
                 name="capture",
@@ -873,6 +884,19 @@ async def _run(
                     asyncio.create_task(
                         daily_wrap_worker.run_forever(effective_cfg),
                         name="daily-wrap",
+                    )
+                )
+            if effective_cfg.suggestions.enabled:
+                from .suggestions import worker as suggestion_worker
+
+                tasks.append(
+                    asyncio.create_task(
+                        suggestion_worker.run_forever(
+                            effective_cfg,
+                            now_provider=runtime_clock,
+                            activity_gate=activity_gate,
+                        ),
+                        name="suggestions",
                     )
                 )
             # Both loops intentionally return immediately when the reducer is

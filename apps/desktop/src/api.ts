@@ -12,6 +12,8 @@ import type {
   PrivacySnapshot,
   ProvenanceTrace,
   ResolvedEvidence,
+  Suggestion,
+  SuggestionStatus,
   TimelineItem,
   WrapCategory,
   WrapItem,
@@ -34,6 +36,13 @@ const candidateStatuses = new Set<CandidateStatus>([
   "applying",
   "accepted",
   "rejected",
+]);
+const suggestionStatuses = new Set<SuggestionStatus>([
+  "ready",
+  "viewed",
+  "accepted",
+  "dismissed",
+  "expired",
 ]);
 const wrapCategories: WrapCategory[] = [
   "completed",
@@ -256,6 +265,69 @@ function timelineItem(value: unknown): TimelineItem {
   };
 }
 
+function workResumptionSuggestion(value: unknown): Suggestion {
+  const raw = objectValue(value, "suggestion payload");
+  const artifact = objectValue(raw.artifact, "suggestion artifact");
+  if (
+    numberValue(artifact.schema_version, "suggestion artifact version") !== 1 ||
+    stringValue(artifact.workflow, "suggestion artifact workflow") !== "work_resumption" ||
+    stringValue(artifact.action_capability, "suggestion action capability") !== "none"
+  ) {
+    return protocolError("suggestion artifact contract");
+  }
+  const interruption = objectValue(artifact.interruption, "suggestion interruption");
+  const previous = objectValue(
+    artifact.last_verified_state,
+    "suggestion last verified state",
+  );
+  const current = objectValue(artifact.resumption_signal, "suggestion resumption signal");
+  if (
+    booleanValue(previous.untrusted_activity_quote, "suggestion previous trust marker") !== true ||
+    booleanValue(current.untrusted_activity_quote, "suggestion current trust marker") !== true
+  ) {
+    return protocolError("suggestion trust marker");
+  }
+  const workflow = stringValue(raw.workflow, "suggestion workflow");
+  if (workflow !== "work_resumption") return protocolError("suggestion workflow");
+  const feedbackReason = optionalString(raw.feedback_reason, "suggestion feedback");
+  return {
+    id: stringValue(raw.id, "suggestion id"),
+    workflow,
+    status: allowedString(raw.status, suggestionStatuses, "suggestion status"),
+    title: stringValue(raw.title, "suggestion title"),
+    summary: stringValue(raw.summary, "suggestion summary"),
+    artifact: {
+      schema_version: 1,
+      workflow: "work_resumption",
+      action_capability: "none",
+      interruption: {
+        previous_end: stringValue(interruption.previous_end, "suggestion previous end"),
+        current_start: stringValue(interruption.current_start, "suggestion current start"),
+        gap_minutes: numberValue(interruption.gap_minutes, "suggestion gap"),
+      },
+      last_verified_state: {
+        untrusted_activity_quote: true,
+        entries: stringArray(previous.entries, "suggestion previous entries"),
+        apps: stringArray(previous.apps, "suggestion previous apps"),
+      },
+      resumption_signal: {
+        untrusted_activity_quote: true,
+        entries: stringArray(current.entries, "suggestion current entries"),
+        apps: stringArray(current.apps, "suggestion current apps"),
+      },
+      recommended_next_step: stringValue(
+        artifact.recommended_next_step,
+        "suggestion next step",
+      ),
+    },
+    score: numberValue(raw.score, "suggestion score"),
+    version: numberValue(raw.version, "suggestion version"),
+    detected_at: stringValue(raw.detected_at, "suggestion detected time"),
+    expires_at: stringValue(raw.expires_at, "suggestion expiry"),
+    ...(feedbackReason === undefined ? {} : { feedback_reason: feedbackReason }),
+  };
+}
+
 function privacySnapshot(raw: JsonRecord, dailyWrap: JsonRecord): PrivacySnapshot {
   return {
     allowed_bundle_ids: stringArray(raw.allowed_bundle_ids, "allowed bundle IDs"),
@@ -289,6 +361,9 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
   const counts = objectValue(raw.counts, "snapshot counts");
   const candidateCounts = objectValue(counts.candidates, "candidate counts");
   const dailyWrap = objectValue(raw.daily_wrap, "Daily Wrap snapshot");
+  const suggestions = arrayValue(raw.suggestions, "suggestion summaries").map(
+    workResumptionSuggestion,
+  );
   const running = booleanValue(daemon.running, "daemon running state");
   const paused = booleanValue(capture.paused, "capture paused state");
   const health = stringValue(daemon.health, "daemon health");
@@ -360,6 +435,11 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
     purge_pending_count: 0,
     candidates,
     daily_wraps: dailyWraps,
+    suggestions_enabled: booleanValue(
+      raw.suggestions_enabled,
+      "suggestions enabled state",
+    ),
+    suggestions,
     timeline: arrayValue(raw.timeline, "timeline snapshot").map(timelineItem),
     privacy: privacySnapshot(privacy, dailyWrap),
     permissions: [],
@@ -539,6 +619,11 @@ export function normalizePauseResult(value: unknown): { paused: boolean; changed
   };
 }
 
+export function normalizeSuggestionMutation(value: unknown): Suggestion {
+  const raw = objectValue(value, "suggestion response");
+  return workResumptionSuggestion(raw.suggestion);
+}
+
 async function request<T>(command: string, payload: object, normalize: (value: unknown) => T): Promise<T> {
   try {
     const value = await invoke<unknown>(command, { request: payload });
@@ -568,7 +653,7 @@ export const desktopApi = {
   snapshot: () =>
     request(
       "get_snapshot",
-      { timeline_limit: 24, candidate_limit: 100, wrap_limit: 30 },
+      { timeline_limit: 24, candidate_limit: 100, wrap_limit: 30, suggestion_limit: 50 },
       normalizeSnapshot,
     ),
   getCandidate: (candidateId: string) =>
@@ -662,6 +747,28 @@ export const desktopApi = {
           return protocolError("Daily Wrap response identity");
         }
         return wrap;
+      },
+    ),
+  transitionSuggestion: (
+    suggestionId: string,
+    expectedVersion: number,
+    status: "viewed" | "accepted" | "dismissed",
+    reason = "",
+  ) =>
+    request(
+      "transition_suggestion",
+      {
+        suggestion_id: suggestionId,
+        expected_version: expectedVersion,
+        status,
+        reason,
+      },
+      (value) => {
+        const suggestion = normalizeSuggestionMutation(value);
+        if (suggestion.id !== suggestionId) {
+          return protocolError("suggestion mutation identity");
+        }
+        return suggestion;
       },
     ),
   traceProvenance: (subject: EvidenceRef, maxDepth = 4) =>

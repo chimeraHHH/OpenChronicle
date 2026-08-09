@@ -26,8 +26,10 @@ from .services.memory import MemoryService, PurgeClosureUnverifiable, StalePurge
 from .services.snapshot import build_snapshot
 from .store import files as files_store
 from .store import fts
+from .suggestions import store as suggestion_store
+from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 MAX_REQUEST_BYTES = 64 * 1024
 
 
@@ -70,6 +72,8 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         }, exc.exit_code
     except candidate_store.CandidateConflict:
         return _error("VERSION_CONFLICT", "The reviewed candidate changed."), 2
+    except suggestion_store.SuggestionConflict:
+        return _error("VERSION_CONFLICT", "The suggestion changed."), 2
     except StalePurgePlan:
         return _error("STALE_PURGE_PLAN", "The deletion preview is stale."), 2
     except PurgeClosureUnverifiable:
@@ -133,6 +137,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "candidate.forget_preview": _candidate_forget_preview,
         "candidate.forget_commit": _candidate_forget_commit,
         "wrap.get": _wrap_get,
+        "suggestion.transition": _suggestion_transition,
         "provenance.trace": _provenance_trace,
         "evidence.resolve": _evidence_resolve,
         "capture.set_paused": _capture_set_paused,
@@ -146,10 +151,14 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
 
 
 def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
-    _fields(params, optional={"timeline_limit", "candidate_limit", "wrap_limit"})
+    _fields(
+        params,
+        optional={"timeline_limit", "candidate_limit", "wrap_limit", "suggestion_limit"},
+    )
     timeline_limit = _bounded_int(params.get("timeline_limit", 12), 0, 24)
     candidate_limit = _bounded_int(params.get("candidate_limit", 50), 0, 100)
     wrap_limit = _bounded_int(params.get("wrap_limit", 14), 0, 30)
+    suggestion_limit = _bounded_int(params.get("suggestion_limit", 20), 0, 50)
     cfg = config_mod.load()
     with fts.cursor() as conn:
         return build_snapshot(
@@ -158,7 +167,29 @@ def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
             timeline_limit=timeline_limit,
             candidate_limit=candidate_limit,
             wrap_limit=wrap_limit,
+            suggestion_limit=suggestion_limit,
         )
+
+
+def _suggestion_transition(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={"suggestion_id", "expected_version", "status"},
+        optional={"reason"},
+    )
+    suggestion_id = _bounded_string(params["suggestion_id"], 128, nonempty=True)
+    expected_version = _bounded_int(params["expected_version"], 1, 2_147_483_647)
+    status = _bounded_string(params["status"], 50, nonempty=True)
+    reason = _bounded_string(params.get("reason", ""), 1_000, nonempty=False)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        updated = SuggestionKernel(conn, cfg).transition(
+            suggestion_id,
+            expected_version=expected_version,
+            to_status=status,
+            reason=reason,
+        )
+        return {"suggestion": _suggestion_payload(updated)}
 
 
 def _candidate_get(params: dict[str, Any]) -> dict[str, Any]:
@@ -387,6 +418,22 @@ def _candidate_payload(candidate) -> dict[str, Any]:
     }
 
 
+def _suggestion_payload(suggestion) -> dict[str, Any]:
+    return {
+        "id": str(suggestion.id)[:128],
+        "workflow": str(suggestion.workflow)[:100],
+        "status": str(suggestion.status)[:50],
+        "title": str(suggestion.title)[:160],
+        "summary": str(suggestion.summary)[:1_000],
+        "artifact": suggestion.artifact,
+        "score": float(suggestion.score),
+        "version": int(suggestion.version),
+        "detected_at": str(suggestion.detected_at)[:100],
+        "expires_at": str(suggestion.expires_at)[:100],
+        "feedback_reason": str(suggestion.feedback_reason)[:1_000],
+    }
+
+
 def _wrap_payload(row) -> dict[str, Any]:
     return {
         "id": str(row.id)[:128],
@@ -512,9 +559,19 @@ def _require_visible_subject(conn, cfg: config_mod.Config, ref: EvidenceRef) -> 
         "daily_wrap",
         "daily_wrap_item",
         "daily_wrap_revision",
+        "suggestion",
     }
     if ref.kind not in supported:
         raise ValueError("unsupported provenance kind")
+
+    if ref.kind == "suggestion":
+        suggestion = suggestion_store.get(conn, ref.id)
+        if suggestion is None or all(
+            item.id != ref.id
+            for item in SuggestionKernel(conn, cfg).list_visible(limit=1_000)
+        ):
+            raise KeyError(ref.id)
+        return
 
     if ref.kind == "daily_wrap_revision":
         row = daily_wrap_store.get_by_id(conn, ref.path) if ref.path else None

@@ -33,6 +33,13 @@ the synthetic soak worker:
 - For populated windows, block projection, provenance, root outcome, child
   manifest, and watermark are one SQLite publication. A final source/policy
   change rolls the publication back rather than exposing partial coverage.
+- The producer synchronously validates only `live`/`retiring` roots whose raw
+  manifests can still be replayed. A durable 256-row cursor incrementally
+  audits historical blocks for missing upgrade roots, and retained child
+  receipts use batched instant-key anti-joins. Retired root/block/source proof
+  is validated fail-closed when evidence is read. This keeps the minute tick
+  bounded instead of deeply revalidating all history without weakening the
+  consumer trust boundary.
 
 These tests establish safety behavior, not end-to-end automatic recovery.
 There is no implemented and validated cascade that invalidates and rebuilds

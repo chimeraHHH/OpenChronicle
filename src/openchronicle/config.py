@@ -165,6 +165,24 @@ class DailyWrapConfig:
 
 
 @dataclass
+class SuggestionConfig:
+    # Proactivity is opt-in even though Stage 2 cannot execute side effects.
+    enabled: bool = False
+    scan_seconds: int = 60
+    daily_budget: int = 3
+    cooldown_minutes: int = 240
+    quiet_hours_enabled: bool = True
+    quiet_hours_start: int = 22
+    quiet_hours_end: int = 8
+    min_score: float = 0.75
+    expiry_minutes: int = 120
+    work_resumption_min_gap_minutes: int = 15
+    work_resumption_max_gap_hours: int = 12
+    work_resumption_activation_minutes: int = 10
+    work_resumption_settle_seconds: int = 20
+
+
+@dataclass
 class SearchConfig:
     default_top_k: int = 5
     filter_superseded_by_default: bool = True
@@ -191,6 +209,7 @@ class Config:
     writer: WriterConfig = field(default_factory=WriterConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     daily_wrap: DailyWrapConfig = field(default_factory=DailyWrapConfig)
+    suggestions: SuggestionConfig = field(default_factory=SuggestionConfig)
     search: SearchConfig = field(default_factory=SearchConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
@@ -249,9 +268,8 @@ def load(path: Path | None = None) -> Config:
         classifier=_build_dataclass(ClassifierConfig, _as_dict(raw.get("classifier"))),
         writer=_build_dataclass(WriterConfig, _as_dict(raw.get("writer"))),
         memory=_build_dataclass(MemoryConfig, _as_dict(raw.get("memory"))),
-        daily_wrap=_build_dataclass(
-            DailyWrapConfig, _as_dict(raw.get("daily_wrap"))
-        ),
+        daily_wrap=_build_dataclass(DailyWrapConfig, _as_dict(raw.get("daily_wrap"))),
+        suggestions=_build_dataclass(SuggestionConfig, _as_dict(raw.get("suggestions"))),
         search=_build_dataclass(SearchConfig, _as_dict(raw.get("search"))),
         mcp=_build_dataclass(MCPConfig, _as_dict(raw.get("mcp"))),
     )
@@ -353,6 +371,21 @@ minute = 5
 retry_seconds = 300            # failed-run retry and late-data recheck cadence
 late_data_grace_hours = 6      # revise yesterday's wrap during this window
 lease_seconds = 300            # minimum lease; auto-raised to provider call budget
+
+[suggestions]
+enabled = false                        # opt in to proactive cards; Stage 2 never acts
+scan_seconds = 60                      # local detector cadence
+daily_budget = 3                       # unsolicited cards per local day
+cooldown_minutes = 240                 # same semantic opportunity cooldown
+quiet_hours_enabled = true
+quiet_hours_start = 22                 # local hour, inclusive
+quiet_hours_end = 8                    # local hour, exclusive
+min_score = 0.75
+expiry_minutes = 120
+work_resumption_min_gap_minutes = 15
+work_resumption_max_gap_hours = 12
+work_resumption_activation_minutes = 10
+work_resumption_settle_seconds = 20       # quiet time after the latest persisted capture
 
 [search]
 default_top_k = 5

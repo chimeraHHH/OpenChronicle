@@ -1,9 +1,58 @@
-export type PageId = "overview" | "review" | "daily-wrap" | "timeline" | "privacy";
+export type PageId =
+  | "overview"
+  | "suggestions"
+  | "review"
+  | "daily-wrap"
+  | "timeline"
+  | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 2 removes mutable Daily Wrap scheduler
-// fields from that public projection.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 2 as const;
+// WebView result projection. Version 3 adds policy-visible, side-effect-free
+// suggestion cards and their exact CAS review command.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 3 as const;
+
+export type SuggestionStatus =
+  | "ready"
+  | "viewed"
+  | "accepted"
+  | "dismissed"
+  | "expired";
+
+export interface WorkResumptionArtifact {
+  schema_version: 1;
+  workflow: "work_resumption";
+  action_capability: "none";
+  interruption: {
+    previous_end: string;
+    current_start: string;
+    gap_minutes: number;
+  };
+  last_verified_state: {
+    untrusted_activity_quote: true;
+    entries: string[];
+    apps: string[];
+  };
+  resumption_signal: {
+    untrusted_activity_quote: true;
+    entries: string[];
+    apps: string[];
+  };
+  recommended_next_step: string;
+}
+
+export interface Suggestion {
+  id: string;
+  workflow: "work_resumption";
+  status: SuggestionStatus;
+  title: string;
+  summary: string;
+  artifact: WorkResumptionArtifact;
+  score: number;
+  version: number;
+  detected_at: string;
+  expires_at: string;
+  feedback_reason?: string;
+}
 
 export type CandidateStatus =
   | "pending"
@@ -185,6 +234,8 @@ export interface DesktopSnapshot {
   purge_pending_count: number;
   candidates: CandidateSummary[];
   daily_wraps: DailyWrapSummary[];
+  suggestions_enabled: boolean;
+  suggestions: Suggestion[];
   timeline: TimelineItem[];
   privacy: PrivacySnapshot;
   permissions: PermissionState[];

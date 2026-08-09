@@ -8,6 +8,7 @@ interface OverviewPageProps {
   busy: boolean;
   onSetPaused: (paused: boolean) => void;
   onOpenReview: () => void;
+  onOpenSuggestions: () => void;
   onOpenWrap: () => void;
 }
 
@@ -23,6 +24,7 @@ export function OverviewPage({
   busy,
   onSetPaused,
   onOpenReview,
+  onOpenSuggestions,
   onOpenWrap,
 }: OverviewPageProps) {
   const needsReview =
@@ -80,6 +82,15 @@ export function OverviewPage({
       </section>
 
       <div className="card-grid">
+        <section className="summary-card" aria-labelledby="suggestion-summary-title">
+          <div className="summary-card__metric" aria-hidden="true">{snapshot.suggestions.length}</div>
+          <h2 id="suggestion-summary-title">Suggestions</h2>
+          <p>Evidence-backed, reviewable cards. No card can execute an action.</p>
+          <button className="text-button" onClick={onOpenSuggestions} type="button">
+            Open Suggestions
+          </button>
+        </section>
+
         <section className="summary-card" aria-labelledby="review-summary-title">
           <div className="summary-card__metric" aria-hidden="true">{needsReview}</div>
           <h2 id="review-summary-title">Need review</h2>

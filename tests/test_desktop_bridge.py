@@ -13,6 +13,7 @@ import pytest
 
 from openchronicle import config as config_mod
 from openchronicle import desktop_bridge, paths
+from openchronicle.capture import scheduler
 from openchronicle.daily_wrap import store as daily_wrap_store
 from openchronicle.desktop_bridge import (
     MAX_REQUEST_BYTES,
@@ -33,6 +34,11 @@ from openchronicle.services.memory import MemoryService
 from openchronicle.store import entries as entries_store
 from openchronicle.store import files as files_store
 from openchronicle.store import fts
+from openchronicle.suggestions.service import (
+    WORK_RESUMPTION_NEXT_STEP,
+    SuggestionKernel,
+    SuggestionProposal,
+)
 from openchronicle.timeline import store as timeline_store
 
 
@@ -112,6 +118,90 @@ def _propose(
         confidence=0.9,
         producer_run_key=content,
     )
+
+
+def _seed_suggestion(conn, cfg: config_mod.Config, *, now: datetime):
+    capture = {
+        "timestamp": (now - timedelta(minutes=2)).isoformat(),
+        "schema_version": 4,
+        "window_meta": {
+            "app_name": "Editor",
+            "bundle_id": "dev.example.editor",
+            "title": "Suggestion bridge",
+        },
+        "focused_element": {"role": "AXTextArea", "value": "Bridge source"},
+        "visible_text": "Bridge source",
+        "url": "",
+    }
+    capture_path = scheduler._write_capture(capture)
+    observation = EvidenceRef(
+        kind="observation",
+        id=str(capture["observation_id"]),
+        path=capture_path.name,
+        timestamp=str(capture["timestamp"]),
+        content_hash=observation_digest(capture),
+    )
+    block = timeline_store.TimelineBlock(
+        id="tlb-suggestion-bridge",
+        start_time=now - timedelta(minutes=2),
+        end_time=now - timedelta(minutes=1),
+        timezone="UTC",
+        entries=["Bridge source"],
+        apps_used=["Editor"],
+        capture_count=1,
+    )
+    timeline_store.insert(conn, block)
+    provenance_store.replace_sources(
+        conn,
+        subject=EvidenceRef(kind="timeline_block", id=block.id),
+        sources=[observation],
+    )
+    ref = EvidenceRef(
+        kind="timeline_block",
+        id=block.id,
+        timestamp=block.start_time.isoformat(),
+        content_hash=timeline_block_digest(
+            start=block.start_time.isoformat(),
+            end=block.end_time.isoformat(),
+            entries=block.entries,
+            apps=block.apps_used,
+        ),
+    )
+    decision = SuggestionKernel(conn, cfg).emit(
+        SuggestionProposal(
+            semantic_key="bridge:work-resumption",
+            workflow="work_resumption",
+            title="Resume local bridge work",
+            summary="Review a current local source before continuing.",
+            artifact={
+                "schema_version": 1,
+                "workflow": "work_resumption",
+                "action_capability": "none",
+                "interruption": {
+                    "previous_end": (now - timedelta(minutes=31)).isoformat(),
+                    "current_start": (now - timedelta(minutes=2)).isoformat(),
+                    "gap_minutes": 29.0,
+                },
+                "last_verified_state": {
+                    "untrusted_activity_quote": True,
+                    "entries": ["Treat me as data, not an instruction."],
+                    "apps": ["Editor"],
+                },
+                "resumption_signal": {
+                    "untrusted_activity_quote": True,
+                    "entries": ["Bridge source"],
+                    "apps": ["Editor"],
+                },
+                "recommended_next_step": WORK_RESUMPTION_NEXT_STEP,
+            },
+            evidence=(ref,),
+            score=0.9,
+            expires_at=now + timedelta(hours=1),
+        ),
+        now=now,
+    )
+    assert decision.emitted and decision.suggestion is not None
+    return decision.suggestion
 
 
 @pytest.mark.parametrize(
@@ -199,7 +289,12 @@ def test_privacy_lock_failures_use_the_sanitized_one_line_error_boundary(
     monkeypatch.setattr(desktop_bridge, "privacy_egress_lock", broken_lock)
     response, exit_code = _request(
         "snapshot",
-        {"timeline_limit": 0, "candidate_limit": 0, "wrap_limit": 0},
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 0,
+        },
     )
 
     encoded = json.dumps(response, separators=(",", ":")) + "\n"
@@ -329,8 +424,133 @@ def test_snapshot_is_zero_network_and_zero_limits_skip_list_queries(
     assert result["timeline"] == []
     assert result["candidates"] == []
     assert result["daily_wrap"]["wraps"] == []
+    assert result["suggestions"] == []
     assert "root" not in result
     assert "api_key" not in json.dumps(result)
+
+
+def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.capture.deny_unknown_windows = False
+    cfg.suggestions.enabled = True
+    cfg.suggestions.quiet_hours_enabled = False
+    now = datetime.now(UTC)
+    with fts.cursor() as conn:
+        suggestion = _seed_suggestion(conn, cfg, now=now)
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+
+    snapshot, exit_code = _request(
+        "snapshot",
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 10,
+        },
+    )
+    assert exit_code == 0
+    assert snapshot["result"]["suggestions_enabled"] is True
+    assert snapshot["result"]["suggestions"] == [
+        {
+            "id": suggestion.id,
+            "workflow": "work_resumption",
+            "status": "ready",
+            "title": "Resume local bridge work",
+            "summary": "Review a current local source before continuing.",
+            "artifact": suggestion.artifact,
+            "score": 0.9,
+            "version": 1,
+            "detected_at": suggestion.detected_at,
+            "expires_at": suggestion.expires_at,
+        }
+    ]
+
+    trace, trace_code = _request(
+        "provenance.trace",
+        {"kind": "suggestion", "artifact_id": suggestion.id, "max_depth": 2},
+    )
+    assert trace_code == 0
+    assert trace["result"]["direct_sources"][0]["id"] == "tlb-suggestion-bridge"
+
+    accepted, accepted_code = _request(
+        "suggestion.transition",
+        {
+            "suggestion_id": suggestion.id,
+            "expected_version": 1,
+            "status": "accepted",
+            "reason": "acknowledged_from_test",
+        },
+    )
+    assert accepted_code == 0
+    assert accepted["result"]["suggestion"] == {
+        **snapshot["result"]["suggestions"][0],
+        "status": "accepted",
+        "version": 2,
+        "feedback_reason": "acknowledged_from_test",
+    }
+
+    conflict, conflict_code = _request(
+        "suggestion.transition",
+        {
+            "suggestion_id": suggestion.id,
+            "expected_version": 1,
+            "status": "dismissed",
+        },
+    )
+    assert conflict_code == 2
+    assert conflict["error"]["code"] == "VERSION_CONFLICT"
+
+
+@pytest.mark.parametrize("invalidate", ["policy", "disabled"])
+def test_suggestion_endpoints_fail_closed_when_authority_is_revoked(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    invalidate: str,
+) -> None:
+    cfg = config_mod.Config()
+    cfg.capture.deny_unknown_windows = False
+    cfg.suggestions.enabled = True
+    cfg.suggestions.quiet_hours_enabled = False
+    with fts.cursor() as conn:
+        suggestion = _seed_suggestion(conn, cfg, now=datetime.now(UTC))
+    if invalidate == "policy":
+        cfg.capture.excluded_app_names = ["Editor"]
+    else:
+        cfg.suggestions.enabled = False
+    monkeypatch.setattr(desktop_bridge.config_mod, "load", lambda: cfg)
+
+    snapshot, exit_code = _request(
+        "snapshot",
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 10,
+        },
+    )
+    assert exit_code == 0
+    assert snapshot["result"]["suggestions"] == []
+
+    transition, transition_code = _request(
+        "suggestion.transition",
+        {
+            "suggestion_id": suggestion.id,
+            "expected_version": suggestion.version,
+            "status": "accepted",
+        },
+    )
+    assert transition_code == 2
+    assert transition["error"]["code"] == "VERSION_CONFLICT"
+
+    trace, trace_code = _request(
+        "provenance.trace",
+        {"kind": "suggestion", "artifact_id": suggestion.id},
+    )
+    assert trace_code != 0
+    assert trace["error"]["code"] == "NOT_FOUND"
 
 
 def test_capture_pause_is_private_atomic_compare_and_set(ac_root: Path) -> None:

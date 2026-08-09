@@ -11,6 +11,7 @@ import { DailyWrapPage } from "./pages/DailyWrapPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PrivacyPage } from "./pages/PrivacyPage";
 import { ReviewPage } from "./pages/ReviewPage";
+import { SuggestionsPage } from "./pages/SuggestionsPage";
 import { TimelinePage } from "./pages/TimelinePage";
 
 interface AppProps {
@@ -124,6 +125,7 @@ export function App({ api = desktopApi }: AppProps) {
               snapshot.review_counts.conflict +
               snapshot.review_counts.applying
             : 0}
+          suggestionCount={snapshot?.suggestions.length ?? 0}
         />
         <div className="workspace">
           <div aria-live="polite" className="sr-only" role="status">{announcement}</div>
@@ -156,9 +158,19 @@ export function App({ api = desktopApi }: AppProps) {
             <OverviewPage
               busy={pauseBusy}
               onOpenReview={() => navigate("review")}
+              onOpenSuggestions={() => navigate("suggestions")}
               onOpenWrap={() => navigate("daily-wrap")}
               onSetPaused={(paused) => void setCapturePaused(paused)}
               snapshot={snapshot}
+            />
+          ) : null}
+          {snapshot && page === "suggestions" ? (
+            <SuggestionsPage
+              api={api}
+              enabled={snapshot.suggestions_enabled}
+              onChanged={refresh}
+              onOpenSource={setSourceSubject}
+              suggestions={snapshot.suggestions}
             />
           ) : null}
           {snapshot && page === "review" ? (

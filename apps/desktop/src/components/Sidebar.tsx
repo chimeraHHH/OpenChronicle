@@ -3,18 +3,20 @@ import type { PageId } from "../contracts";
 interface SidebarProps {
   current: PageId;
   reviewCount: number;
+  suggestionCount: number;
   onNavigate: (page: PageId) => void;
 }
 
 const pages: Array<{ id: PageId; label: string; glyph: string }> = [
   { id: "overview", label: "Overview", glyph: "O" },
+  { id: "suggestions", label: "Suggestions", glyph: "S" },
   { id: "review", label: "Review", glyph: "R" },
   { id: "daily-wrap", label: "Daily Wrap", glyph: "D" },
   { id: "timeline", label: "Timeline", glyph: "T" },
   { id: "privacy", label: "Privacy", glyph: "P" },
 ];
 
-export function Sidebar({ current, reviewCount, onNavigate }: SidebarProps) {
+export function Sidebar({ current, reviewCount, suggestionCount, onNavigate }: SidebarProps) {
   return (
     <aside className="sidebar" aria-label="Primary">
       <div className="brand" aria-label="OpenChronicle trusted console">
@@ -42,6 +44,11 @@ export function Sidebar({ current, reviewCount, onNavigate }: SidebarProps) {
             {page.id === "review" && reviewCount > 0 ? (
               <span className="sidebar__count" aria-label={`${reviewCount} need review`}>
                 {reviewCount}
+              </span>
+            ) : null}
+            {page.id === "suggestions" && suggestionCount > 0 ? (
+              <span className="sidebar__count" aria-label={`${suggestionCount} suggestions`}>
+                {suggestionCount}
               </span>
             ) : null}
           </button>

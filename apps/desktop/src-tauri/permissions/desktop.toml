@@ -19,4 +19,5 @@ permissions = [
   "allow-reject-candidate",
   "allow-forget-candidate",
   "allow-set-capture-paused",
+  "allow-transition-suggestion",
 ]
