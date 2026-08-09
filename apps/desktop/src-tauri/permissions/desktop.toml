@@ -53,4 +53,7 @@ permissions = [
   "allow-delete-resume-rescue-rewrite",
   "allow-decide-resume-rescue-rewrite",
   "allow-restore-resume-rescue-rewrite",
+  "allow-export-resume-rescue-rewrite-json",
+  "allow-export-resume-rescue-rewrite-docx",
+  "allow-export-resume-rescue-rewrite-pdf",
 ]

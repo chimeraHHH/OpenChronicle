@@ -1528,6 +1528,27 @@ def test_resume_rewrite_bridge_discloses_queues_reviews_and_restores_individuall
     )
     assert exported_code == 0
     assert exported["result"]["export"]["projection_binding"]["id"] == version_three["id"]
+    preview_digest = previewed["result"]["preview"]["document_digest"]
+    docx, docx_code = _request(
+        "resume_rescue.export_rewrite_docx",
+        {
+            "version_id": version_three["id"],
+            "expected_preview_document_digest": preview_digest,
+        },
+    )
+    assert docx_code == 0
+    assert docx["result"]["export"]["projection_id"] == version_three["id"]
+    assert docx["result"]["export"]["format"] == "docx"
+    pdf, pdf_code = _request(
+        "resume_rescue.export_rewrite_pdf",
+        {
+            "version_id": version_three["id"],
+            "expected_preview_document_digest": preview_digest,
+        },
+    )
+    assert pdf_code == 0
+    assert pdf["result"]["export"]["projection_id"] == version_three["id"]
+    assert pdf["result"]["export"]["format"] == "pdf"
     assert "apply_all" not in json.dumps(current)
 
     blocked_delete, blocked_delete_code = _request(

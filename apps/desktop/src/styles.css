@@ -910,6 +910,120 @@ select {
   margin: 1.2rem 0;
 }
 
+.resume-rescue__rewrite-disclosure,
+.resume-rescue__rewrite-review {
+  margin: 1.2rem 0;
+}
+
+.resume-rescue__provider-card {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 1rem;
+}
+
+.resume-rescue__provider-card > div,
+.resume-rescue__remote-consent {
+  padding: 0.85rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+}
+
+.resume-rescue__provider-card p {
+  margin: 0.35rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.resume-rescue__remote-consent {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 0.7rem;
+  align-items: flex-start;
+}
+
+.resume-rescue__remote-consent input {
+  width: auto;
+  margin-top: 0.2rem;
+}
+
+.resume-rescue__rewrite-jobs,
+.resume-rescue__proposal-list {
+  display: grid;
+  gap: 1rem;
+}
+
+.resume-rescue__rewrite-job {
+  margin: 0;
+}
+
+.resume-rescue__proposal {
+  padding: 1rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+}
+
+.resume-rescue__proposal-diff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.8rem;
+}
+
+.resume-rescue__proposal-diff > div,
+.resume-rescue__proposal-evidence > div,
+.resume-rescue__reviewed-output {
+  padding: 0.85rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 0.7rem;
+}
+
+.resume-rescue__proposal-diff p,
+.resume-rescue__proposal-evidence p {
+  margin-bottom: 0;
+  unicode-bidi: plaintext;
+}
+
+.resume-rescue__proposal-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.8rem;
+  margin-top: 0.8rem;
+}
+
+.resume-rescue__proposal-evidence ul {
+  padding-left: 1.1rem;
+}
+
+.resume-rescue__reviewed-output {
+  margin-top: 1rem;
+}
+
+.resume-rescue__version-history ol {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0;
+  list-style: none;
+}
+
+.resume-rescue__version-history li {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 0.65rem;
+}
+
+.resume-rescue__version-history small {
+  display: block;
+  margin-top: 0.25rem;
+  color: var(--muted);
+}
+
 .resume-rescue__json-review,
 .resume-rescue__json-candidates {
   display: grid;
@@ -1261,7 +1375,10 @@ details summary {
   .resume-rescue__source-grid,
   .resume-rescue__selection-grid,
   .resume-rescue__json-target,
-  .resume-rescue__json-decision { grid-template-columns: 1fr; }
+  .resume-rescue__json-decision,
+  .resume-rescue__provider-card,
+  .resume-rescue__proposal-diff,
+  .resume-rescue__proposal-evidence { grid-template-columns: 1fr; }
 
   .resume-rescue__json-source-fields li { grid-template-columns: 1fr; }
 }

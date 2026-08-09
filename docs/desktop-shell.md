@@ -34,11 +34,10 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v7** retains the
-v2 immutable Daily Wrap projection, v3 side-effect-free suggestion review, and
-v4 manual Prompt Rescue surface and v5 exact-selection receipt, then adds v6
-manual-conversation Reply Rescue review and v7's weaker-identity exact-selection
-Reply Rescue source.
+The bridge protocol is versioned and allowlisted. Protocol **v14** cumulatively
+includes immutable Daily Wrap reads, side-effect-free suggestions, Prompt and
+Reply Rescue review, exact-selection receipts, reviewed résumé source/import
+flows, deterministic preview/export, and supervised résumé proposal review.
 Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:
@@ -56,6 +55,12 @@ only:
 - Reply Rescue manual-conversation and distinct global-shortcut exact-selection
   queues, read/edit/retry/delete operations, visible unverified conversation-
   identity/recipient warnings, and explicit clipboard copy;
+- Résumé Rescue reviewed profile versions, immutable opportunity snapshots,
+  unchecked PDF/DOCX/JSON imports, exact fact selection and requirement
+  ledgers, deterministic preview, and loss-explicit JSON/DOCX/PDF export;
+- separately opted-in résumé wording jobs with disclosed model location,
+  proposal-level accept/reject CAS, non-destructive version restore, and
+  reviewed-derivative preview/JSON/DOCX/PDF export;
 - bounded provenance tracing and exact, policy-aware evidence resolution;
 - compare-and-set pause/resume for **new capture**.
 
@@ -90,6 +95,14 @@ submission, or any other external effect.
   delete to remove the local conversation, artifact, and provenance edge. It
   does not alter any mailbox, provider draft, clipboard content, or external
   application.
+- **Accept résumé wording** applies exactly one digest-bound, locally validated
+  proposal to a new opportunity-specific version. It never modifies the
+  reviewed master profile, and there is no accept-all command.
+- **Restore résumé wording** copies a prior reviewed artifact into a new current
+  immutable version; prior decisions remain in the audit history.
+- **Save résumé export** asks for a native destination, creates a new private
+  file, and refuses overwrite or symlink replacement. It does not upload,
+  autofill, apply, submit, or send the résumé.
 - **Permanently forget** can remove the candidate, accepted/derived memory
   entries, and affected Daily Wraps. An unchanged candidate-created Markdown
   container is deleted when empty; if it contains surviving canonical entries,

@@ -416,6 +416,11 @@ model analysis cannot appear to support newly edited text.
 enabled = false
 max_profile_chars = 500000
 max_opportunity_chars = 200000
+rewrite_enabled = false
+rewrite_poll_seconds = 5
+rewrite_lease_seconds = 300
+rewrite_max_input_chars = 200000
+rewrite_max_output_chars = 200000
 ```
 
 Résumé Rescue starts disabled. Its first local slice stores immutable versions
@@ -429,9 +434,12 @@ job-requirement mappings are explicitly unverified until reviewed. This slice
 is available in the trusted desktop console: users explicitly select facts and
 exact opportunity excerpts, inspect missing evidence and conflict exclusions,
 and review the resulting immutable bindings and policy ledger. The WebView
-receives only closed protocol-v9 objects through allowlisted native commands.
-This slice has no document upload, model call, ATS promise, application form
-access, or submission capability. The document preview is generated from the
+receives only closed protocol-v14 objects through allowlisted native commands.
+Local PDF, DOCX, and JSON Resume imports are extraction reviews: every candidate
+starts unchecked, source bytes are not admitted as facts, and only explicit
+selections enter a new immutable profile version. This slice has no document
+upload, ATS promise, application form access, or submission capability. The
+document preview is generated from the
 same current projection as a fixed A4 HTML tree plus a plain-text parser-order
 mirror and digest. It uses escaped facts, a no-network Content Security Policy,
 no links/forms/scripts/assets, and an empty-permission sandbox in the desktop.
@@ -440,6 +448,21 @@ bytes or a path to a general filesystem API: Rust re-fetches the current
 projection by ID, compares the document digest, asks for a destination with the
 system dialog, requires `.html`, creates a mode-0600 file, and refuses to
 replace an existing path or follow an existing symlink.
+
+`rewrite_enabled` is a separate opt-in for supervised model wording proposals.
+The configured `[models.resume_rescue]` identity and local/remote-or-unknown
+location are disclosed before queueing. Only selected reviewed facts and exact
+requirements already mapped to those facts can cross that boundary; the call
+uses JSON mode and no tools. Unknown fields, stale bindings, changed protected
+claim atoms, unsupported evidence, and bulk decisions fail closed. The desktop
+shows before/after text, rationale, mapped requirements, and exact evidence
+fragments, then permits only one proposal-level accept or reject at a time.
+Accepted wording creates an immutable opportunity-specific derivative and
+never mutates the master profile. Restoring history creates another version
+instead of erasing audit history. Reviewed derivatives can be previewed and
+saved as new JSON, DOCX, or PDF files through the same digest-bound native save
+boundary; there is no HTML, upload, autofill, application, or submit command for
+model-derived content.
 
 ## `[search]`
 

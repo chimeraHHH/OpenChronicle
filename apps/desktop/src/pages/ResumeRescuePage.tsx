@@ -18,6 +18,9 @@ import type {
   ResumeProjection,
   ResumeRequirementRequest,
   ResumeRescueState,
+  ResumeRewriteJob,
+  ResumeRewriteProposal,
+  ResumeRewriteVersion,
   ResumeSectionKind,
 } from "../contracts";
 import { displayError, formatDateTime } from "../format";
@@ -78,6 +81,8 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   const [requirementText, setRequirementText] = useState("");
   const [requirements, setRequirements] = useState<ResumeRequirementRequest[]>([]);
   const [preview, setPreview] = useState<ResumePreview | null>(null);
+  const [previewMode, setPreviewMode] = useState<"exact" | "rewrite">("exact");
+  const [rewriteRemoteConsent, setRewriteRemoteConsent] = useState(false);
   const [jsonImport, setJsonImport] = useState<OpenedJsonResumeReview | null>(null);
   const [jsonDecisions, setJsonDecisions] = useState<JsonCandidateDecision[]>([]);
   const [jsonUseNewProfile, setJsonUseNewProfile] = useState(false);
@@ -85,6 +90,7 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
   const [jsonDisplayName, setJsonDisplayName] = useState("");
   const [jsonLocale, setJsonLocale] = useState("");
   const [jsonExport, setJsonExport] = useState<JsonResumeExport | null>(null);
+  const [jsonExportMode, setJsonExportMode] = useState<"exact" | "rewrite">("exact");
   const [documentImport, setDocumentImport] =
     useState<OpenedResumeDocumentReview | null>(null);
   const [documentDecisions, setDocumentDecisions] = useState<JsonCandidateDecision[]>([]);
@@ -125,6 +131,23 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
       current = false;
     };
   }, [api]);
+
+  useEffect(() => {
+    if (!state?.rewrites.some((rewrite) => rewrite.status === "queued" || rewrite.status === "leased")) {
+      return;
+    }
+    let current = true;
+    const timer = window.setInterval(() => {
+      void api
+        .getResumeRescueState()
+        .then((next) => current && setState(next))
+        .catch((reason: unknown) => current && setError(displayError(reason)));
+    }, 1_500);
+    return () => {
+      current = false;
+      window.clearInterval(timer);
+    };
+  }, [api, state?.rewrites]);
 
   useEffect(() => {
     if (!documentImport) return;
@@ -399,6 +422,7 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
     clearMessages();
     setBusy(`json-export:${projection.id}`);
     try {
+      setJsonExportMode("exact");
       setJsonExport(
         await api.getResumeJsonExport(projection.id, projection.artifact_digest),
       );
@@ -418,10 +442,16 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
     clearMessages();
     setBusy("json-export-save");
     try {
-      const result = await api.exportResumeJson(
-        jsonExport.projection_binding.id,
-        jsonExport.document_digest,
-      );
+      const result =
+        jsonExportMode === "rewrite"
+          ? await api.exportResumeRewriteJson(
+              jsonExport.projection_binding.id,
+              jsonExport.document_digest,
+            )
+          : await api.exportResumeJson(
+              jsonExport.projection_binding.id,
+              jsonExport.document_digest,
+            );
       setNotice(
         `Created ${result.file_name} (${result.byte_count} bytes). No existing file was replaced.`,
       );
@@ -639,6 +669,7 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
     clearMessages();
     setBusy(`preview:${projection.id}`);
     try {
+      setPreviewMode("exact");
       setPreview(await api.getResumePreview(projection.id, projection.artifact_digest));
       window.requestAnimationFrame(() =>
         document.getElementById("resume-document-preview")?.scrollIntoView({ block: "start" }),
@@ -675,11 +706,18 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
     clearMessages();
     setBusy("export-docx");
     try {
-      const result = await api.exportResumeDocx(
-        preview.projection_id,
-        preview.artifact_digest,
-        preview.document_digest,
-      );
+      const result =
+        previewMode === "rewrite"
+          ? await api.exportResumeRewriteDocx(
+              preview.projection_id,
+              preview.artifact_digest,
+              preview.document_digest,
+            )
+          : await api.exportResumeDocx(
+              preview.projection_id,
+              preview.artifact_digest,
+              preview.document_digest,
+            );
       setNotice(
         `Created ${result.file_name} (${result.byte_count} bytes). No existing file was replaced.`,
       );
@@ -695,16 +733,156 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
     clearMessages();
     setBusy("export-pdf");
     try {
-      const result = await api.exportResumePdf(
-        preview.projection_id,
-        preview.artifact_digest,
-        preview.document_digest,
-      );
+      const result =
+        previewMode === "rewrite"
+          ? await api.exportResumeRewritePdf(
+              preview.projection_id,
+              preview.artifact_digest,
+              preview.document_digest,
+            )
+          : await api.exportResumePdf(
+              preview.projection_id,
+              preview.artifact_digest,
+              preview.document_digest,
+            );
       setNotice(
         `Created ${result.file_name} (${result.byte_count} bytes). No existing file was replaced.`,
       );
     } catch (reason: unknown) {
       setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function queueRewrite(projection: ResumeProjection) {
+    const provider = state?.rewrite_provider;
+    if (!state?.rewrite_enabled || !provider) {
+      setError("Supervised résumé rewriting is disabled in the local configuration.");
+      return;
+    }
+    if (provider.location === "remote_or_unknown" && !rewriteRemoteConsent) {
+      setError("Authorize this one remote request before sending the minimized reviewed facts.");
+      return;
+    }
+    clearMessages();
+    setBusy(`rewrite-queue:${projection.id}`);
+    try {
+      const result = await api.queueResumeRewrite({
+        projectionId: projection.id,
+        expectedArtifactDigest: projection.artifact_digest,
+        expectedModelIdentity: provider.model,
+        expectedProviderLocation: provider.location,
+        remoteEgressAuthorized:
+          provider.location === "remote_or_unknown" && rewriteRemoteConsent,
+      });
+      setNotice(
+        result.created
+          ? "Queued fact-constrained wording proposals. No profile fact was changed."
+          : "The existing proposal job was reused; no duplicate model request was created.",
+      );
+      setRewriteRemoteConsent(false);
+      await refresh();
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function retryRewrite(job: ResumeRewriteJob) {
+    clearMessages();
+    setBusy(`rewrite-retry:${job.id}`);
+    try {
+      await api.retryResumeRewrite(job.id, job.version);
+      setNotice("Queued a new supervised rewrite attempt against the same immutable source.");
+      await refresh();
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function decideRewrite(
+    job: ResumeRewriteJob,
+    proposal: ResumeRewriteProposal,
+    decision: "accepted" | "rejected",
+  ) {
+    clearMessages();
+    setBusy(`rewrite-decision:${proposal.proposal_id}:${decision}`);
+    try {
+      await api.decideResumeRewrite({
+        jobId: job.id,
+        proposalId: proposal.proposal_id,
+        expectedProposalDigest: proposal.proposal_digest,
+        expectedJobVersion: job.version,
+        expectedHeadId: job.head?.id ?? "",
+        expectedArtifactDigest:
+          job.head?.artifact_digest ?? job.projection_artifact_digest,
+        decision,
+      });
+      setNotice(
+        `${decision === "accepted" ? "Accepted" : "Rejected"} one wording proposal. The master profile remains unchanged.`,
+      );
+      await refresh();
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function restoreRewrite(job: ResumeRewriteJob, version: ResumeRewriteVersion) {
+    if (!job.head) return;
+    clearMessages();
+    setBusy(`rewrite-restore:${version.id}`);
+    try {
+      await api.restoreResumeRewrite({
+        targetVersionId: version.id,
+        expectedHeadId: job.head.id,
+        expectedArtifactDigest: job.head.artifact_digest,
+      });
+      setNotice("Restored the selected reviewed version as a new immutable history entry.");
+      await refresh();
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function openRewritePreview(version: ResumeRewriteVersion) {
+    clearMessages();
+    setBusy(`rewrite-preview:${version.id}`);
+    try {
+      setPreviewMode("rewrite");
+      setPreview(await api.getResumeRewritePreview(version.id, version.artifact_digest));
+      window.requestAnimationFrame(() =>
+        document.getElementById("resume-document-preview")?.scrollIntoView({ block: "start" }),
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+      setPreview(null);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function reviewRewriteJsonExport(version: ResumeRewriteVersion) {
+    clearMessages();
+    setBusy(`rewrite-json:${version.id}`);
+    try {
+      setJsonExportMode("rewrite");
+      setJsonExport(
+        await api.getResumeRewriteJsonExport(version.id, version.artifact_digest),
+      );
+      window.requestAnimationFrame(() =>
+        document.getElementById("resume-json-export-review")?.scrollIntoView({ block: "start" }),
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+      setJsonExport(null);
     } finally {
       setBusy("");
     }
@@ -731,11 +909,12 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
       </header>
 
       <section className="info-panel">
-        <h2>Deterministic safety boundary</h2>
+        <h2>Reviewed evidence boundary</h2>
         <p>
-          Every displayed line is copied exactly from a selected reviewed fact. Requirement
-          mappings are manual and unverified; missing evidence stays visible. The artifact has
-          <code> action_capability: none</code>.
+          Master profile facts and exact projections are immutable. Optional model output is shown
+          only as separate, fact-bound proposals; each proposal must be accepted or rejected on its
+          own, and accepted wording becomes a derived version with reversible history. Requirement
+          mappings remain unverified and every artifact has <code> action_capability: none</code>.
         </p>
       </section>
 
@@ -1282,6 +1461,55 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
         <div className="button-row"><button className="button button--primary" disabled={!state?.enabled || !selectedProfile || !selectedOpportunity || !selectedFactIds.length || busy === "compose"} onClick={() => void compose()} type="button">{busy === "compose" ? "Composing…" : "Create exact projection"}</button><p className="muted">No model, upload, application, or submission action is used.</p></div>
       </section>
 
+      <section className="settings-section resume-rescue__rewrite-disclosure" aria-labelledby="resume-rewrite-heading">
+        <div className="section-heading-row">
+          <div>
+            <p className="eyebrow">Optional supervised model pass</p>
+            <h2 id="resume-rewrite-heading">Wording proposals</h2>
+            <p className="muted">
+              The provider receives only selected reviewed fact text, exact mapped requirement
+              excerpts, and fixed style instructions. It receives no capture history, excluded
+              facts, credentials, file paths, tools, upload, application, or submission access.
+            </p>
+          </div>
+          <StatusBadge tone={state?.rewrite_enabled ? "info" : "neutral"}>
+            {state?.rewrite_enabled ? "Available" : "Off"}
+          </StatusBadge>
+        </div>
+        {state?.rewrite_provider ? (
+          <div className="resume-rescue__provider-card">
+            <div>
+              <strong>Configured model</strong>
+              <p><UntrustedText>{state.rewrite_provider.model}</UntrustedText></p>
+            </div>
+            <div>
+              <strong>Provider location</strong>
+              <p>{state.rewrite_provider.location === "local" ? "Local" : "Remote or unknown"}</p>
+            </div>
+            {state.rewrite_provider.location === "remote_or_unknown" ? (
+              <label className="resume-rescue__remote-consent">
+                <input
+                  checked={rewriteRemoteConsent}
+                  onChange={(event) => setRewriteRemoteConsent(event.currentTarget.checked)}
+                  type="checkbox"
+                />
+                <span>
+                  Authorize one minimized request to this remote-or-unknown provider. This consent
+                  is cleared after queueing and is never reused automatically.
+                </span>
+              </label>
+            ) : (
+              <p className="success-panel">Selected reviewed facts stay on this device.</p>
+            )}
+          </div>
+        ) : (
+          <p className="empty-callout">
+            Enable both Résumé Rescue and its supervised rewrite option to generate proposals.
+            Exact projection, preview, and export remain available without a model.
+          </p>
+        )}
+      </section>
+
       <section aria-labelledby="resume-results-heading">
         <div className="section-heading-row"><div><p className="eyebrow">Immutable local results</p><h2 id="resume-results-heading">Projection review</h2></div><button className="button button--ghost" onClick={() => void refresh().catch((reason: unknown) => setError(displayError(reason)))} type="button">Refresh</button></div>
         {state?.projections.length ? (
@@ -1346,6 +1574,29 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
                 <div className="button-row">
                   <button
                     className="button button--primary"
+                    disabled={
+                      Boolean(busy) ||
+                      !state.rewrite_enabled ||
+                      !state.rewrite_provider ||
+                      state.rewrites.some(
+                        (rewrite) => rewrite.projection_id === projection.id,
+                      ) ||
+                      (state.rewrite_provider.location === "remote_or_unknown" &&
+                        !rewriteRemoteConsent)
+                    }
+                    onClick={() => void queueRewrite(projection)}
+                    type="button"
+                  >
+                    {busy === `rewrite-queue:${projection.id}`
+                        ? "Queueing…"
+                        : state.rewrites.some(
+                            (rewrite) => rewrite.projection_id === projection.id,
+                          )
+                        ? "Proposals available below"
+                        : "Generate wording proposals"}
+                  </button>
+                  <button
+                    className="button button--secondary"
                     disabled={Boolean(busy)}
                     onClick={() => void openPreview(projection)}
                     type="button"
@@ -1353,7 +1604,7 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
                     {busy === `preview:${projection.id}` ? "Rendering…" : "Open document preview"}
                   </button>
                   <button
-                    className="button button--secondary"
+                    className="button button--ghost"
                     disabled={Boolean(busy)}
                     onClick={() => void reviewJsonExport(projection)}
                     type="button"
@@ -1377,6 +1628,241 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
         ) : (
           <p className="empty-callout">
             No current projection exists. Profile updates and opportunity supersessions deliberately hide stale results.
+          </p>
+        )}
+      </section>
+
+      <section aria-labelledby="resume-rewrite-review-heading" className="resume-rescue__rewrite-review">
+        <div className="section-heading-row">
+          <div>
+            <p className="eyebrow">Before / after / evidence / decision</p>
+            <h2 id="resume-rewrite-review-heading">Wording proposal review</h2>
+            <p className="muted">
+              Review proposals one at a time. There is deliberately no accept-all action; a model
+              suggestion never changes the reviewed master profile.
+            </p>
+          </div>
+        </div>
+        {state?.rewrites.length ? (
+          <div className="resume-rescue__rewrite-jobs">
+            {state.rewrites.map((job) => {
+              const projection = state.projections.find(
+                (item) => item.id === job.projection_id,
+              );
+              return (
+                <article className="settings-section resume-rescue__rewrite-job" key={job.id}>
+                  <div className="detail-header">
+                    <div>
+                      <p className="eyebrow">Updated {formatDateTime(job.updated_at)}</p>
+                      <h3>
+                        {projection ? (
+                          <>
+                            <UntrustedText>{projection.artifact.opportunity_binding.title}</UntrustedText>
+                            {" · "}
+                            <UntrustedText>{projection.artifact.opportunity_binding.employer}</UntrustedText>
+                          </>
+                        ) : (
+                          <UntrustedText>{job.projection_id}</UntrustedText>
+                        )}
+                      </h3>
+                      <p className="muted">
+                        <UntrustedText>{job.model_identity}</UntrustedText> · {job.provider_location}
+                      </p>
+                    </div>
+                    <StatusBadge
+                      tone={
+                        job.status === "ready"
+                          ? "positive"
+                          : job.status === "failed"
+                            ? "warning"
+                            : "info"
+                      }
+                    >
+                      {job.status}
+                    </StatusBadge>
+                  </div>
+
+                  {job.status === "failed" ? (
+                    <div className="warning-panel">
+                      <h3>Proposal generation failed safely</h3>
+                      <p>Error code: <UntrustedText>{job.error_code}</UntrustedText></p>
+                      <button
+                        className="button button--secondary"
+                        disabled={Boolean(busy)}
+                        onClick={() => void retryRewrite(job)}
+                        type="button"
+                      >
+                        {busy === `rewrite-retry:${job.id}` ? "Retrying…" : "Retry proposal generation"}
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {job.status === "queued" || job.status === "leased" ? (
+                    <p className="empty-callout" role="status">
+                      {job.status === "queued"
+                        ? "Waiting for the supervised local worker. This page refreshes automatically."
+                        : "The isolated provider worker is validating proposals. This page refreshes automatically."}
+                    </p>
+                  ) : null}
+
+                  {job.status === "ready" && !job.proposals.length ? (
+                    <p className="success-panel">
+                      The provider abstained or every proposal failed local verification. The exact
+                      projection remains the current result.
+                    </p>
+                  ) : null}
+
+                  {job.status === "ready" ? (
+                    <div className="resume-rescue__proposal-list">
+                      {job.proposals.map((proposal) => {
+                        const currentDecision = job.head?.decisions.find(
+                          (item) => item.proposal_id === proposal.proposal_id,
+                        );
+                        return (
+                          <section className="resume-rescue__proposal" key={proposal.proposal_id}>
+                            <div className="section-heading-row">
+                              <div>
+                                <p className="eyebrow">{proposal.section} · {proposal.fact_id}</p>
+                                <h3>Verified wording proposal</h3>
+                              </div>
+                              <StatusBadge tone={currentDecision?.status === "accepted" ? "positive" : currentDecision ? "neutral" : "info"}>
+                                {currentDecision?.status ?? "undecided"}
+                              </StatusBadge>
+                            </div>
+                            <div className="resume-rescue__proposal-diff">
+                              <div>
+                                <strong>Reviewed original</strong>
+                                <p><UntrustedText>{proposal.original_text}</UntrustedText></p>
+                              </div>
+                              <div>
+                                <strong>Model proposal</strong>
+                                <p><UntrustedText>{proposal.proposed_text}</UntrustedText></p>
+                              </div>
+                            </div>
+                            <div className="resume-rescue__proposal-evidence">
+                              <div>
+                                <strong>Why it proposed this</strong>
+                                <p><UntrustedText>{proposal.rationale}</UntrustedText></p>
+                              </div>
+                              <div>
+                                <strong>Mapped requirement IDs</strong>
+                                <p>{proposal.requirement_ids.join(", ") || "No mapped requirement target"}</p>
+                              </div>
+                              <div>
+                                <strong>Exact evidence fragments</strong>
+                                <ul>
+                                  {proposal.evidence_fragments.map((fragment, index) => (
+                                    <li key={`${proposal.proposal_id}-evidence-${index}`}>
+                                      <UntrustedText>{fragment}</UntrustedText>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            </div>
+                            <div className="button-row">
+                              <button
+                                aria-label={`Accept proposal ${proposal.proposal_id}`}
+                                className="button button--primary"
+                                disabled={Boolean(busy)}
+                                onClick={() => void decideRewrite(job, proposal, "accepted")}
+                                type="button"
+                              >
+                                {busy === `rewrite-decision:${proposal.proposal_id}:accepted`
+                                  ? "Accepting…"
+                                  : "Accept this proposal"}
+                              </button>
+                              <button
+                                aria-label={`Reject proposal ${proposal.proposal_id}`}
+                                className="button button--secondary"
+                                disabled={Boolean(busy)}
+                                onClick={() => void decideRewrite(job, proposal, "rejected")}
+                                type="button"
+                              >
+                                {busy === `rewrite-decision:${proposal.proposal_id}:rejected`
+                                  ? "Rejecting…"
+                                  : "Reject this proposal"}
+                              </button>
+                            </div>
+                          </section>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  {job.head ? (
+                    <div className="resume-rescue__reviewed-output">
+                      <div className="section-heading-row">
+                        <div>
+                          <p className="eyebrow">Current reviewed derivative</p>
+                          <h3>Version {job.head.version}</h3>
+                        </div>
+                        <StatusBadge tone="positive">Reversible</StatusBadge>
+                      </div>
+                      <div className="button-row">
+                        <button
+                          className="button button--primary"
+                          disabled={Boolean(busy)}
+                          onClick={() => void openRewritePreview(job.head!)}
+                          type="button"
+                        >
+                          {busy === `rewrite-preview:${job.head.id}` ? "Rendering…" : "Preview reviewed version"}
+                        </button>
+                        <button
+                          className="button button--secondary"
+                          disabled={Boolean(busy)}
+                          onClick={() => void reviewRewriteJsonExport(job.head!)}
+                          type="button"
+                        >
+                          {busy === `rewrite-json:${job.head.id}` ? "Preparing…" : "Review version JSON"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {job.versions.length ? (
+                    <details className="lineage-details resume-rescue__version-history">
+                      <summary>Immutable decision history ({job.versions.length})</summary>
+                      <ol>
+                        {job.versions.map((version) => (
+                          <li key={version.id}>
+                            <div>
+                              <strong>v{version.version} · {version.decision}</strong>
+                              <small>{formatDateTime(version.created_at)} · {version.action}</small>
+                            </div>
+                            {job.head?.id === version.id ? (
+                              <StatusBadge tone="positive">Current</StatusBadge>
+                            ) : (
+                              <button
+                                className="button button--ghost"
+                                disabled={Boolean(busy)}
+                                onClick={() => void restoreRewrite(job, version)}
+                                type="button"
+                              >
+                                {busy === `rewrite-restore:${version.id}` ? "Restoring…" : `Restore v${version.version}`}
+                              </button>
+                            )}
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  ) : null}
+                  <details className="lineage-details">
+                    <summary>Technical rewrite bindings</summary>
+                    <ul className="metadata-list--technical">
+                      <li>Job: {job.id} · attempt {job.attempt_count} · version {job.version}</li>
+                      <li>Base projection: {job.projection_id}</li>
+                      <li>Base artifact: {job.projection_artifact_digest}</li>
+                      <li>Validated output: {job.output_digest || "not available"}</li>
+                      <li>Remote egress authorized: {String(job.remote_egress_authorized)}</li>
+                    </ul>
+                  </details>
+                </article>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="empty-callout">
+            No wording proposal job exists. Start from an immutable exact projection above.
           </p>
         )}
       </section>
@@ -1459,14 +1945,20 @@ export function ResumeRescuePage({ api }: ResumeRescuePageProps) {
         <section className="settings-section resume-rescue__document" id="resume-document-preview">
           <div className="section-heading-row">
             <div>
-              <p className="eyebrow">Sandboxed deterministic document</p>
-              <h2>HTML preview</h2>
+              <p className="eyebrow">
+                {previewMode === "rewrite"
+                  ? "Sandboxed reviewed derivative"
+                  : "Sandboxed deterministic document"}
+              </p>
+              <h2>{previewMode === "rewrite" ? "Reviewed version preview" : "HTML preview"}</h2>
               <p className="muted">Template {preview.template_id} · renderer v{preview.renderer_version}</p>
             </div>
             <div className="button-row">
               <button className="button button--primary" disabled={Boolean(busy)} onClick={() => void exportPdfPreview()} type="button">{busy === "export-pdf" ? "Rendering…" : "Save new PDF file"}</button>
               <button className="button button--secondary" disabled={Boolean(busy)} onClick={() => void exportDocxPreview()} type="button">{busy === "export-docx" ? "Saving…" : "Save new DOCX file"}</button>
-              <button className="button button--ghost" disabled={Boolean(busy)} onClick={() => void exportPreview()} type="button">{busy === "export" ? "Saving…" : "Save new HTML file"}</button>
+              {previewMode === "exact" ? (
+                <button className="button button--ghost" disabled={Boolean(busy)} onClick={() => void exportPreview()} type="button">{busy === "export" ? "Saving…" : "Save new HTML file"}</button>
+              ) : null}
               <button className="button button--ghost" onClick={() => setPreview(null)} type="button">Close preview</button>
             </div>
           </div>

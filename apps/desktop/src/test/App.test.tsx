@@ -42,6 +42,7 @@ import {
   resumePreview,
   resumeProjection,
   resumeRescueState,
+  resumeRewriteJob,
   resolvedEvidence,
   snapshot,
   suggestion,
@@ -245,6 +246,170 @@ describe("trusted console", () => {
         String(command).includes("submit"),
       ),
     ).toBe(false);
+  });
+
+  it("reviews model wording one proposal at a time without changing the master profile", async () => {
+    const user = userEvent.setup();
+    const reviewed = resumeRewriteJob();
+    const undecided = { ...reviewed, head: null, versions: [] };
+    const providerState = {
+      ...resumeRescueState(),
+      rewrite_enabled: true,
+      rewrite_provider: {
+        model: reviewed.model_identity,
+        location: reviewed.provider_location,
+      },
+    };
+    let queued = false;
+    let accepted = false;
+    const reviewedPreview = {
+      ...resumePreview(),
+      projection_id: reviewed.head!.id,
+      artifact_digest: reviewed.head!.artifact_digest,
+      document_digest: "9".repeat(64),
+      plain_text: reviewed.head!.artifact.sections[0]!.items[0]!.text,
+    };
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_resume_rescue_state") {
+        return {
+          ...providerState,
+          rewrites: queued ? [accepted ? reviewed : undecided] : [],
+        };
+      }
+      if (command === "queue_resume_rescue_rewrite") {
+        queued = true;
+        return { rewrite: undecided, created: true };
+      }
+      if (command === "decide_resume_rescue_rewrite") {
+        accepted = true;
+        return { version: reviewed.head, created: true };
+      }
+      if (command === "get_resume_rescue_rewrite_preview") {
+        return { preview: reviewedPreview };
+      }
+      if (command === "export_resume_rescue_rewrite_pdf") {
+        return {
+          schema_version: 1,
+          projection_id: reviewed.head!.id,
+          artifact_digest: reviewed.head!.artifact_digest,
+          preview_document_digest: reviewedPreview.document_digest,
+          content_digest: "8".repeat(64),
+          format: "pdf",
+          file_name: "resume-reviewed-v1.pdf",
+          byte_count: 57_000,
+          created: true,
+          action_capability: "none",
+        };
+      }
+      return commandResult(command);
+    });
+
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: /Résumé Rescue/i }));
+
+    expect(await screen.findByText(reviewed.model_identity)).toBeInTheDocument();
+    expect(screen.getByText("Local")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Generate wording proposals" }));
+    expect(tauri.invoke).toHaveBeenCalledWith("queue_resume_rescue_rewrite", {
+      request: {
+        projection_id: reviewed.projection_id,
+        expected_artifact_digest: reviewed.projection_artifact_digest,
+        expected_model_identity: reviewed.model_identity,
+        expected_provider_location: "local",
+        remote_egress_authorized: false,
+      },
+    });
+
+    expect(await screen.findByText(reviewed.proposals[0]!.proposed_text)).toBeInTheDocument();
+    expect(screen.getByText(reviewed.proposals[0]!.rationale)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /accept all/i })).not.toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: `Accept proposal ${reviewed.proposals[0]!.proposal_id}`,
+      }),
+    );
+    expect(tauri.invoke).toHaveBeenCalledWith("decide_resume_rescue_rewrite", {
+      request: {
+        job_id: reviewed.id,
+        proposal_id: reviewed.proposals[0]!.proposal_id,
+        expected_proposal_digest: reviewed.proposals[0]!.proposal_digest,
+        expected_job_version: reviewed.version,
+        expected_head_id: "",
+        expected_artifact_digest: reviewed.projection_artifact_digest,
+        decision: "accepted",
+      },
+    });
+    expect(await screen.findByRole("heading", { name: "Version 1" })).toBeInTheDocument();
+    expect(screen.getAllByText("Current").length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole("button", { name: "Preview reviewed version" }));
+    expect(await screen.findByRole("heading", { name: "Reviewed version preview" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save new HTML file" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save new PDF file" }));
+    expect(await screen.findByText(/resume-reviewed-v1\.pdf/i)).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_rewrite_pdf", {
+      request: {
+        version_id: reviewed.head!.id,
+        expected_artifact_digest: reviewed.head!.artifact_digest,
+        expected_preview_document_digest: reviewedPreview.document_digest,
+      },
+    });
+
+    expect(resumeProfileVersion().profile.facts[0]!.text).toBe(
+      resumeProjection().artifact.sections[0]!.items[0]!.text,
+    );
+  });
+
+  it("requires one-request consent before a remote résumé rewrite", async () => {
+    const user = userEvent.setup();
+    const local = resumeRewriteJob();
+    const remote = {
+      ...local,
+      provider_location: "remote_or_unknown" as const,
+      remote_egress_authorized: true,
+      head: null,
+      versions: [],
+    };
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_resume_rescue_state") {
+        return {
+          ...resumeRescueState(),
+          rewrite_enabled: true,
+          rewrite_provider: {
+            model: remote.model_identity,
+            location: remote.provider_location,
+          },
+          rewrites: [],
+        };
+      }
+      if (command === "queue_resume_rescue_rewrite") {
+        return { rewrite: remote, created: true };
+      }
+      return commandResult(command);
+    });
+
+    render(<App />);
+    await user.click(await screen.findByRole("button", { name: /Résumé Rescue/i }));
+    const generate = await screen.findByRole("button", {
+      name: "Generate wording proposals",
+    });
+    expect(generate).toBeDisabled();
+    const consent = screen.getByRole("checkbox", {
+      name: /Authorize one minimized request/i,
+    });
+    await user.click(consent);
+    expect(generate).toBeEnabled();
+    await user.click(generate);
+    expect(tauri.invoke).toHaveBeenCalledWith("queue_resume_rescue_rewrite", {
+      request: {
+        projection_id: remote.projection_id,
+        expected_artifact_digest: remote.projection_artifact_digest,
+        expected_model_identity: remote.model_identity,
+        expected_provider_location: "remote_or_unknown",
+        remote_egress_authorized: true,
+      },
+    });
+    expect(consent).not.toBeChecked();
   });
 
   it("keeps JSON Resume candidates unchecked until review and shows losses before export", async () => {

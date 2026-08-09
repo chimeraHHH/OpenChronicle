@@ -425,6 +425,21 @@ pub(crate) struct ResumeRewriteVersionRequest {
     pub version_id: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRewriteExportJsonRequest {
+    pub version_id: String,
+    pub expected_document_digest: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeRewriteNativeExportRequest {
+    pub version_id: String,
+    pub expected_artifact_digest: String,
+    pub expected_preview_document_digest: String,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum ResumeProvenanceRequest {
@@ -1027,6 +1042,79 @@ pub async fn get_resume_rescue_rewrite_json_export(
 }
 
 #[tauri::command]
+pub async fn export_resume_rescue_rewrite_json(
+    app: AppHandle,
+    request: ResumeRewriteExportJsonRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.version_id)?;
+    validate_resume_digest(&request.expected_document_digest)?;
+    let export_request = ResumeExportJsonRequest {
+        projection_id: request.version_id,
+        expected_document_digest: request.expected_document_digest,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        export_resume_rewrite_json_blocking(&app, export_request)
+    })
+    .await
+    .map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_UNAVAILABLE",
+            "The reviewed résumé JSON export worker stopped unexpectedly.",
+        )
+    })?
+}
+
+#[tauri::command]
+pub async fn export_resume_rescue_rewrite_docx(
+    app: AppHandle,
+    request: ResumeRewriteNativeExportRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.version_id)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    validate_resume_digest(&request.expected_preview_document_digest)?;
+    let export_request = ResumeExportDocxRequest {
+        projection_id: request.version_id,
+        expected_artifact_digest: request.expected_artifact_digest,
+        expected_preview_document_digest: request.expected_preview_document_digest,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        export_resume_rewrite_docx_blocking(&app, export_request)
+    })
+    .await
+    .map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_UNAVAILABLE",
+            "The reviewed résumé DOCX export worker stopped unexpectedly.",
+        )
+    })?
+}
+
+#[tauri::command]
+pub async fn export_resume_rescue_rewrite_pdf(
+    app: AppHandle,
+    request: ResumeRewriteNativeExportRequest,
+) -> Result<Value, DesktopError> {
+    validate_resume_identifier(&request.version_id)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    validate_resume_digest(&request.expected_preview_document_digest)?;
+    let export_request = ResumeExportPdfRequest {
+        projection_id: request.version_id,
+        expected_artifact_digest: request.expected_artifact_digest,
+        expected_preview_document_digest: request.expected_preview_document_digest,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        export_resume_rewrite_pdf_blocking(&app, export_request)
+    })
+    .await
+    .map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_UNAVAILABLE",
+            "The reviewed résumé PDF export worker stopped unexpectedly.",
+        )
+    })?
+}
+
+#[tauri::command]
 pub async fn save_resume_rescue_profile(
     request: ResumeSaveProfileRequest,
 ) -> Result<Value, DesktopError> {
@@ -1556,8 +1644,27 @@ fn export_resume_json_blocking(
     app: &AppHandle,
     request: ResumeExportJsonRequest,
 ) -> Result<Value, DesktopError> {
-    let params = serde_json::json!({"projection_id": request.projection_id});
-    let value = bridge::call_blocking(Operation::ResumeRescueExportJson, params)?;
+    export_resume_json_with_operation(app, request, Operation::ResumeRescueExportJson)
+}
+
+fn export_resume_rewrite_json_blocking(
+    app: &AppHandle,
+    request: ResumeExportJsonRequest,
+) -> Result<Value, DesktopError> {
+    export_resume_json_with_operation(app, request, Operation::ResumeRescueExportRewriteJson)
+}
+
+fn export_resume_json_with_operation(
+    app: &AppHandle,
+    request: ResumeExportJsonRequest,
+    operation: Operation,
+) -> Result<Value, DesktopError> {
+    let params = if operation == Operation::ResumeRescueExportRewriteJson {
+        serde_json::json!({"version_id": request.projection_id})
+    } else {
+        serde_json::json!({"projection_id": request.projection_id})
+    };
+    let value = bridge::call_blocking(operation, params)?;
     let response: JsonResumeExportResponse = serde_json::from_value(value).map_err(|_| {
         DesktopError::new(
             "BRIDGE_PROTOCOL_ERROR",
@@ -1612,11 +1719,33 @@ fn export_resume_docx_blocking(
     app: &AppHandle,
     request: ResumeExportDocxRequest,
 ) -> Result<Value, DesktopError> {
-    let params = serde_json::json!({
-        "projection_id": request.projection_id,
-        "expected_preview_document_digest": request.expected_preview_document_digest,
-    });
-    let value = bridge::call_blocking(Operation::ResumeRescueExportDocx, params)?;
+    export_resume_docx_with_operation(app, request, Operation::ResumeRescueExportDocx)
+}
+
+fn export_resume_rewrite_docx_blocking(
+    app: &AppHandle,
+    request: ResumeExportDocxRequest,
+) -> Result<Value, DesktopError> {
+    export_resume_docx_with_operation(app, request, Operation::ResumeRescueExportRewriteDocx)
+}
+
+fn export_resume_docx_with_operation(
+    app: &AppHandle,
+    request: ResumeExportDocxRequest,
+    operation: Operation,
+) -> Result<Value, DesktopError> {
+    let params = if operation == Operation::ResumeRescueExportRewriteDocx {
+        serde_json::json!({
+            "version_id": request.projection_id,
+            "expected_preview_document_digest": request.expected_preview_document_digest,
+        })
+    } else {
+        serde_json::json!({
+            "projection_id": request.projection_id,
+            "expected_preview_document_digest": request.expected_preview_document_digest,
+        })
+    };
+    let value = bridge::call_blocking(operation, params)?;
     let response: ResumeNativeExportResponse = serde_json::from_value(value).map_err(|_| {
         DesktopError::new(
             "BRIDGE_PROTOCOL_ERROR",
@@ -1661,11 +1790,33 @@ fn export_resume_pdf_blocking(
     app: &AppHandle,
     request: ResumeExportPdfRequest,
 ) -> Result<Value, DesktopError> {
-    let params = serde_json::json!({
-        "projection_id": request.projection_id,
-        "expected_preview_document_digest": request.expected_preview_document_digest,
-    });
-    let value = bridge::call_blocking(Operation::ResumeRescueExportPdf, params)?;
+    export_resume_pdf_with_operation(app, request, Operation::ResumeRescueExportPdf)
+}
+
+fn export_resume_rewrite_pdf_blocking(
+    app: &AppHandle,
+    request: ResumeExportPdfRequest,
+) -> Result<Value, DesktopError> {
+    export_resume_pdf_with_operation(app, request, Operation::ResumeRescueExportRewritePdf)
+}
+
+fn export_resume_pdf_with_operation(
+    app: &AppHandle,
+    request: ResumeExportPdfRequest,
+    operation: Operation,
+) -> Result<Value, DesktopError> {
+    let params = if operation == Operation::ResumeRescueExportRewritePdf {
+        serde_json::json!({
+            "version_id": request.projection_id,
+            "expected_preview_document_digest": request.expected_preview_document_digest,
+        })
+    } else {
+        serde_json::json!({
+            "projection_id": request.projection_id,
+            "expected_preview_document_digest": request.expected_preview_document_digest,
+        })
+    };
+    let value = bridge::call_blocking(operation, params)?;
     let response: ResumeNativeExportResponse = serde_json::from_value(value).map_err(|_| {
         DesktopError::new(
             "BRIDGE_PROTOCOL_ERROR",

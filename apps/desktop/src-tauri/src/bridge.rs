@@ -90,6 +90,8 @@ pub(crate) enum Operation {
     ResumeRescueRestoreRewrite,
     ResumeRescuePreviewRewrite,
     ResumeRescueExportRewriteJson,
+    ResumeRescueExportRewriteDocx,
+    ResumeRescueExportRewritePdf,
     ProvenanceTrace,
     EvidenceResolve,
     CaptureSetPaused,
@@ -139,6 +141,8 @@ impl Operation {
             Self::ResumeRescueRestoreRewrite => "resume_rescue.restore_rewrite",
             Self::ResumeRescuePreviewRewrite => "resume_rescue.preview_rewrite",
             Self::ResumeRescueExportRewriteJson => "resume_rescue.export_rewrite_json",
+            Self::ResumeRescueExportRewriteDocx => "resume_rescue.export_rewrite_docx",
+            Self::ResumeRescueExportRewritePdf => "resume_rescue.export_rewrite_pdf",
             Self::ProvenanceTrace => "provenance.trace",
             Self::EvidenceResolve => "evidence.resolve",
             Self::CaptureSetPaused => "capture.set_paused",
@@ -147,9 +151,12 @@ impl Operation {
 
     fn timeout(self) -> Duration {
         match self {
-            Self::ResumeRescueReviewDocument | Self::ResumeRescueAdmitDocument => {
-                DOCUMENT_BRIDGE_TIMEOUT
-            }
+            Self::ResumeRescueReviewDocument
+            | Self::ResumeRescueAdmitDocument
+            | Self::ResumeRescueExportDocx
+            | Self::ResumeRescueExportPdf
+            | Self::ResumeRescueExportRewriteDocx
+            | Self::ResumeRescueExportRewritePdf => DOCUMENT_BRIDGE_TIMEOUT,
             _ => BRIDGE_TIMEOUT,
         }
     }
@@ -632,6 +639,26 @@ mod tests {
         );
         assert_eq!(
             Operation::ResumeRescueAdmitDocument.timeout(),
+            DOCUMENT_BRIDGE_TIMEOUT
+        );
+        assert_eq!(
+            Operation::ResumeRescueExportRewriteJson.as_str(),
+            "resume_rescue.export_rewrite_json"
+        );
+        assert_eq!(
+            Operation::ResumeRescueExportRewriteDocx.as_str(),
+            "resume_rescue.export_rewrite_docx"
+        );
+        assert_eq!(
+            Operation::ResumeRescueExportRewritePdf.as_str(),
+            "resume_rescue.export_rewrite_pdf"
+        );
+        assert_eq!(
+            Operation::ResumeRescueExportRewriteDocx.timeout(),
+            DOCUMENT_BRIDGE_TIMEOUT
+        );
+        assert_eq!(
+            Operation::ResumeRescueExportRewritePdf.timeout(),
             DOCUMENT_BRIDGE_TIMEOUT
         );
         assert_eq!(Operation::ResumeRescueReviewJson.timeout(), BRIDGE_TIMEOUT);

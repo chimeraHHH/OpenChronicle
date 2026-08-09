@@ -3304,6 +3304,72 @@ export const desktopApi = {
         return exported;
       },
     ),
+  exportResumeRewriteJson: (versionId: string, expectedDocumentDigest: string) =>
+    request(
+      "export_resume_rescue_rewrite_json",
+      {
+        version_id: versionId,
+        expected_document_digest: expectedDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumeJsonExportResult(value);
+        if (
+          result.projection_id !== versionId ||
+          result.document_digest !== expectedDocumentDigest
+        ) {
+          return protocolError("Reviewed résumé JSON export response identity");
+        }
+        return result;
+      },
+    ),
+  exportResumeRewriteDocx: (
+    versionId: string,
+    expectedArtifactDigest: string,
+    expectedPreviewDocumentDigest: string,
+  ) =>
+    request(
+      "export_resume_rescue_rewrite_docx",
+      {
+        version_id: versionId,
+        expected_artifact_digest: expectedArtifactDigest,
+        expected_preview_document_digest: expectedPreviewDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumeDocxExport(value);
+        if (
+          result.projection_id !== versionId ||
+          result.artifact_digest !== expectedArtifactDigest ||
+          result.preview_document_digest !== expectedPreviewDocumentDigest
+        ) {
+          return protocolError("Reviewed résumé DOCX export response identity");
+        }
+        return result;
+      },
+    ),
+  exportResumeRewritePdf: (
+    versionId: string,
+    expectedArtifactDigest: string,
+    expectedPreviewDocumentDigest: string,
+  ) =>
+    request(
+      "export_resume_rescue_rewrite_pdf",
+      {
+        version_id: versionId,
+        expected_artifact_digest: expectedArtifactDigest,
+        expected_preview_document_digest: expectedPreviewDocumentDigest,
+      },
+      (value) => {
+        const result = normalizeResumePdfExport(value);
+        if (
+          result.projection_id !== versionId ||
+          result.artifact_digest !== expectedArtifactDigest ||
+          result.preview_document_digest !== expectedPreviewDocumentDigest
+        ) {
+          return protocolError("Reviewed résumé PDF export response identity");
+        }
+        return result;
+      },
+    ),
   saveResumeProfile: (profile: ResumeProfile, expectedVersion?: number) =>
     request(
       "save_resume_rescue_profile",

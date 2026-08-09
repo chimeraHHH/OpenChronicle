@@ -274,6 +274,65 @@ describe("desktop bridge adapters", () => {
         decision: "accepted",
       },
     });
+
+    const versionId = head.id;
+    const artifactDigest = head.artifact_digest;
+    const documentDigest = "9".repeat(64);
+    tauri.invoke.mockResolvedValueOnce({
+      schema_version: 1,
+      projection_id: versionId,
+      document_digest: documentDigest,
+      file_name: "resume-reviewed.json",
+      byte_count: 1_024,
+      created: true,
+      action_capability: "none",
+    });
+    await desktopApi.exportResumeRewriteJson(versionId, documentDigest);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_rewrite_json", {
+      request: { version_id: versionId, expected_document_digest: documentDigest },
+    });
+
+    tauri.invoke.mockResolvedValueOnce({
+      schema_version: 1,
+      projection_id: versionId,
+      artifact_digest: artifactDigest,
+      preview_document_digest: documentDigest,
+      content_digest: "8".repeat(64),
+      format: "docx",
+      file_name: "resume-reviewed.docx",
+      byte_count: 4_096,
+      created: true,
+      action_capability: "none",
+    });
+    await desktopApi.exportResumeRewriteDocx(versionId, artifactDigest, documentDigest);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_rewrite_docx", {
+      request: {
+        version_id: versionId,
+        expected_artifact_digest: artifactDigest,
+        expected_preview_document_digest: documentDigest,
+      },
+    });
+
+    tauri.invoke.mockResolvedValueOnce({
+      schema_version: 1,
+      projection_id: versionId,
+      artifact_digest: artifactDigest,
+      preview_document_digest: documentDigest,
+      content_digest: "7".repeat(64),
+      format: "pdf",
+      file_name: "resume-reviewed.pdf",
+      byte_count: 56_000,
+      created: true,
+      action_capability: "none",
+    });
+    await desktopApi.exportResumeRewritePdf(versionId, artifactDigest, documentDigest);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("export_resume_rescue_rewrite_pdf", {
+      request: {
+        version_id: versionId,
+        expected_artifact_digest: artifactDigest,
+        expected_preview_document_digest: documentDigest,
+      },
+    });
   });
 
   it("saves reviewed résumé sources and composes only caller-selected exact facts", async () => {
