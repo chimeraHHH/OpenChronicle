@@ -491,6 +491,43 @@ def _validate_provenance(value: object) -> dict[str, Any]:
                 value.get("extraction_method"), "extraction_method", maximum=128
             ),
         }
+    if kind == "json_resume_field":
+        expected = {
+            "kind",
+            "reviewed_at",
+            "source_id",
+            "source_digest",
+            "json_pointer",
+            "value_digest",
+            "mapping",
+            "upstream_schema_version",
+        }
+        if set(value) != expected:
+            raise ResumeSchemaError("JSON Resume provenance must use the closed schema")
+        mapping = value.get("mapping")
+        if mapping not in {
+            "exact_field",
+            "deterministic_composite",
+            "openchronicle_extension_exact",
+        }:
+            raise ResumeSchemaError("JSON Resume provenance mapping is invalid")
+        pointer = value.get("json_pointer")
+        if not isinstance(pointer, str) or not pointer.startswith("/") or len(pointer) > 1_024:
+            raise ResumeSchemaError("JSON Resume provenance pointer is invalid")
+        return {
+            "kind": kind,
+            "reviewed_at": _timestamp(value.get("reviewed_at"), "reviewed_at"),
+            "source_id": _identifier(value.get("source_id"), "source_id"),
+            "source_digest": _digest(value.get("source_digest"), "source_digest"),
+            "json_pointer": pointer,
+            "value_digest": _digest(value.get("value_digest"), "value_digest"),
+            "mapping": mapping,
+            "upstream_schema_version": _text(
+                value.get("upstream_schema_version"),
+                "upstream_schema_version",
+                maximum=64,
+            ),
+        }
     if kind == "reviewed_memory":
         expected = {
             "kind",

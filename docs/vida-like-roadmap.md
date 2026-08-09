@@ -290,6 +290,12 @@ privacy UX is validated on a signed macOS build.
   the system save dialog, creates only a new private `.html` file, and never
   exposes general filesystem write or overwrite authority. Native engine
   packaging and digest-bound PDF/DOCX export remain open.
+  The JSON Resume interoperability backend now pins the canonical v1 schema,
+  generates review-only exact/composite import candidates, ledgers contact,
+  reference, URL, unknown, and unmapped fields, and exports only the selected
+  projection with standard-mapping losses made explicit. Native file picking,
+  desktop candidate admission, and verified `.json` save remain open before
+  this becomes a complete UI slice.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only

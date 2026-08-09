@@ -77,6 +77,43 @@ boundary: the WebView supplies only a projection ID and expected digest; Rust
 re-fetches and validates the current renderer output, opens the native save
 dialog, and creates a new `.html` file without overwrite authority.
 
+## Research update: interoperability must expose loss
+
+The canonical JSON Resume
+[`schema.json` at commit `272929d`](https://github.com/jsonresume/jsonresume.org/blob/272929d51b450dbd5a0d242af24c60252904f405/packages/schema/schema.json)
+is JSON Schema draft-07, identifies itself as version `v1.0.0`, and permits
+additional properties at the root and nested objects. OpenChronicle therefore
+accepts extension fields, but lists their JSON Pointer paths and digests their
+unmapped values instead of trusting or silently discarding them.
+
+Reactive Resume v5.2.5's current
+[JSON Resume importer](https://github.com/AmruthPillai/Reactive-Resume/blob/88a19619daf5fd0fc09c73f5b19fa23860dbd230/packages/import/src/json-resume.tsx)
+also uses loose objects. Its conversion filters work entries without company or
+position, education without institution, projects without name, and several
+other incomplete items. Its
+[import guide](https://github.com/AmruthPillai/Reactive-Resume/blob/88a19619daf5fd0fc09c73f5b19fa23860dbd230/docs/guides/importing-resumes.mdx)
+correctly warns users to review every imported section and says a native
+Reactive Resume backup preserves more than JSON Resume. OpenChronicle makes
+that loss machine-visible before admission rather than relying on a generic
+post-import warning.
+
+RenderCV v2.8 accepts YAML, JSON, and JSON5 through its own strongly validated
+[input model](https://docs.rendercv.com/user_guide/yaml_input_structure/); that
+does not make its schema JSON Resume-compatible. OpenResume's current AGPL tree
+contains a behaviorally useful
+[PDF parser](https://github.com/xitanggg/open-resume/tree/4f8255a2c763479837f69f1dccf2a3338730cd79/src/app/lib/parse-resume-from-pdf),
+but no JSON Resume import path was found. These boundaries rule out pretending
+that “JSON input” means round-trip interoperability.
+
+The selected mapping consequently has two separate operations. Import produces
+unreviewed exact-field or deterministic-composite candidates, source-field
+bindings, unknown-field paths, and omission reasons; an explicit admission
+creates new `json_resume_field` provenance. Export starts from one selected
+projection rather than the master profile, uses only narrow standard mappings,
+and emits an explicit loss ledger plus an untrusted namespaced extension for
+exact OpenChronicle round trips. Other tools may ignore that extension, and the
+export says so.
+
 ## Research update: provenance helps only inside its evidence boundary
 
 [Career-Aware Resume Tailoring via Multi-Source RAG with Provenance Tracking](https://arxiv.org/abs/2605.05257)

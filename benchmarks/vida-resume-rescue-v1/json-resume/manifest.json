@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "suite_id": "OC-Vida-JSON-Resume-Interop-v1",
+  "canonical_schema": {
+    "repository": "jsonresume/jsonresume.org",
+    "commit": "272929d51b450dbd5a0d242af24c60252904f405",
+    "version": "v1.0.0",
+    "url": "https://raw.githubusercontent.com/jsonresume/jsonresume.org/272929d51b450dbd5a0d242af24c60252904f405/packages/schema/schema.json",
+    "sha256": "a07eedd3d86ac5bb61d72e136d788269e35baf42c35391e15d0be39b3dc5a4bd",
+    "draft": "http://json-schema.org/draft-07/schema#",
+    "additional_properties": true,
+    "license": "MIT"
+  },
+  "reference_implementations": [
+    {
+      "repository": "AmruthPillai/Reactive-Resume",
+      "commit": "88a19619daf5fd0fc09c73f5b19fa23860dbd230",
+      "release": "v5.2.5",
+      "license": "MIT",
+      "reference_paths": [
+        "packages/import/src/json-resume.tsx",
+        "packages/import/src/json-resume.test.ts",
+        "docs/guides/importing-resumes.mdx"
+      ],
+      "observed_boundary": "loose schema mapping filters structurally incomplete entries; user documentation requires post-import review"
+    },
+    {
+      "repository": "xitanggg/open-resume",
+      "commit": "4f8255a2c763479837f69f1dccf2a3338730cd79",
+      "release": "none",
+      "license": "AGPL-3.0",
+      "reference_paths": ["src/app/lib/parse-resume-from-pdf"],
+      "observed_boundary": "behavior-only PDF parsing reference; no JSON Resume interoperability path was found"
+    },
+    {
+      "repository": "rendercv/rendercv",
+      "commit": "release-v2.8",
+      "release": "v2.8",
+      "license": "MIT",
+      "reference_paths": ["schema.json", "docs/user_guide/yaml_input_structure"],
+      "observed_boundary": "validated RenderCV YAML/JSON model is a distinct schema, not JSON Resume"
+    }
+  ],
+  "hard_gates": {
+    "source_maximum_bytes": 500000,
+    "duplicate_json_keys_rejected": true,
+    "non_finite_numbers_rejected": true,
+    "unknown_extensions_ledgered": true,
+    "unmapped_values_digest_ledgered": true,
+    "contact_fields_not_auto_admitted": true,
+    "third_party_references_not_auto_admitted": true,
+    "candidate_review_required": true,
+    "selected_projection_only_export": true,
+    "standard_mapping_losses_ledgered": true,
+    "round_trip_extension_untrusted": true,
+    "action_capability": "none"
+  }
+}
