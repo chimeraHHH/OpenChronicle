@@ -36,6 +36,23 @@ Source: [Vida public product page](https://web-prod.vida.app/).
 | [GitHub Models prompt files](https://docs.github.com/en/github-models/use-github-models/storing-prompts-in-github-repositories) | Repository-stored `.prompt.yml` configurations make prompt changes reviewable | Keep the OpenChronicle system template versioned in the repository, never only in code or provider UI. |
 | [NVIDIA NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) | Separate input/output validation rails, request IDs, and fail-closed configuration validation | Use deterministic local schema/policy checks before and after the model. Do not delegate action authority to a guardrail model. |
 
+### Evaluation-neighborhood update
+
+The frozen evaluator was additionally checked against four active primary
+repositories before implementation:
+
+| Reference | Mechanism retained | Deliberate exclusion |
+|---|---|---|
+| [NVIDIA garak](https://github.com/NVIDIA/garak) | Keep adversarial probes separate from detectors/generators and report the prompts that cause hits. | Do not load its broad plugin/model execution surface into the desktop product. |
+| [OpenAI Evals](https://github.com/openai/evals) | Version the dataset and custom task-specific evaluation rather than relying on a generic score. | Do not require an OpenAI key or upload private user prompts for the committed offline gate. |
+| [UK AI Security Institute Inspect](https://github.com/UKGovernmentBEIS/inspect_ai) | Separate dataset/task execution from scoring and retain reproducible run metadata. | Tool-use and model-graded scorers are outside this no-action deterministic safety gate. |
+| [DeepEval](https://github.com/confident-ai/deepeval) | Treat LLM behavior as regression tests; retain explicit JSON-correctness and prompt-alignment dimensions. | LLM-as-judge results may be exploratory evidence, never the sole formal safety verdict. |
+
+These references reinforce the chosen split: a frozen synthetic case file, a
+separate metric contract, complete provider corpora with model/template
+identity, and deterministic local scoring. They do not change the product
+capability boundary.
+
 ## Selected product contract
 
 Prompt Rescue is explicitly initiated. It is not a proactive ambient suggestion

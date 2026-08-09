@@ -224,6 +224,9 @@ privacy UX is validated on a signed macOS build.
   composition, asynchronous status, side-by-side review/edit, explicit copy,
   retry, and native-confirmed delete in the desktop shell. The exact macOS
   selection adapter remains; manual paste does not satisfy that gate by itself.
+  The frozen 17-case adversarial dataset, deterministic grader, and raw-input
+  negative-control report now exist under `benchmarks/vida-prompt-rescue-v1`;
+  a complete provider corpus is the next quality gate.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
   send/submit capability.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.

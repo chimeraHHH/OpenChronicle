@@ -70,7 +70,7 @@ class PromptRescueService:
         validate_config(self.cfg)
         if not self.cfg.prompt_rescue.enabled:
             raise ValueError("prompt rescue is disabled")
-        normalized = _validate_source(
+        normalized = validate_source(
             self.cfg,
             rough_prompt=rough_prompt,
             target=target,
@@ -194,7 +194,7 @@ class PromptRescueService:
             raise store.PromptRescueConflict("prompt rescue changed")
         output = dict(current.output)
         output["improved_prompt"] = improved_prompt
-        validated = _validate_output(self.cfg, output)
+        validated = validate_output(self.cfg, output)
         return store.edit_output(
             self.conn,
             job_id=job_id,
@@ -239,7 +239,7 @@ class PromptRescueService:
             raw = json.loads(text)
         except json.JSONDecodeError as exc:
             raise PromptRescueValidationError("prompt rescue output is invalid") from exc
-        return _validate_output(self.cfg, raw)
+        return validate_output(self.cfg, raw)
 
     def _current(self, job: store.PromptRescueJob) -> bool:
         sources = provenance_store.direct_sources_checked(
@@ -267,7 +267,7 @@ def validate_config(cfg: Config) -> None:
             raise ValueError(f"prompt_rescue.{name} is invalid")
 
 
-def _validate_source(
+def validate_source(
     cfg: Config,
     *,
     rough_prompt: str,
@@ -316,7 +316,7 @@ def _validate_source(
     return normalized
 
 
-def _validate_output(cfg: Config, raw: object) -> dict[str, Any]:
+def validate_output(cfg: Config, raw: object) -> dict[str, Any]:
     if not isinstance(raw, dict) or set(raw) != _OUTPUT_FIELDS:
         raise PromptRescueValidationError("prompt rescue output schema is invalid")
     improved = raw.get("improved_prompt")
