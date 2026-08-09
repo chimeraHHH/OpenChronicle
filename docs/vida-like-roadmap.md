@@ -240,7 +240,14 @@ privacy UX is validated on a signed macOS build.
   A reachable enabled provider is still required to publish a real comparison;
   the next selection gate is the real-application compatibility matrix.
 - [ ] Reply Rescue and Résumé Rescue with exact target/source binding and no
-  send/submit capability.
+  send/submit capability. Clean-room competitor, standards, repository,
+  source-binding, artifact, and frozen-evaluation contracts are now recorded in
+  [vida-reply-rescue-scout-2026-08-09.md](vida-reply-rescue-scout-2026-08-09.md)
+  and
+  [vida-resume-rescue-scout-2026-08-09.md](vida-resume-rescue-scout-2026-08-09.md).
+  Implementation starts with Reply Rescue's honestly labeled
+  `manual_conversation` prepared artifact; connector identities/drafts and all
+  send/submit authority remain later, separate capabilities.
 - [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only

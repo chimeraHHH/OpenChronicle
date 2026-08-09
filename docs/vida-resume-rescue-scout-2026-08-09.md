@@ -1,0 +1,160 @@
+# Résumé Rescue clean-room scout and implementation contract
+
+Research date: **2026-08-09**. This is a point-in-time clean-room design record.
+“Résumé Rescue” here means a job-application résumé workflow, not interruption
+recovery. Vendor claims and open-source repositories are reference evidence,
+not proof of hiring outcomes or permission to transplant implementations.
+
+## Public parity anchor
+
+Vida says Resume Rescue turns raw experience, documents, and context into a
+production-grade résumé tailored to an opportunity. It does not publish a data
+model, evidence policy, renderer, matching metric, or submission boundary.
+OpenChronicle targets a user-started, job-targeted, reviewable résumé while
+making factual support inspectable and never submitting an application.
+
+Source: [Vida public product page](https://web-prod.vida.app/).
+
+## Product and standards evidence
+
+| Reference | Publicly demonstrated mechanism | OpenChronicle consequence |
+|---|---|---|
+| [Europass CV](https://europass.europa.eu/en/create-europass-cv) and [profile versus CV](https://europass.europa.eu/en/what-difference-between-europass-profile-and-cv) | A broad reusable profile holds experience; users select relevant facts to create multiple tailored CVs. | Store one evidence-backed master profile, then create immutable job-specific projections. Do not overwrite the source profile during tailoring. |
+| [Teal tailoring guide](https://help.tealhq.com/en/articles/14435726-how-to-tailor-your-resume-for-a-specific-job) and [builder guide](https://help.tealhq.com/en/articles/14435724-how-to-build-your-resume-in-teal) | A comprehensive base résumé supplies bullets that are selected and adapted to a saved job description. | Preserve the job snapshot and selected fact IDs. Treat match scores and effectiveness as vendor claims, not outcome evidence. |
+| [JSON Resume schema](https://github.com/jsonresume/jsonresume.org/tree/master/packages/schema) | The maintained MIT-licensed standard represents basics, work, education, skills, projects, and other sections in one JSON document, with validation and semantic versioning. The old `resume-schema` repository is archived and points to this monorepo. | Use a small versioned internal schema with an explicit JSON Resume export mapping later. Do not bind the database directly to an evolving permissive external schema. |
+
+## Repository evidence
+
+| Reference | Mechanism worth studying | Deliberate exclusion |
+|---|---|---|
+| [Reactive Resume](https://github.com/amruthpillai/reactive-resume) | MIT; structured editing, real-time preview, JSON Resume import, multiple export formats, self-hosting, and client-side PDF generation. | Its large web/auth/server stack is not needed for the local first slice. Layout UX is a reference; its data model is not factual provenance. |
+| [OpenResume](https://github.com/xitanggg/open-resume) | Local-browser builder, real-time PDF preview, PDF parsing, and a parser-readability check demonstrate a useful import/render/parse loop. | It is AGPL-3.0 and therefore a behavior-only reference here. Its ATS and hiring-success statements are vendor claims, not independent validation. No source code is copied. |
+| [RenderCV](https://github.com/rendercv/rendercv) | MIT; schema-driven YAML/JSON input, strict validation, reproducible/version-controlled documents, and typography-oriented rendering. | Its renderer/dependency stack is not adopted before a packaging and license review. A deterministic internal HTML preview is the smaller initial step. |
+| [Resume Matcher docs](https://github.com/srbhr/Resume-Matcher-Docs) | Apache-2.0 documentation for parsing résumés and job descriptions and comparing keywords/key terms/embeddings. | Match scores are exploratory relevance signals only. They cannot justify unsupported claims, keyword stuffing, or an “ATS pass” promise. |
+
+## Selected source model
+
+Résumé Rescue has two independently versioned source sets.
+
+The **master profile** is user-controlled structured data. Each fact and bullet
+has a stable ID, exact value, review status, and one or more provenance entries:
+
+- `manual_reviewed`: the user explicitly entered and approved the fact;
+- `document_excerpt`: bounded source ID, content digest, page/section/span, and
+  extraction method; or
+- `reviewed_memory`: a specific long-term memory entry with provenance and the
+  user's explicit admission into the résumé profile.
+
+No capture, timeline inference, generic memory search, or model output becomes
+a master fact automatically. Extracted candidates remain unverified until the
+user reviews them. Conflicting dates, titles, employers, degrees, skills, and
+metrics stay as visible conflicts; the system does not guess a winner.
+
+The **opportunity snapshot** contains:
+
+- stable ID, employer, title, source URL when present, capture time, exact text,
+  and content digest;
+- user-stated priorities and locale/language;
+- extracted responsibilities, requirements, preferences, and keywords with
+  source spans; and
+- schema/template/extractor versions plus privacy-policy digest.
+
+Job descriptions are ephemeral web content. Every tailored artifact binds the
+immutable snapshot, never a live URL alone.
+
+## Selected projection and artifact contract
+
+```text
+reviewed master facts + immutable opportunity snapshot
+        -> deterministic eligibility/conflict preflight
+        -> no-tool tailoring job -> strict structured validation
+        -> claim-to-evidence verification
+        -> deterministic preview -> review/export
+```
+
+A tailored résumé is a projection, not a new truth store. It may select,
+reorder, shorten, and rephrase supported facts. Every visible claim retains the
+master fact IDs and provenance supporting it. Any proposed claim that cannot be
+entailed by admitted facts is rejected or shown as `missing_evidence`; it never
+enters the rendered résumé silently.
+
+The first artifact contains:
+
+- schema/template/renderer and provider/model/location identities;
+- master-profile version/digest and opportunity snapshot/digest;
+- ordered sections and bullets with stable IDs;
+- claim-to-evidence links and transformation kind;
+- job requirement coverage separate from factual support;
+- conflicts, missing evidence, unanswered questions, and excluded facts;
+- deterministic document/preview digest; and
+- `action_capability: none`.
+
+The initial export target is structured JSON plus a deterministic HTML preview.
+PDF/DOCX export follows only after render/parse/layout evaluation. Application
+upload, form filling, account access, and submission are absent.
+
+## Privacy and lifecycle
+
+- The workflow is disabled by default on upgrade and starts only by an explicit
+  user action.
+- Contact details, employment history, education, compensation, citizenship,
+  disability, and demographic data are sensitive. Source selection and cloud
+  provider disclosure occur before egress.
+- A local provider may operate on-device. Cloud use is opt-in and receives only
+  the selected opportunity plus selected reviewed facts, not the entire
+  OpenChronicle history.
+- Changing a master fact, its review state/provenance, the job snapshot, source
+  policy, template, or renderer invalidates the tailored artifact.
+- Delete removes the job snapshot, projections, edits, renders, and provenance
+  edges. Deleting a master fact invalidates every dependent projection.
+
+## Frozen evaluation contract
+
+The versioned fixture must cover:
+
+- conflicting employment/education dates, overlapping roles, aliases, and
+  current-role end dates;
+- achievements with and without quantitative evidence;
+- skills merely named in a job description but absent from the master profile;
+- degree, certification, clearance, language, location, and work-authorization
+  requirements with missing evidence;
+- prompt injection and false instructions inside job descriptions/documents;
+- sensitive or legally risky attributes that should remain excluded;
+- stale/changed job descriptions, changed master facts, deleted evidence, and
+  extraction/page-span failures;
+- multilingual and Unicode content, long URLs, sparse profiles, duplicates,
+  malformed dates, and oversized documents;
+- model timeout/unavailability/malformed output/unknown fields/replay; and
+  every attempted upload, application submission, or tool action.
+
+Quality metrics are supported-claim rate, fact preservation, conflict recall,
+job-requirement coverage, relevant-fact selection, unsupported-claim rate,
+human preference, parse round-trip, text extraction order, layout overflow,
+render determinism, and document diff stability. Hard gates are zero fabricated
+facts, zero silent conflict resolution, zero excluded-data egress, and zero
+external mutations. Keyword coverage is reported separately and never treated
+as proof of ATS or hiring success.
+
+## Rejected shortcuts
+
+- Asking a model to rewrite an uploaded résumé without per-claim provenance.
+- Treating a job description as evidence that the user has a listed skill.
+- Inventing metrics, titles, dates, certifications, tools, or outcomes to fill
+  gaps.
+- Optimizing a single opaque “ATS score” or keyword density.
+- Mutating the master profile while generating one job-specific version.
+- Starting with form filling, account login, upload, or application submission.
+- Copying AGPL implementation code into OpenChronicle.
+
+## Implementation order
+
+1. Define reviewed master-fact, provenance, opportunity-snapshot, projection,
+   and claim-ledger schemas plus invalidation rules.
+2. Add deterministic fixtures and an adversarial factual-support evaluator.
+3. Add local structured profile/job composition and review; generation remains
+   a supervised no-tool job.
+4. Add deterministic HTML preview and render/parse/layout acceptance.
+5. Add reviewed document extraction, then JSON Resume import/export mapping.
+6. Consider PDF/DOCX export after packaging evaluation. Application submission
+   remains outside Stage 2.
+
