@@ -151,9 +151,12 @@ Each source conversation segment is serialized as one isolated synthetic
 activity event, containing only its dialogue text in original order. The query
 is only the selected question. Answers, rubrics, gold state, provenance quotes,
 target metadata, evidence flags, and distractor metadata are never indexed.
-The evaluator then calls the production activity SQLite FTS5/BM25 search
-primitive with the pre-registered `top_k=10`, strict-AND followed by relaxed-OR
-only after zero hits, and no adjacent-event expansion.
+The archived baseline calls the production activity SQLite FTS5/BM25 search as
+it existed at commit `9f4a437`: pre-registered `top_k=10`, strict-AND followed
+by relaxed-OR only after zero hits, and no adjacent-event expansion. Current
+production search also completes an underfilled strict page from deduplicated
+OR candidates; later reports identify that contract explicitly rather than
+rewriting the historical result.
 
 This unit is a **dataset-native conversation-segment proxy**, not a claim that
 MemOps segments equal OpenChronicle reducer events. Production events are

@@ -1,0 +1,4568 @@
+{
+  "comparisons": {
+    "complete_case_recall_drop": 0.04,
+    "mean_reciprocal_rank_drop": 0.0,
+    "provenance_segment_recall_macro_drop": 0.016667,
+    "provenance_turn_recall_macro_drop": 0.01
+  },
+  "dataset": {
+    "adjacent_segment_count": 150,
+    "gold_provenance_item_count": 166,
+    "gold_segment_count": 111,
+    "logical_pair_count": 50,
+    "longitudinal_distractor_segment_count": 286,
+    "longitudinal_evidence_carrier_count": 150,
+    "longitudinal_segment_count": 2500,
+    "manifest_path": "benchmarks/memops50-heldout-v1/json/manifest.json",
+    "manifest_sha256": "26404cbf01b75479bc2076d7426d91eab37d0f512e1ced3cf1f055c989c1f378",
+    "row_count": 100,
+    "tier_id": "memops50-heldout-adjacent-longitudinal-v1",
+    "unique_gold_turn_count": 165,
+    "upstream_commit": "312af65e2c7b6d1b70f062ffa8b4cde32aaf6f35"
+  },
+  "environment": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.11.15",
+    "sqlite": "3.53.1"
+  },
+  "evaluation_id": "memops50-production-activity-retrieval-v1",
+  "gate_verdict": {
+    "checks": {
+      "adjacent_provenance_segment_recall_macro_at_k": true,
+      "longitudinal_complete_case_recall_rate": true,
+      "longitudinal_empty_hit_rate": true,
+      "longitudinal_injected_distractor_at_1_rate": true,
+      "longitudinal_injected_distractor_contamination_at_k": false,
+      "longitudinal_mean_reciprocal_rank": true,
+      "longitudinal_provenance_segment_recall_at_k": true,
+      "longitudinal_provenance_turn_recall_at_k": true,
+      "mean_reciprocal_rank_drop": true,
+      "provenance_segment_recall_drop": true,
+      "repository_clean": true
+    },
+    "gates": {
+      "adjacent_provenance_segment_recall_at_k_min": 0.9,
+      "longitudinal_complete_case_recall_rate_min": 0.6,
+      "longitudinal_empty_hit_rate_max": 0.0,
+      "longitudinal_injected_distractor_at_1_rate_max": 0.1,
+      "longitudinal_injected_distractor_contamination_at_k_max": 0.2,
+      "longitudinal_mean_reciprocal_rank_min": 0.7,
+      "longitudinal_provenance_segment_recall_at_k_min": 0.8,
+      "longitudinal_provenance_turn_recall_at_k_min": 0.8,
+      "mean_reciprocal_rank_drop_max": 0.25,
+      "provenance_segment_recall_drop_max": 0.2,
+      "repository_clean_required": true
+    },
+    "passed": false
+  },
+  "metric_contract": {
+    "path": "benchmarks/memops50-lifecycle-v1/json/retrieval_metric_contract.json",
+    "sha256": "7f649fd2506eab4f7d825b83006fafca1d628c72245179b003b7bced1a899e4a"
+  },
+  "repository": {
+    "commit": "ee58ca65df12a4d50ec8584546e815388de37dfd",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "retrieval_contract": {
+    "adjacency_radius": 0,
+    "answer_generation": false,
+    "corpus_scope": "one_isolated_scenario_per_query",
+    "model_calls": 0,
+    "query_mode": "strict_first_then_relaxed_or_fill",
+    "ranker": "production_activity_sqlite_fts5_bm25",
+    "top_k": 10,
+    "unit": "dataset_native_conversation_segment_proxy"
+  },
+  "schema_version": 1,
+  "variants": {
+    "adjacent_operation": {
+      "cases": [
+        {
+          "complete_recall": true,
+          "context_chars": 13040,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 6,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 6,
+          "non_gold_hit_count": 1,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "8b94a8fcf316bbcf793f4c0dd9603fa926f8efcc77906df0b2ab59d36ba15ae3",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "D11_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12526,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "9b95f04ffe0550b77187b3a17baa74de669561b58ae22afa725d4070f557600d",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            2,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "E08_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13976,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 1,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "09828a1854bf248b129cf857038030536919433f8bd1449d935bbb3d4e667a0d",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            1,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "C10_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12719,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 0,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "fded08f859e2d23feeb8ef652831fa12b30e16d4fcf72c2bc97a1b6eb0cd7940",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B21_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 14120,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 0,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "fed805f9fc316c2b13e87959b39b8078cd6d5c5dced0b8276da6466533e859ca",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "D21_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 14534,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTrajectory",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 0,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "8fbca4057fec9fea8c3a94b8c39410906859858cb5166e439a0dc8207dc0d03e",
+          "question_pair_id": "p5_state_trajectory",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            2,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "F12_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12370,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 0,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "846b0bc9dc8869528a968112833bb9c8849de5f7ca4e3167c4422088ae1f6ed1",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            2,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "C10_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12885,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 1,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "77f6dbf1d0e85a670ca314bc4fac770437ad5bb2e66510ed4f2c1aa4f206c3df",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B02_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11225,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 0,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "01bea258e417d2c0f2cfae0e04305a318c71e0ae26de223981c61032c6c576f1",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            1,
+            2,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "C16_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12513,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 1,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "b9710294a7df53f73e6f8cca9aaedbfb22860ea294256419da3da42958569cfd",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "F13_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12536,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 1,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "1384ac01b5747712ec47423b71fa54b612f0dd3aee4625f9ea1433b0dbfdf93f",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "C27_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11967,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "285aebf988158c1113a227f8b2d9769b051de8947be6c59aba285ac7de688a84",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            1,
+            2,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "E14_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12369,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 1,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "f2867d9e4468eb8ea1833fa5a7e27f551af83274e729812173dbb46b120b7af3",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "C23_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11989,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 1,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "28021baf648487928ef13dd1aa8941b0cd239d4e9e9cb8a525444033a81499de",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            1,
+            2,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A06_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12813,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 1,
+          "gold_segments": [
+            1
+          ],
+          "matched_gold_segments": [
+            1
+          ],
+          "matched_gold_turn_count": 1,
+          "non_gold_hit_count": 2,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "strict_and",
+          "query_modes": [
+            "strict_and",
+            "relaxed_or_after_partial_strict"
+          ],
+          "query_sha256": "8e2b9476807da89cebbc915dcb04310057c6642e9179935edff53bfe052d4f4d",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A07_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 14305,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 0,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "7c24f627c90f621ffd3f6f7973b4706b55c95eeb2f60f94a0e30a5ea8a9daf5a",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            1,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "C05_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11069,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "8d7b5f44e824000015d939348309fcbb5713928af236b259031aa8038073f504",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            2,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "D17_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12294,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e9fbb97c0a8651853ab9eb3dd4fd7192fb1398eb1079253125f88eebe5802a64",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            1,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "C27_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13549,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "66303084f49425ce45581dd4e1162a7374cd64666a810cbaf9a0c7888d695ccc",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A20_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 10739,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "4076ba4245437ed0b635cb3a5d1c93f07959e7a50235155329e43c4a100a20af",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B27_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13607,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 1,
+          "gold_segments": [
+            2
+          ],
+          "matched_gold_segments": [
+            2
+          ],
+          "matched_gold_turn_count": 1,
+          "non_gold_hit_count": 2,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "fd6a14fe5b26ebb01cc5de896e8ed95bad99fe8ab9c50245f767f5993ce13ead",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            1,
+            3,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "D16_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12349,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 1,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "a16b64db2bf2a831bed30c8a778c8f5fa1465c8954fab41da34539b37f8d298a",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            2,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "D23_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13524,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "f744b5b823d19bbc44f5b2049b10f3050347e2f463fd589f793e3f5d524a58f3",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A16_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13459,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTrajectory",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 0,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "513ec3ca4833cf40fc8863445d52fbb1fcca582a88d1b80289cc528204b4f85c",
+          "question_pair_id": "p5_state_trajectory",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "F06_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13421,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 1,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "89741647a4bb843dd16b874eea1883eb0ed19639ea557a016cfab23e4b592f62",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            2,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B24_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13760,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 1,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "33596677f7facbfb1b91bd1fafb54711efe2a3c61caa6aaa139377adbab372ae",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            1,
+            2,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "D14_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13094,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e2f7e855160b405addef3b1715aed35cf628463c11c3c7ddf0a9b224df450b4a",
+          "question_pair_id": "p6_remember_negative",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "E07_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 10227,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 0,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "2ee0b71a40bf45e8f8c2db7aa202e1f12be47df17c9efd5957d96c1659e5493c",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A07_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 10732,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 0,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "a56f74d92145cf8f3c0867e818150b33db6bec972b242256dc692388ec8be2f0",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            1,
+            2,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B02_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12018,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            1
+          ],
+          "matched_gold_segments": [
+            1
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 2,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "093b0607092441266cfb721ef5e3d4e0620c3ddd80305419945eef0357961602",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "E14_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12213,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 0,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "0e25002101d995151721853de349272a6bdff1f797928361e0fe0333654b2c9b",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            1,
+            2,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "C29_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12911,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 1,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e96321eec29910309e5e8ffd26cabafd1856ec74d5d9d907170a9a4c7bbf53ad",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "E07_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 16277,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 0,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "16f9bd72411b583d456d64fbafac3e613971eafde810e2f1ccb7930e9bacb7fd",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            1,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B14_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13448,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            3
+          ],
+          "matched_gold_segments": [
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 2,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "8155d7d18c378c8f1bab3f5cbeb7f2783d5e4e404b6bcc36a632d23aadf0b5d5",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A29_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13642,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 0,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "0e0668e20f51418c460535d87374dc1112dc8f3785b40341f5414829f554e93e",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            1,
+            2,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A14_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 14731,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 1,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "7308e45c2921023bea7eae62fd977f7390a3314492974c5960085c4407886e70",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "E14_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 15018,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 1,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "d874a7c0bd636a96596b20725df98fb69684f47f0de59c8edc189a32c2d28d09",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            2,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "D18_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11157,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 1,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e3a9d8c470d1fc0a2167d733d11b1084f0e986adc3597890be218432a8cf5012",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A05_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11577,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 0,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "d1d41b4862cb15dbc57f1b92f006143c95d485d620e154adff873bfdaa188020",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B02_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11991,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 1,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e8aeb8f493eb6613a67cbab090be77da54737feae64751fea437e45d45a17d18",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            1,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B01_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 10728,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "9cf03995d0ffa11e0c2798dfbf144e32cba841cefefc9dff0a8702d16764caf3",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            2,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "D05_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 15084,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2
+          ],
+          "matched_gold_segments": [
+            2
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 2,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e639ee2f29b64fc72d7260bd9908068c66bfdcb3ff35518ff5170830e2c4911c",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            1,
+            2,
+            3
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "A29_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11375,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 0,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "426110bb06a7093ad51a9345f318afafd2ced67ebfa7fed09e862d0feb301dc8",
+          "question_pair_id": "p4_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "B04_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13413,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 0,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "5ae61e1783ba7b2c602bd02e568eff865f3099ed17f5701630fd213bf12d5f57",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "F12_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 14103,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 6,
+          "gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 6,
+          "non_gold_hit_count": 0,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "375d76c1f6d2fd3fc2a7b780f5652d074294c5e392c72fa7d091da96c72fc412",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "F17_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 13687,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_segments": [
+            1,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "b76e4186dd9f41fb42d64b53530c4e2b5820a724e00b24934b6f8d94750e50f9",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            1,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "F17_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 12571,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "2d5c67075fce0071dc380f9b9087bdf79cda6ba460af7db56b4823337a576b48",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "E01_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 18873,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_segments": [
+            2,
+            3
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "91924a83d842fbf45d2b6267e21d8e9840e2635556e591b88c3032b99ebbf137",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            1,
+            3,
+            2
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "F06_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 16566,
+          "corpus_segment_count": 3,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 1,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "dfadb8d01b6b98b803e66bdd8628fb0e092466c71f4ee12d3f13385a1f1c297d",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "E15_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 11866,
+          "corpus_segment_count": 3,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_segments": [
+            1,
+            2
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 1,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "66be5cade030c7ccefa8479fd26b1b000fff1d2c7235332366606bc64869bf31",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            2,
+            3,
+            1
+          ],
+          "setting": "adjacent_operation",
+          "source_file": "F14_reflect.json"
+        }
+      ],
+      "metrics": {
+        "case_count": 50,
+        "cases_with_injected_distractor_hit_rate": 0.0,
+        "complete_case_recall_by_evaluation_type": {
+          "CandidateDisambiguation": 1.0,
+          "OperationApplication": 1.0,
+          "OperationTrace": 1.0,
+          "StateTrajectory": 1.0,
+          "StateTransition": 1.0,
+          "TargetBinding": 1.0
+        },
+        "complete_case_recall_rate": 1.0,
+        "empty_hit_rate": 0.0,
+        "injected_distractor_at_1_rate": 0.0,
+        "injected_distractor_contamination_at_k": 0.0,
+        "mean_context_chars": 13019.2,
+        "mean_reciprocal_rank": 0.84,
+        "provenance_segment_recall_macro_at_k": 1.0,
+        "provenance_segment_recall_micro_at_k": 1.0,
+        "provenance_turn_recall_macro_at_k": 1.0,
+        "provenance_turn_recall_micro_at_k": 1.0,
+        "relaxed_or_after_zero_case_count": 49,
+        "relaxed_or_case_count": 50,
+        "relaxed_or_partial_fill_case_count": 1,
+        "returned_non_gold_share": 0.26,
+        "strict_and_case_count": 0,
+        "strict_and_case_rate": 0.0
+      }
+    },
+    "longitudinal_operation": {
+      "cases": [
+        {
+          "complete_recall": true,
+          "context_chars": 61728,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            8,
+            36,
+            10
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 6,
+          "gold_segments": [
+            9,
+            30
+          ],
+          "matched_gold_segments": [
+            9,
+            30
+          ],
+          "matched_gold_turn_count": 6,
+          "non_gold_hit_count": 8,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "8b94a8fcf316bbcf793f4c0dd9603fa926f8efcc77906df0b2ab59d36ba15ae3",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            9,
+            34,
+            30,
+            8,
+            36,
+            37,
+            50,
+            10,
+            1,
+            38
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "D11_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 77794,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            8,
+            10
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            9,
+            33
+          ],
+          "matched_gold_segments": [
+            9,
+            33
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "9b95f04ffe0550b77187b3a17baa74de669561b58ae22afa725d4070f557600d",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            33,
+            18,
+            9,
+            8,
+            36,
+            22,
+            39,
+            10,
+            23,
+            40
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "E08_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 70058,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            48,
+            42,
+            22
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            26,
+            41
+          ],
+          "matched_gold_segments": [
+            26,
+            41
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 8,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "09828a1854bf248b129cf857038030536919433f8bd1449d935bbb3d4e667a0d",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            26,
+            12,
+            21,
+            48,
+            42,
+            22,
+            24,
+            2,
+            41,
+            36
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "C10_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 79384,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            30,
+            25,
+            29,
+            9,
+            8
+          ],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            10,
+            27,
+            28
+          ],
+          "matched_gold_segments": [
+            10,
+            27,
+            28
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 7,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "fded08f859e2d23feeb8ef652831fa12b30e16d4fcf72c2bc97a1b6eb0cd7940",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            27,
+            30,
+            25,
+            28,
+            10,
+            29,
+            33,
+            9,
+            12,
+            8
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B21_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 80993,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            19,
+            10,
+            30,
+            5
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            3,
+            8,
+            18
+          ],
+          "matched_gold_segments": [
+            3,
+            8,
+            18
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 7,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "fed805f9fc316c2b13e87959b39b8078cd6d5c5dced0b8276da6466533e859ca",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            18,
+            8,
+            19,
+            10,
+            3,
+            30,
+            49,
+            5,
+            1,
+            4
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "D21_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 88160,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            48,
+            41,
+            14
+          ],
+          "evaluation_type": "StateTrajectory",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            10,
+            13,
+            40
+          ],
+          "matched_gold_segments": [
+            10,
+            13,
+            40
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 7,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "8fbca4057fec9fea8c3a94b8c39410906859858cb5166e439a0dc8207dc0d03e",
+          "question_pair_id": "p5_state_trajectory",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            40,
+            13,
+            10,
+            44,
+            48,
+            41,
+            29,
+            14,
+            47,
+            15
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "F12_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 82822,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            39,
+            43,
+            27,
+            47
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            26,
+            41,
+            45
+          ],
+          "matched_gold_segments": [
+            26,
+            41,
+            45
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 7,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "846b0bc9dc8869528a968112833bb9c8849de5f7ca4e3167c4422088ae1f6ed1",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            45,
+            41,
+            26,
+            39,
+            43,
+            27,
+            47,
+            6,
+            30,
+            23
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "C10_forget.json"
+        },
+        {
+          "complete_recall": false,
+          "context_chars": 87256,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            23,
+            22
+          ],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            12,
+            24
+          ],
+          "matched_gold_segments": [
+            24
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 9,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 0.5,
+          "provenance_turn_recall_at_k": 0.75,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "77f6dbf1d0e85a670ca314bc4fac770437ad5bb2e66510ed4f2c1aa4f206c3df",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            24,
+            43,
+            21,
+            46,
+            9,
+            23,
+            45,
+            1,
+            2,
+            22
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B02_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 78928,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            50,
+            48,
+            40
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            5,
+            42,
+            49
+          ],
+          "matched_gold_segments": [
+            5,
+            42,
+            49
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 7,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "01bea258e417d2c0f2cfae0e04305a318c71e0ae26de223981c61032c6c576f1",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            5,
+            14,
+            50,
+            41,
+            42,
+            2,
+            48,
+            49,
+            40,
+            22
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "C16_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 77667,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": true,
+          "distractor_segments_retrieved": [
+            43,
+            40,
+            48
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            5,
+            32
+          ],
+          "matched_gold_segments": [
+            5,
+            32
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 8,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "b9710294a7df53f73e6f8cca9aaedbfb22860ea294256419da3da42958569cfd",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            43,
+            17,
+            5,
+            32,
+            9,
+            7,
+            40,
+            3,
+            50,
+            48
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "F13_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 66033,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            20,
+            36,
+            21,
+            40,
+            37
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            19,
+            38
+          ],
+          "matched_gold_segments": [
+            19,
+            38
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 8,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "1384ac01b5747712ec47423b71fa54b612f0dd3aee4625f9ea1433b0dbfdf93f",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            38,
+            19,
+            39,
+            20,
+            36,
+            50,
+            21,
+            40,
+            37,
+            2
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "C27_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 87475,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            47,
+            49,
+            50,
+            32
+          ],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            38,
+            46
+          ],
+          "matched_gold_segments": [
+            38,
+            46
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "285aebf988158c1113a227f8b2d9769b051de8947be6c59aba285ac7de688a84",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            38,
+            46,
+            31,
+            47,
+            49,
+            19,
+            50,
+            9,
+            32,
+            25
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "E14_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 77501,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            35,
+            36,
+            32,
+            46,
+            24,
+            50
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            23,
+            34
+          ],
+          "matched_gold_segments": [
+            23,
+            34
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 8,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "f2867d9e4468eb8ea1833fa5a7e27f551af83274e729812173dbb46b120b7af3",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            48,
+            34,
+            35,
+            23,
+            36,
+            32,
+            46,
+            24,
+            50,
+            47
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "C23_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 84448,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            6
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            3,
+            21
+          ],
+          "matched_gold_segments": [
+            3,
+            21
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 8,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "28021baf648487928ef13dd1aa8941b0cd239d4e9e9cb8a525444033a81499de",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            3,
+            7,
+            21,
+            6,
+            26,
+            41,
+            11,
+            24,
+            50,
+            2
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A06_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 75081,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            50,
+            41,
+            47,
+            1,
+            3,
+            4
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 1,
+          "gold_segments": [
+            2
+          ],
+          "matched_gold_segments": [
+            2
+          ],
+          "matched_gold_turn_count": 1,
+          "non_gold_hit_count": 9,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "strict_and",
+          "query_modes": [
+            "strict_and",
+            "relaxed_or_after_partial_strict"
+          ],
+          "query_sha256": "8e2b9476807da89cebbc915dcb04310057c6642e9179935edff53bfe052d4f4d",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            42,
+            49,
+            2,
+            50,
+            41,
+            47,
+            1,
+            3,
+            15,
+            4
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A07_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 90407,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            47,
+            49,
+            50,
+            5,
+            4
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            6,
+            14,
+            48
+          ],
+          "matched_gold_segments": [
+            6,
+            14,
+            48
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 7,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "7c24f627c90f621ffd3f6f7973b4706b55c95eeb2f60f94a0e30a5ea8a9daf5a",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            14,
+            47,
+            6,
+            48,
+            49,
+            16,
+            50,
+            19,
+            5,
+            4
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "C05_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 104821,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            15,
+            8,
+            2,
+            18,
+            43
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            1,
+            9
+          ],
+          "matched_gold_segments": [
+            1,
+            9
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "8d7b5f44e824000015d939348309fcbb5713928af236b259031aa8038073f504",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            9,
+            16,
+            1,
+            15,
+            8,
+            2,
+            7,
+            18,
+            6,
+            43
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "D17_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 76129,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            36,
+            42,
+            50,
+            46,
+            41
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            38,
+            40
+          ],
+          "matched_gold_segments": [
+            38,
+            40
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e9fbb97c0a8651853ab9eb3dd4fd7192fb1398eb1079253125f88eebe5802a64",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            37,
+            38,
+            40,
+            36,
+            42,
+            50,
+            46,
+            41,
+            16,
+            49
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "C27_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 91788,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            48
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            21,
+            25
+          ],
+          "matched_gold_segments": [
+            21,
+            25
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "66303084f49425ce45581dd4e1162a7374cd64666a810cbaf9a0c7888d695ccc",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            25,
+            9,
+            48,
+            46,
+            21,
+            34,
+            31,
+            38,
+            37,
+            6
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A20_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 82865,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            35,
+            33,
+            32,
+            4
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            2,
+            34
+          ],
+          "matched_gold_segments": [
+            2,
+            34
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "4076ba4245437ed0b635cb3a5d1c93f07959e7a50235155329e43c4a100a20af",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            48,
+            2,
+            34,
+            35,
+            33,
+            32,
+            25,
+            4,
+            20,
+            44
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B27_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 78047,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            32,
+            42,
+            33
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 1,
+          "gold_segments": [
+            31
+          ],
+          "matched_gold_segments": [
+            31
+          ],
+          "matched_gold_turn_count": 1,
+          "non_gold_hit_count": 9,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "fd6a14fe5b26ebb01cc5de896e8ed95bad99fe8ab9c50245f767f5993ce13ead",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            31,
+            44,
+            15,
+            40,
+            32,
+            36,
+            34,
+            42,
+            33,
+            19
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "D16_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 75923,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            44,
+            10,
+            45,
+            37,
+            34,
+            9
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            11,
+            12
+          ],
+          "matched_gold_segments": [
+            11,
+            12
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 8,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "a16b64db2bf2a831bed30c8a778c8f5fa1465c8954fab41da34539b37f8d298a",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            12,
+            33,
+            44,
+            11,
+            10,
+            45,
+            37,
+            34,
+            9,
+            35
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "D23_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 73632,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            23,
+            49,
+            11,
+            10,
+            45
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            5,
+            9
+          ],
+          "matched_gold_segments": [
+            5,
+            9
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "f744b5b823d19bbc44f5b2049b10f3050347e2f463fd589f793e3f5d524a58f3",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            25,
+            9,
+            23,
+            5,
+            49,
+            11,
+            38,
+            10,
+            33,
+            45
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A16_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 76182,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            48,
+            32,
+            39,
+            33
+          ],
+          "evaluation_type": "StateTrajectory",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            2,
+            16,
+            34
+          ],
+          "matched_gold_segments": [
+            2,
+            16,
+            34
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 7,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "513ec3ca4833cf40fc8863445d52fbb1fcca582a88d1b80289cc528204b4f85c",
+          "question_pair_id": "p5_state_trajectory",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            16,
+            34,
+            48,
+            2,
+            32,
+            39,
+            28,
+            36,
+            11,
+            33
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "F06_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 76976,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            39,
+            21,
+            37,
+            41
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            23,
+            38
+          ],
+          "matched_gold_segments": [
+            23,
+            38
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 8,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "89741647a4bb843dd16b874eea1883eb0ed19639ea557a016cfab23e4b592f62",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            38,
+            40,
+            23,
+            39,
+            21,
+            2,
+            37,
+            41,
+            9,
+            45
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B24_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 63217,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            35,
+            38,
+            14,
+            41
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            13,
+            42
+          ],
+          "matched_gold_segments": [
+            13,
+            42
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 8,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "33596677f7facbfb1b91bd1fafb54711efe2a3c61caa6aaa139377adbab372ae",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            42,
+            13,
+            48,
+            35,
+            38,
+            31,
+            19,
+            14,
+            41,
+            37
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "D14_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 66679,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            14,
+            11
+          ],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            12,
+            27
+          ],
+          "matched_gold_segments": [
+            12,
+            27
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e2f7e855160b405addef3b1715aed35cf628463c11c3c7ddf0a9b224df450b4a",
+          "question_pair_id": "p6_remember_negative",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            36,
+            12,
+            27,
+            14,
+            11,
+            25,
+            31,
+            19,
+            15,
+            6
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "E07_remember.json"
+        },
+        {
+          "complete_recall": false,
+          "context_chars": 84077,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            32,
+            7
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            1,
+            9,
+            30
+          ],
+          "matched_gold_segments": [
+            9,
+            30
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 8,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 0.666667,
+          "provenance_turn_recall_at_k": 0.75,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "2ee0b71a40bf45e8f8c2db7aa202e1f12be47df17c9efd5957d96c1659e5493c",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            30,
+            47,
+            9,
+            32,
+            7,
+            11,
+            45,
+            13,
+            28,
+            10
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A07_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 86375,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            42,
+            26,
+            25,
+            41
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            22,
+            27,
+            39
+          ],
+          "matched_gold_segments": [
+            22,
+            27,
+            39
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 7,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "a56f74d92145cf8f3c0867e818150b33db6bec972b242256dc692388ec8be2f0",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            22,
+            27,
+            39,
+            42,
+            21,
+            26,
+            25,
+            41,
+            36,
+            46
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B02_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 85674,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            45,
+            48,
+            44
+          ],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            12
+          ],
+          "matched_gold_segments": [
+            12
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 9,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "093b0607092441266cfb721ef5e3d4e0620c3ddd80305419945eef0357961602",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            28,
+            46,
+            12,
+            45,
+            4,
+            25,
+            23,
+            48,
+            44,
+            20
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "E14_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 86320,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": true,
+          "distractor_segments_retrieved": [
+            42,
+            36,
+            33,
+            3
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            1,
+            29,
+            34
+          ],
+          "matched_gold_segments": [
+            1,
+            29,
+            34
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 7,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "0e25002101d995151721853de349272a6bdff1f797928361e0fe0333654b2c9b",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            42,
+            36,
+            1,
+            29,
+            39,
+            34,
+            33,
+            3,
+            35,
+            8
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "C29_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 85263,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            9,
+            24
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            10,
+            22
+          ],
+          "matched_gold_segments": [
+            10,
+            22
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 8,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e96321eec29910309e5e8ffd26cabafd1856ec74d5d9d907170a9a4c7bbf53ad",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            46,
+            9,
+            22,
+            10,
+            26,
+            24,
+            2,
+            6,
+            43,
+            37
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "E07_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 95124,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            44,
+            41,
+            29,
+            30,
+            32
+          ],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            27,
+            31,
+            42
+          ],
+          "matched_gold_segments": [
+            27,
+            31,
+            42
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 7,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "16f9bd72411b583d456d64fbafac3e613971eafde810e2f1ccb7930e9bacb7fd",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            31,
+            42,
+            27,
+            44,
+            41,
+            29,
+            30,
+            24,
+            32,
+            33
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B14_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 86354,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": true,
+          "distractor_segments_retrieved": [
+            2,
+            27,
+            26
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            25
+          ],
+          "matched_gold_segments": [
+            25
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 9,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "8155d7d18c378c8f1bab3f5cbeb7f2783d5e4e404b6bcc36a632d23aadf0b5d5",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            2,
+            25,
+            5,
+            4,
+            27,
+            26,
+            14,
+            35,
+            48,
+            41
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A29_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 78850,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            39,
+            32,
+            34
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            30,
+            35,
+            41
+          ],
+          "matched_gold_segments": [
+            30,
+            35,
+            41
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 7,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "0e0668e20f51418c460535d87374dc1112dc8f3785b40341f5414829f554e93e",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            4,
+            30,
+            35,
+            41,
+            39,
+            32,
+            38,
+            11,
+            34,
+            20
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A14_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 71530,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            27,
+            7
+          ],
+          "evaluation_type": "OperationTrace",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            9,
+            25
+          ],
+          "matched_gold_segments": [
+            9,
+            25
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 8,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "7308e45c2921023bea7eae62fd977f7390a3314492974c5960085c4407886e70",
+          "question_pair_id": "p1_operation_trace",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            25,
+            26,
+            9,
+            34,
+            27,
+            43,
+            29,
+            44,
+            7,
+            32
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "E14_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 77508,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            15,
+            48,
+            49,
+            45
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            16,
+            22
+          ],
+          "matched_gold_segments": [
+            16,
+            22
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 8,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "d874a7c0bd636a96596b20725df98fb69684f47f0de59c8edc189a32c2d28d09",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            22,
+            46,
+            16,
+            15,
+            48,
+            49,
+            45,
+            12,
+            23,
+            41
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "D18_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 86218,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            34,
+            17,
+            3
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            5,
+            18
+          ],
+          "matched_gold_segments": [
+            5,
+            18
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 8,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e3a9d8c470d1fc0a2167d733d11b1084f0e986adc3597890be218432a8cf5012",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            18,
+            35,
+            5,
+            9,
+            34,
+            17,
+            23,
+            32,
+            39,
+            3
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A05_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 81348,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            7,
+            45,
+            46
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 5,
+          "gold_segments": [
+            5,
+            22,
+            44
+          ],
+          "matched_gold_segments": [
+            5,
+            22,
+            44
+          ],
+          "matched_gold_turn_count": 5,
+          "non_gold_hit_count": 7,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "d1d41b4862cb15dbc57f1b92f006143c95d485d620e154adff873bfdaa188020",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            44,
+            22,
+            5,
+            7,
+            1,
+            45,
+            50,
+            46,
+            18,
+            10
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B02_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 72782,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            31
+          ],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            3,
+            29
+          ],
+          "matched_gold_segments": [
+            3,
+            29
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 8,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e8aeb8f493eb6613a67cbab090be77da54737feae64751fea437e45d45a17d18",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            29,
+            31,
+            3,
+            11,
+            37,
+            49,
+            45,
+            9,
+            26,
+            48
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B01_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 81102,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            44,
+            46,
+            8,
+            21
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            17,
+            19
+          ],
+          "matched_gold_segments": [
+            17,
+            19
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "9cf03995d0ffa11e0c2798dfbf144e32cba841cefefc9dff0a8702d16764caf3",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            17,
+            40,
+            44,
+            46,
+            9,
+            19,
+            8,
+            4,
+            42,
+            21
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "D05_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 93890,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            14,
+            11,
+            12,
+            50,
+            46
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 1,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            48
+          ],
+          "matched_gold_segments": [
+            48
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 9,
+          "operation_type": "Update",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "e639ee2f29b64fc72d7260bd9908068c66bfdcb3ff35518ff5170830e2c4911c",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            48,
+            49,
+            13,
+            14,
+            20,
+            11,
+            12,
+            50,
+            46,
+            26
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "A29_update.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 82722,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            47,
+            33,
+            34,
+            14,
+            22
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            13,
+            20,
+            21
+          ],
+          "matched_gold_segments": [
+            13,
+            20,
+            21
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 7,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "426110bb06a7093ad51a9345f318afafd2ced67ebfa7fed09e862d0feb301dc8",
+          "question_pair_id": "p4_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            20,
+            21,
+            13,
+            47,
+            27,
+            33,
+            34,
+            14,
+            22,
+            31
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "B04_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 78244,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            10,
+            11,
+            46,
+            13,
+            44
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 4,
+          "gold_segments": [
+            9,
+            12,
+            45
+          ],
+          "matched_gold_segments": [
+            9,
+            12,
+            45
+          ],
+          "matched_gold_turn_count": 4,
+          "non_gold_hit_count": 7,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "5ae61e1783ba7b2c602bd02e568eff865f3099ed17f5701630fd213bf12d5f57",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            12,
+            45,
+            9,
+            10,
+            11,
+            46,
+            15,
+            13,
+            44,
+            36
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "F12_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 94826,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            23,
+            49,
+            43,
+            22
+          ],
+          "evaluation_type": "OperationApplication",
+          "gold_provenance_segment_count": 3,
+          "gold_provenance_turn_count": 6,
+          "gold_segments": [
+            21,
+            38,
+            44
+          ],
+          "matched_gold_segments": [
+            21,
+            38,
+            44
+          ],
+          "matched_gold_turn_count": 6,
+          "non_gold_hit_count": 7,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "375d76c1f6d2fd3fc2a7b780f5652d074294c5e392c72fa7d091da96c72fc412",
+          "question_pair_id": "p5_operation_application",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            44,
+            38,
+            21,
+            15,
+            23,
+            49,
+            43,
+            16,
+            22,
+            45
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "F17_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 71626,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            50,
+            7
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            6,
+            49
+          ],
+          "matched_gold_segments": [
+            6,
+            49
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Forget",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "b76e4186dd9f41fb42d64b53530c4e2b5820a724e00b24934b6f8d94750e50f9",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            49,
+            50,
+            20,
+            7,
+            6,
+            28,
+            48,
+            32,
+            35,
+            3
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "F17_forget.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 74820,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            3,
+            38,
+            46
+          ],
+          "evaluation_type": "StateTransition",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            26,
+            37
+          ],
+          "matched_gold_segments": [
+            26,
+            37
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "TrajectoryOps",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "2d5c67075fce0071dc380f9b9087bdf79cda6ba460af7db56b4823337a576b48",
+          "question_pair_id": "p3_state_transition",
+          "reciprocal_rank": 0.5,
+          "retrieved_segments": [
+            1,
+            26,
+            37,
+            3,
+            38,
+            30,
+            17,
+            46,
+            29,
+            40
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "E01_trajectory_ops.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 86328,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            18,
+            47
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            20,
+            49
+          ],
+          "matched_gold_segments": [
+            20,
+            49
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "91924a83d842fbf45d2b6267e21d8e9840e2635556e591b88c3032b99ebbf137",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            20,
+            19,
+            49,
+            9,
+            42,
+            2,
+            18,
+            25,
+            47,
+            44
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "F06_reflect.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 91227,
+          "corpus_segment_count": 50,
+          "difficulty": "medium",
+          "distractor_at_1": false,
+          "distractor_segments_retrieved": [
+            28,
+            45,
+            48,
+            31
+          ],
+          "evaluation_type": "TargetBinding",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 3,
+          "gold_segments": [
+            6,
+            30
+          ],
+          "matched_gold_segments": [
+            6,
+            30
+          ],
+          "matched_gold_turn_count": 3,
+          "non_gold_hit_count": 8,
+          "operation_type": "Remember",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "dfadb8d01b6b98b803e66bdd8628fb0e092466c71f4ee12d3f13385a1f1c297d",
+          "question_pair_id": "p2_target_binding",
+          "reciprocal_rank": 1.0,
+          "retrieved_segments": [
+            30,
+            28,
+            47,
+            45,
+            6,
+            48,
+            24,
+            40,
+            29,
+            31
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "E15_remember.json"
+        },
+        {
+          "complete_recall": true,
+          "context_chars": 84777,
+          "corpus_segment_count": 50,
+          "difficulty": "hard",
+          "distractor_at_1": true,
+          "distractor_segments_retrieved": [
+            6,
+            21,
+            11
+          ],
+          "evaluation_type": "CandidateDisambiguation",
+          "gold_provenance_segment_count": 2,
+          "gold_provenance_turn_count": 2,
+          "gold_segments": [
+            4,
+            9
+          ],
+          "matched_gold_segments": [
+            4,
+            9
+          ],
+          "matched_gold_turn_count": 2,
+          "non_gold_hit_count": 8,
+          "operation_type": "Reflect",
+          "provenance_segment_recall_at_k": 1.0,
+          "provenance_turn_recall_at_k": 1.0,
+          "query_mode": "relaxed_or_after_zero_hits",
+          "query_modes": [
+            "relaxed_or_after_zero_hits"
+          ],
+          "query_sha256": "66be5cade030c7ccefa8479fd26b1b000fff1d2c7235332366606bc64869bf31",
+          "question_pair_id": "p4_candidate_disambiguation",
+          "reciprocal_rank": 0.333333,
+          "retrieved_segments": [
+            6,
+            21,
+            9,
+            38,
+            48,
+            31,
+            4,
+            15,
+            11,
+            19
+          ],
+          "setting": "longitudinal_operation",
+          "source_file": "F14_reflect.json"
+        }
+      ],
+      "metrics": {
+        "case_count": 50,
+        "cases_with_injected_distractor_hit_rate": 1.0,
+        "complete_case_recall_by_evaluation_type": {
+          "CandidateDisambiguation": 1.0,
+          "OperationApplication": 1.0,
+          "OperationTrace": 1.0,
+          "StateTrajectory": 1.0,
+          "StateTransition": 0.875,
+          "TargetBinding": 0.9
+        },
+        "complete_case_recall_rate": 0.96,
+        "empty_hit_rate": 0.0,
+        "injected_distractor_at_1_rate": 0.08,
+        "injected_distractor_contamination_at_k": 0.356,
+        "mean_context_chars": 80979.58,
+        "mean_reciprocal_rank": 0.84,
+        "provenance_segment_recall_macro_at_k": 0.983333,
+        "provenance_segment_recall_micro_at_k": 0.981982,
+        "provenance_turn_recall_macro_at_k": 0.99,
+        "provenance_turn_recall_micro_at_k": 0.987879,
+        "relaxed_or_after_zero_case_count": 49,
+        "relaxed_or_case_count": 50,
+        "relaxed_or_partial_fill_case_count": 1,
+        "returned_non_gold_share": 0.782,
+        "strict_and_case_count": 0,
+        "strict_and_case_rate": 0.0
+      }
+    }
+  }
+}

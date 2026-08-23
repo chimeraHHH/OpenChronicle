@@ -40,3 +40,9 @@ with its
 [`machine-readable report`](results/retrieval-c2de032-bm25-top10.json). The
 unseen tier reproduces the development-tier finding: evidence recall is high,
 but injected-distractor contamination fails the frozen context-purity gate.
+
+The subsequent strict-underfill recall fix is recorded separately in
+[`analysis/retrieval-ee58ca6-strict-or-fill-top10.md`](analysis/retrieval-ee58ca6-strict-or-fill-top10.md).
+It closes one general strict/OR starvation defect and improves held-out recall,
+but is explicitly post-hoc on this already-observed tier and still fails the
+unchanged contamination gate.

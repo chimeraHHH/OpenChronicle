@@ -13,6 +13,11 @@ gaps in the first audit had already been closed by intervening commits. The
 decisions below distinguish the current implementation from genuinely
 remaining work instead of turning stale findings into duplicate infrastructure.
 
+It was extended on 2026-08-24 by a fourth multi-agent paper/repository/code
+audit and a source-disjoint MemOps retrieval experiment. The addendum near the
+end is the current optimization decision when it conflicts with an earlier
+“remaining work” paragraph.
+
 ## Executive decision
 
 Keep canonical Markdown plus SQLite as the local authority. Build rebuildable
@@ -434,6 +439,123 @@ the next product slice is desktop `as_of` inspection. For procedural memory,
 the evaluation rejects single-adoption auto-promotion; the permitted explicit,
 screened review-inbox pilot is now implemented. None requires a graph store or
 another autonomous memory agent.
+
+## 2026-08-24 retrieval-purity addendum
+
+### What the new external evidence changes
+
+The fourth pass screened 15 directly relevant papers and ten maintained or
+historically important repositories at code level. The strongest convergent
+evidence is not for a new database. It is for separating broad candidate recall
+from a small, attributable evidence set used by the answer model:
+
+- [LongMemEval](https://openreview.net/forum?id=pZiyCaVuti),
+  [SeCom](https://proceedings.iclr.cc/paper_files/paper/2025/hash/e56f394bbd4f0ec81393d767caa5a31b-Abstract-Conference.html),
+  [MemGAS](https://openreview.net/forum?id=i2yIvZARnG), and
+  [Memory-R1](https://aclanthology.org/2026.acl-long.583/) support
+  session/topic-aware recall followed by query-dependent evidence selection;
+- [Astute RAG](https://aclanthology.org/2025.acl-long.1476/) and
+  [RAGChecker](https://proceedings.neurips.cc/paper_files/paper/2024/hash/27245589131d17368cccdfa990cbf16e-Abstract.html)
+  show why high recall and final answer accuracy can coexist with harmful
+  retrieved noise, so context precision and noise sensitivity must be measured
+  separately;
+- [ALCE](https://aclanthology.org/2023.emnlp-main.398/) motivates scoring
+  citation correctness and completeness instead of treating an answer-level
+  score as provenance;
+- [APEX-MEM](https://aclanthology.org/2026.acl-long.749/) and
+  [Graphiti](https://github.com/getzep/graphiti) reinforce retrieval-time
+  valid-time/conflict grouping, but do not justify importing a graph database;
+- [TrustMem](https://arxiv.org/abs/2606.25161) and
+  [MemRefine](https://arxiv.org/abs/2606.13177) make semantic transition audits
+  worth evaluating, but both remain insufficient evidence for automatic
+  merge/delete of reviewed memory.
+
+The repository inspection reached the same boundary. ReMe, MemOS, Hindsight,
+Mem0, Letta Code, OpenViking, LangMem, A-Mem, Memary, and the renamed
+OpenMemory were checked at pinned source revisions. ReMe and Hindsight preserve
+per-channel fusion ranks; MemOS implements true greedy MMR and privacy-bounded
+aggregate telemetry; Hindsight exposes retrieved-versus-used dry runs; Letta
+Code presents operation-specific memory diffs. These are useful local UX and
+evaluation patterns. Their autonomous dream/consolidation loops, graph/service
+stacks, access-frequency decay, and direct model mutation do not fit this
+product. OpenViking's AGPL source is also not reusable in this MIT repository.
+
+### New external diagnostic
+
+The first MemOps Stage 4 tier used 50 balanced source files. A second tier was
+then frozen from 50 different files with identical quotas and zero source-file
+overlap before it was evaluated. Both use exact Stage 2 provenance-to-Stage 4
+carrier mapping and production activity FTS5/BM25 over 2,500 longitudinal
+conversation segments.
+
+| Metric | Development | Source-disjoint held-out |
+|---|---:|---:|
+| Segment recall, macro @10 | 0.976667 | 0.963333 |
+| Complete-case recall @10 | 0.940000 | 0.940000 |
+| MRR | 0.865667 | 0.833333 |
+| Injected-distractor contamination @10 | 0.372000 | 0.350305 |
+| Mean returned context characters | 79,019.16 | 79,677.40 |
+
+The held-out tier reproduces the narrow result: lexical retrieval usually finds
+the evidence, but the returned context is noisy and very large. The frozen
+`0.20` contamination gate fails on both tiers.
+
+Development-only ablations rejected several tempting shortcuts:
+
+- `top_k=3` lowers contamination to `0.126667` but drops segment recall to
+  `0.816667` and complete-case recall to `0.66`;
+- `top_k=5` reaches `0.946667` recall and `0.88` complete cases but still has
+  `0.308` contamination;
+- lexical greedy MMR over 15/20 candidates leaves contamination at roughly
+  `0.372` and provides no recall gain;
+- a relative BM25 cutoff can reduce context, but not below the purity gate
+  without losing complete cases;
+- embedding an entire dataset conversation segment and fusing it with BM25 is
+  substantially worse because these 5K–22K-character units are truncated by
+  the local encoder. This supports finer event/topic units, not abandoning the
+  existing local embedding path.
+
+### Immediate implemented fix
+
+The audit found one independent correctness defect. Production activity search
+previously ran relaxed OR only when strict AND returned zero rows. One incorrect
+strict hit could therefore starve every OR candidate even when the requested
+page was underfilled. The strict-first stream now fills its remaining slots
+from deduplicated OR results with stable pagination and an explicit per-hit
+query mode.
+
+On the already-observed held-out tier, this post-hoc fix raises segment and turn
+recall by `0.02`, complete-case recall from `0.94` to `0.96`, and MRR from
+`0.833333` to `0.84`. It still fails the unchanged contamination gate at
+`0.356`. The development tier is unchanged. This is therefore a promoted recall
+correctness fix, not evidence that context purity is solved and not a new blind
+held-out claim. Reproduction details live in
+[`memops50-heldout-v1`](../benchmarks/memops50-heldout-v1/README.md).
+
+### Current optimization order
+
+1. Keep canonical Markdown, SQLite, reviewed lifecycle, valid-time,
+   supersession, provenance, and permanent forget unchanged.
+2. Add a read-only local recall explanation that exposes the BM25/vector ranks,
+   RRF score, filters, model/projection identity, and unavailable reason already
+   present in the current implementation. Do not persist queries or content.
+3. Freeze a new source-disjoint validation tier before choosing more ranking
+   parameters. The two existing 50-case tiers are now development/error-analysis
+   data.
+4. Evaluate `candidate top-20 -> tools-free evidence distiller -> at most five
+   exact evidence refs -> answer`, preserving the full candidate trace locally.
+5. Gate answer accuracy, selected-evidence recall/precision, claim faithfulness,
+   citation precision/recall, noise sensitivity, stale/forget leakage, context
+   characters, latency, and token cost together.
+6. Build rebuildable event/topic/day projections only if the distillation tier
+   still shows a measured granularity failure. Use leaf evidence for names,
+   numbers, negation, and version questions.
+7. Experiment with SQLite entity edges/PPR only after a held-out multi-hop
+   failure survives event adjacency, hybrid recall, and evidence distillation.
+
+No result supports a hosted vector store, Neo4j, a cross-encoder default,
+automatic age/access decay for personal facts, autonomous memory deletion, or
+another memory-agent runtime.
 
 ## Success criteria
 
