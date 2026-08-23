@@ -52,17 +52,43 @@ def aggregate_reports(
     gate_passes = [bool(report["variant"]["gate_verdict"].get("passed")) for report in reports]
     per_case_agreement = _per_case_agreement(reports)
     exact_case_agreement_rate = round(
-        sum(item["unique_signature_count"] == 1 for item in per_case_agreement)
+        sum(item["exact"]["unique_signature_count"] == 1 for item in per_case_agreement)
         / len(per_case_agreement),
         6,
     )
-    run_signatures = [_run_signature(report) for report in reports]
+    structural_case_agreement_rate = round(
+        sum(item["structural"]["unique_signature_count"] == 1 for item in per_case_agreement)
+        / len(per_case_agreement),
+        6,
+    )
+    evidence_case_agreement_rate = round(
+        sum(item["evidence"]["unique_signature_count"] == 1 for item in per_case_agreement)
+        / len(per_case_agreement),
+        6,
+    )
+    run_signatures = [
+        {
+            "run": index,
+            "structural": _run_signature(report, _structural_signature),
+            "evidence": _run_signature(report, _evidence_signature),
+            "exact": _run_signature(report, _exact_signature),
+        }
+        for index, report in enumerate(reports, start=1)
+    ]
     metrics = {
         "run_count": len(reports),
         "run_gate_pass_rate": round(sum(gate_passes) / len(gate_passes), 6),
         "all_runs_gate_passed": all(gate_passes),
         "exact_case_decision_agreement_rate": exact_case_agreement_rate,
-        "unique_run_signature_count": len(set(run_signatures)),
+        "structural_case_decision_agreement_rate": structural_case_agreement_rate,
+        "evidence_case_decision_agreement_rate": evidence_case_agreement_rate,
+        "unique_run_signature_count": len({item["exact"] for item in run_signatures}),
+        "unique_structural_run_signature_count": len(
+            {item["structural"] for item in run_signatures}
+        ),
+        "unique_evidence_run_signature_count": len(
+            {item["evidence"] for item in run_signatures}
+        ),
         "operation_f1_min": metric_stats["operation_f1"]["min"],
         "operation_f1_max": metric_stats["operation_f1"]["max"],
         "operation_f1_stdev": metric_stats["operation_f1"]["stdev"],
@@ -79,7 +105,7 @@ def aggregate_reports(
     verdict = _gate_verdict(metrics, contract["gates"])
     return {
         "schema_version": 1,
-        "evaluation_id": "vida-memory-decision-stability-v1",
+        "evaluation_id": contract["evaluation_id"],
         "repository": _repository_state(repository_root),
         "source_evaluation": identity,
         "metric_contract": {
@@ -163,41 +189,90 @@ def _per_case_agreement(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
         raise ValueError("decision report case identities are invalid")
     output: list[dict[str, Any]] = []
     for case_id in case_ids:
-        signatures: list[str] = []
+        signatures: dict[str, list[str]] = {
+            "structural": [],
+            "evidence": [],
+            "exact": [],
+        }
         for report in reports:
             matches = [
                 item for item in report["variant"]["cases"] if item.get("case_id") == case_id
             ]
             if len(matches) != 1:
                 raise ValueError("decision reports do not share one case set")
-            signatures.append(_decision_signature(matches[0]))
-        counts = Counter(signatures)
+            signatures["structural"].append(_structural_signature(matches[0]))
+            signatures["evidence"].append(_evidence_signature(matches[0]))
+            signatures["exact"].append(_exact_signature(matches[0]))
+        levels = {name: _agreement(values) for name, values in signatures.items()}
         output.append(
             {
                 "case_id": case_id,
-                "unique_signature_count": len(counts),
-                "majority_fraction": round(max(counts.values()) / len(signatures), 6),
-                "signature_counts": dict(sorted(counts.items())),
+                **levels,
+                # Backwards-compatible v1 aliases remain bound to the exact
+                # complete output signature used by the original failed gate.
+                "unique_signature_count": levels["exact"]["unique_signature_count"],
+                "majority_fraction": levels["exact"]["majority_fraction"],
+                "signature_counts": levels["exact"]["signature_counts"],
             }
         )
     return output
 
 
-def _decision_signature(case: dict[str, Any]) -> str:
+def _operations(case: dict[str, Any]) -> list[dict[str, Any]]:
     operations = case.get("predicted_operations")
-    if not isinstance(operations, list):
+    if not isinstance(operations, list) or not all(isinstance(item, dict) for item in operations):
         raise ValueError("decision case is missing predicted operations")
-    normalized = json.dumps(operations, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return operations
+
+
+def _structural_signature(case: dict[str, Any]) -> str:
+    normalized_operations = [
+        {"type": item.get("type"), "target_id": item.get("target_id")}
+        for item in _operations(case)
+    ]
+    return _hash_json(normalized_operations)
+
+
+def _evidence_signature(case: dict[str, Any]) -> str:
+    normalized_operations = []
+    for item in _operations(case):
+        evidence = item.get("evidence_ids")
+        if not isinstance(evidence, list) or not all(isinstance(value, str) for value in evidence):
+            raise ValueError("decision operation evidence is invalid")
+        normalized_operations.append(
+            {
+                "type": item.get("type"),
+                "target_id": item.get("target_id"),
+                "evidence_ids": sorted(set(evidence)),
+            }
+        )
+    return _hash_json(normalized_operations)
+
+
+def _exact_signature(case: dict[str, Any]) -> str:
+    return _hash_json(_operations(case))
+
+
+def _hash_json(value: object) -> str:
+    normalized = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def _run_signature(report: dict[str, Any]) -> str:
+def _run_signature(report: dict[str, Any], signer) -> str:
     signatures = [
-        {"case_id": item.get("case_id"), "signature": _decision_signature(item)}
+        {"case_id": item.get("case_id"), "signature": signer(item)}
         for item in report["variant"]["cases"]
     ]
-    encoded = json.dumps(signatures, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return _hash_json(signatures)
+
+
+def _agreement(signatures: list[str]) -> dict[str, Any]:
+    counts = Counter(signatures)
+    return {
+        "unique_signature_count": len(counts),
+        "majority_fraction": round(max(counts.values()) / len(signatures), 6),
+        "signature_counts": dict(sorted(counts.items())),
+    }
 
 
 def _stats(values: list[float]) -> dict[str, float]:
@@ -216,10 +291,9 @@ def _number(value: object, label: str) -> float:
 
 
 def _validate_contract(contract: object, *, run_count: int) -> None:
-    expected_gates = {
+    common_gates = {
         "min_run_count",
         "min_run_gate_pass_rate",
-        "min_exact_case_decision_agreement_rate",
         "min_operation_f1",
         "max_operation_f1_stdev",
         "min_operation_recall",
@@ -228,12 +302,23 @@ def _validate_contract(contract: object, *, run_count: int) -> None:
         "max_operation_fp",
         "max_provider_or_parse_failure_count",
     }
+    evaluation_id = contract.get("evaluation_id") if isinstance(contract, dict) else None
+    agreement_gates = (
+        {"min_exact_case_decision_agreement_rate"}
+        if evaluation_id == "vida-memory-decision-stability-v1"
+        else {
+            "min_structural_case_decision_agreement_rate",
+            "min_evidence_case_decision_agreement_rate",
+        }
+        if evaluation_id == "vida-memory-decision-stability-v2"
+        else set()
+    )
     if (
         not isinstance(contract, dict)
         or contract.get("schema_version") != 1
-        or contract.get("evaluation_id") != "vida-memory-decision-stability-v1"
+        or not agreement_gates
         or not isinstance(contract.get("gates"), dict)
-        or set(contract["gates"]) != expected_gates
+        or set(contract["gates"]) != common_gates | agreement_gates
     ):
         raise ValueError("stability metric contract is invalid")
     gates = contract["gates"]
@@ -251,10 +336,6 @@ def _gate_verdict(metrics: dict[str, Any], gates: dict[str, Any]) -> dict[str, A
         "run_count": metrics["run_count"] >= gates["min_run_count"],
         "run_gate_pass_rate": (
             metrics["run_gate_pass_rate"] >= gates["min_run_gate_pass_rate"]
-        ),
-        "exact_case_decision_agreement_rate": (
-            metrics["exact_case_decision_agreement_rate"]
-            >= gates["min_exact_case_decision_agreement_rate"]
         ),
         "operation_f1": metrics["operation_f1_min"] >= gates["min_operation_f1"],
         "operation_f1_stdev": (
@@ -276,6 +357,20 @@ def _gate_verdict(metrics: dict[str, Any], gates: dict[str, Any]) -> dict[str, A
             <= gates["max_provider_or_parse_failure_count"]
         ),
     }
+    if "min_exact_case_decision_agreement_rate" in gates:
+        checks["exact_case_decision_agreement_rate"] = (
+            metrics["exact_case_decision_agreement_rate"]
+            >= gates["min_exact_case_decision_agreement_rate"]
+        )
+    else:
+        checks["structural_case_decision_agreement_rate"] = (
+            metrics["structural_case_decision_agreement_rate"]
+            >= gates["min_structural_case_decision_agreement_rate"]
+        )
+        checks["evidence_case_decision_agreement_rate"] = (
+            metrics["evidence_case_decision_agreement_rate"]
+            >= gates["min_evidence_case_decision_agreement_rate"]
+        )
     return {"passed": all(checks.values()), "checks": checks, "gates": gates}
 
 

@@ -39,7 +39,12 @@ def _base_report() -> dict:
                 {
                     "case_id": "case-a",
                     "predicted_operations": [
-                        {"type": "remember", "target_id": "alpha", "evidence_ids": ["t1"]}
+                        {
+                            "type": "remember",
+                            "target_id": "alpha",
+                            "new_value": "Alpha value",
+                            "evidence_ids": ["t1"],
+                        }
                     ],
                 },
                 {"case_id": "case-b", "predicted_operations": []},
@@ -57,14 +62,18 @@ def _write_reports(tmp_path: Path, reports: list[dict]) -> list[Path]:
     return paths
 
 
-def _contract(tmp_path: Path) -> Path:  # noqa: ARG001
+def _contract(tmp_path: Path, *, version: int = 1) -> Path:  # noqa: ARG001
     root = Path(__file__).resolve().parents[1]
     source = (
         root
         / "benchmarks"
         / "vida-memory-decisions-v1"
         / "json"
-        / "official_memops_stability_contract.json"
+        / (
+            "official_memops_stability_contract.json"
+            if version == 1
+            else "official_memops_stability_contract_v2.json"
+        )
     )
     return source
 
@@ -100,6 +109,28 @@ def test_aggregate_records_case_level_decision_variation(tmp_path: Path) -> None
     case_a = next(item for item in result["per_case_agreement"] if item["case_id"] == "case-a")
     assert case_a["unique_signature_count"] == 2
     assert case_a["majority_fraction"] == 0.666667
+    assert result["metrics"]["exact_case_decision_agreement_rate"] == 0.5
+
+
+def test_v2_gates_structure_and_evidence_but_keeps_text_exactness_diagnostic(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    reports = [_base_report(), _base_report(), _base_report()]
+    reports[2] = copy.deepcopy(reports[2])
+    reports[2]["variant"]["cases"][0]["predicted_operations"][0]["new_value"] = (
+        "Semantically equivalent alpha value"
+    )
+    result = stability.aggregate_reports(
+        report_paths=_write_reports(tmp_path, reports),
+        contract_path=_contract(tmp_path, version=2),
+        repository_root=root,
+    )
+
+    assert result["evaluation_id"] == "vida-memory-decision-stability-v2"
+    assert result["gate_verdict"]["passed"] is True
+    assert result["metrics"]["structural_case_decision_agreement_rate"] == 1.0
+    assert result["metrics"]["evidence_case_decision_agreement_rate"] == 1.0
     assert result["metrics"]["exact_case_decision_agreement_rate"] == 0.5
 
 

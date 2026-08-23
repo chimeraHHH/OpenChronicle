@@ -72,3 +72,10 @@ The first three-run v1 result is intentionally retained as a failed gate in
 operation metrics were perfectly stable, but byte-level free-text decisions
 were not. Structural, evidence-set, and surface-text agreement need separate
 follow-up metrics.
+
+`official_memops_stability_contract_v2.json` is that separate follow-up. It
+requires exact operation type/target/order agreement on every case and exact
+evidence-set agreement on at least 75% of cases. Complete generated-value JSON
+agreement remains visible as a stricter diagnostic but is not relabeled as a
+structural decision failure. Pass `--contract ..._v2.json` to the same
+aggregation command; the v1 contract and report remain unchanged.
