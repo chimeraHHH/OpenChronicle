@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -27,6 +28,27 @@ from ..services.memory import MemoryService
 from ..store import entries as entries_store
 from ..store import files as files_store
 from ..store import fts
+
+_FROZEN_CONTRACT_SHA256 = "e576c9fda1ac259ac7053483ebb7f2bb820fa5e16d7c4fedccf268c36c53b27d"
+_FROZEN_GATE_KEYS = frozenset(
+    {
+        "accepted_count",
+        "current_fact_count",
+        "unique_current_slot_count",
+        "duplicate_current_slot_count_max",
+        "history_entry_count",
+        "current_slot_consistency_min",
+        "parser_coverage_min",
+        "no_memory_accuracy_max",
+        "bm25_top1_accuracy_min",
+        "bm25_slot_oracle_accuracy_min",
+        "typed_slot_oracle_accuracy_min",
+        "typed_slot_oracle_contradiction_free_accuracy_min",
+        "typed_slot_oracle_stale_value_rate_max",
+        "typed_slot_oracle_contradiction_rate_max",
+        "repository_clean",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,18 +290,33 @@ def run_evaluation(
     manifest = load_manifest(manifest_path)
     sample = load_parquet_sample(parquet_path, manifest)
     contract_bytes = metric_contract_path.read_bytes()
+    contract_sha256 = hashlib.sha256(contract_bytes).hexdigest()
+    if (
+        manifest.get("metric_contract")
+        != {
+            "path": "json/metric_contract.json",
+            "sha256": _FROZEN_CONTRACT_SHA256,
+        }
+        or contract_sha256 != _FROZEN_CONTRACT_SHA256
+    ):
+        raise ValueError("FactConsolidation metric contract does not match the manifest")
     try:
         contract = json.loads(contract_bytes)
     except json.JSONDecodeError as exc:
         raise ValueError("FactConsolidation metric contract is invalid JSON") from exc
-    _validate_contract(contract, manifest)
+    _validate_contract(contract, manifest, contract_sha256=contract_sha256)
+    repository = _repository_state(repository_root)
     result = evaluate_sample(sample)
-    result["gate_verdict"] = _gate_verdict(result, contract["gates"])
+    result["gate_verdict"] = _gate_verdict(
+        result,
+        contract["gates"],
+        repository_clean=not repository["dirty"],
+    )
     return {
         "schema_version": 1,
         "evaluation_id": manifest["benchmark_id"],
         "scope": "official-data deterministic OpenChronicle adapter; not an official leaderboard run",
-        "repository": _repository_state(repository_root),
+        "repository": repository,
         "environment": {
             "python": platform.python_version(),
             "implementation": platform.python_implementation(),
@@ -301,7 +338,7 @@ def run_evaluation(
         },
         "metric_contract": {
             "path": str(metric_contract_path.relative_to(repository_root)),
-            "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+            "sha256": contract_sha256,
         },
         "result": result,
     }
@@ -322,7 +359,9 @@ def evaluate_sample(sample: SourceSample) -> dict[str, Any]:
         applied = _ingest_facts(conn, service, facts)
         ingest_ms = (time.perf_counter() - ingest_started) * 1000
         current_facts = list_current_facts(conn, cfg, limit=10_000)
-        current_by_subject = {fact.subject_key: fact for fact in current_facts}
+        current_by_subject: dict[str, list[CurrentFact]] = {}
+        for fact in current_facts:
+            current_by_subject.setdefault(fact.subject_key, []).append(fact)
         current_by_identity = {(fact.path, fact.id): fact for fact in current_facts}
 
         variants = {
@@ -330,25 +369,34 @@ def evaluate_sample(sample: SourceSample) -> dict[str, Any]:
                 sample,
                 questions,
                 histories,
-                answer=lambda _question, _text: "",
+                answer=lambda _text: "",
             ),
-            "bm25_current_only": _evaluate_variant(
+            "bm25_top1_current_only": _evaluate_variant(
                 sample,
                 questions,
                 histories,
-                answer=lambda question, text: _bm25_answer(
+                answer=lambda text: _bm25_top1_answer(
                     conn,
-                    question,
                     text,
                     current_by_identity,
                 ),
             ),
-            "typed_current_fact": _evaluate_variant(
+            "bm25_top20_plus_slot_oracle": _evaluate_variant(
                 sample,
                 questions,
                 histories,
-                answer=lambda question, _text: _typed_answer(
-                    question,
+                answer=lambda text: _bm25_slot_oracle_answer(
+                    conn,
+                    text,
+                    current_by_identity,
+                ),
+            ),
+            "typed_slot_oracle": _evaluate_variant(
+                sample,
+                questions,
+                histories,
+                answer=lambda text: _typed_answer(
+                    parse_question(text),
                     current_by_subject,
                 ),
             ),
@@ -368,7 +416,11 @@ def evaluate_sample(sample: SourceSample) -> dict[str, Any]:
             "accepted_count": sum(fact.accepted for fact in applied),
             "append_count": sum(fact.operation == "append" for fact in applied),
             "supersede_count": sum(fact.operation == "supersede" for fact in applied),
-            "current_fact_count": len(current_by_subject),
+            "current_fact_count": len(current_facts),
+            "unique_current_slot_count": len(current_by_subject),
+            "duplicate_current_slot_count": sum(
+                max(0, len(group) - 1) for group in current_by_subject.values()
+            ),
             "history_entry_count": history_count,
             "current_slot_consistency": consistency,
             "elapsed_ms": round(ingest_ms, 3),
@@ -457,21 +509,55 @@ def _ingest_facts(
 
 def _typed_answer(
     question: ParsedQuestion,
-    current_by_subject: dict[str, CurrentFact],
+    current_by_subject: dict[str, list[CurrentFact]],
 ) -> str:
-    fact = current_by_subject.get(question.subject_key)
-    if fact is None:
+    facts = current_by_subject.get(question.subject_key, [])
+    if len(facts) != 1:
         return ""
+    fact = facts[0]
     parsed = parse_statement(fact.content)
     return parsed.value if parsed.slot == question.slot else ""
 
 
-def _bm25_answer(
+def _bm25_top1_answer(
     conn,
-    question: ParsedQuestion,
     question_text: str,
     current_by_identity: dict[tuple[str, str], CurrentFact],
 ) -> str:
+    hits = fts.search(
+        conn,
+        query=question_text,
+        path_patterns=["project-benchmark-facts-*.md"],
+        top_k=1,
+        include_superseded=False,
+        match_any_terms=True,
+    )
+    if not hits:
+        return ""
+    hit = hits[0]
+    if (hit.path, hit.id) not in current_by_identity:
+        return ""
+    return parse_statement(hit.content).value
+
+
+def _bm25_slot_oracle_answer(
+    conn,
+    question_text: str,
+    current_by_identity: dict[tuple[str, str], CurrentFact],
+) -> str:
+    question = parse_question(question_text)
+    for hit in _current_bm25_hits(conn, question_text, current_by_identity):
+        parsed = parse_statement(hit.content)
+        if parsed.slot == question.slot:
+            return parsed.value
+    return ""
+
+
+def _current_bm25_hits(
+    conn,
+    question_text: str,
+    current_by_identity: dict[tuple[str, str], CurrentFact],
+) -> list[fts.EntryHit]:
     hits = fts.search(
         conn,
         query=question_text,
@@ -480,13 +566,12 @@ def _bm25_answer(
         include_superseded=False,
         match_any_terms=True,
     )
+    current: list[fts.EntryHit] = []
     for hit in hits:
         if (hit.path, hit.id) not in current_by_identity:
             continue
-        parsed = parse_statement(hit.content)
-        if parsed.slot == question.slot:
-            return parsed.value
-    return ""
+        current.append(hit)
+    return current
 
 
 def _evaluate_variant(
@@ -494,7 +579,7 @@ def _evaluate_variant(
     questions: tuple[ParsedQuestion, ...],
     histories: dict[tuple[str, str], list[str]],
     *,
-    answer: Callable[[ParsedQuestion, str], str],
+    answer: Callable[[str], str],
 ) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
     latencies: list[float] = []
@@ -506,25 +591,42 @@ def _evaluate_variant(
         strict=True,
     ):
         started = time.perf_counter()
-        prediction = answer(question, question_text)
+        prediction = answer(question_text)
         latencies.append((time.perf_counter() - started) * 1000)
         correct = any(substring_exact_match(prediction, gold) for gold in golds)
         stale_values = histories[question.slot][:-1]
-        stale = not correct and any(
-            normalize_answer(prediction) == normalize_answer(value) for value in stale_values
+        normalized_golds = {normalize_answer(gold) for gold in golds}
+        stale = any(
+            not any(
+                f" {normalized_value} " in f" {normalized_gold} "
+                for normalized_gold in normalized_golds
+            )
+            and _normalized_phrase_in_prediction(prediction, normalized_value)
+            for value in stale_values
+            if (normalized_value := normalize_answer(value))
         )
+        contradiction_free = correct and not stale
+        contradiction = correct and stale
         rows.append(
             {
                 "qa_pair_id": qa_id,
                 "prediction": prediction,
                 "correct": correct,
                 "stale": stale,
+                "contradiction": contradiction,
+                "contradiction_free": contradiction_free,
                 "unanswered": not prediction.strip(),
             }
         )
     return {
         "accuracy": _ratio(sum(row["correct"] for row in rows), len(rows)),
+        "contradiction_free_accuracy": _ratio(
+            sum(row["contradiction_free"] for row in rows), len(rows)
+        ),
         "stale_value_rate": _ratio(sum(row["stale"] for row in rows), len(rows)),
+        "contradiction_rate": _ratio(
+            sum(row["contradiction"] for row in rows), len(rows)
+        ),
         "unanswered_rate": _ratio(sum(row["unanswered"] for row in rows), len(rows)),
         "query_latency_p50_ms": round(_percentile(latencies, 0.50), 3),
         "query_latency_p95_ms": round(_percentile(latencies, 0.95), 3),
@@ -543,30 +645,44 @@ def substring_exact_match(prediction: str, ground_truth: str) -> bool:
     return normalize_answer(ground_truth) in normalize_answer(prediction)
 
 
+def _normalized_phrase_in_prediction(prediction: str, normalized_phrase: str) -> bool:
+    normalized_prediction = normalize_answer(prediction)
+    return f" {normalized_phrase} " in f" {normalized_prediction} "
+
+
 def _current_slot_consistency(
     facts: tuple[ParsedFact, ...],
-    current_by_subject: dict[str, CurrentFact],
+    current_by_subject: dict[str, list[CurrentFact]],
 ) -> float:
     expected: dict[str, ParsedFact] = {}
     for fact in facts:
         expected[fact.subject_key] = fact
     matches = 0
     for subject_key, expected_fact in expected.items():
-        current = current_by_subject.get(subject_key)
-        if current is None:
+        current = current_by_subject.get(subject_key, [])
+        if len(current) != 1:
             continue
-        actual = parse_statement(current.content)
+        actual = parse_statement(current[0].content)
         matches += actual.slot == expected_fact.slot and actual.value == expected_fact.value
     return _ratio(matches, len(expected))
 
 
-def _gate_verdict(result: dict[str, Any], gates: dict[str, Any]) -> dict[str, Any]:
+def _gate_verdict(
+    result: dict[str, Any],
+    gates: dict[str, Any],
+    *,
+    repository_clean: bool,
+) -> dict[str, Any]:
     variants = result["variants"]
     ingest = result["ingest"]
     parser = result["parser"]
     checks = {
         "accepted_count": ingest["accepted_count"] == gates["accepted_count"],
         "current_fact_count": ingest["current_fact_count"] == gates["current_fact_count"],
+        "unique_current_slot_count": ingest["unique_current_slot_count"]
+        == gates["unique_current_slot_count"],
+        "duplicate_current_slot_count": ingest["duplicate_current_slot_count"]
+        <= gates["duplicate_current_slot_count_max"],
         "history_entry_count": ingest["history_entry_count"] == gates["history_entry_count"],
         "current_slot_consistency": ingest["current_slot_consistency"]
         >= gates["current_slot_consistency_min"],
@@ -575,25 +691,80 @@ def _gate_verdict(result: dict[str, Any], gates: dict[str, Any]) -> dict[str, An
         >= gates["parser_coverage_min"],
         "no_memory_accuracy": variants["no_memory"]["accuracy"]
         <= gates["no_memory_accuracy_max"],
-        "bm25_accuracy": variants["bm25_current_only"]["accuracy"]
-        >= gates["bm25_accuracy_min"],
-        "typed_accuracy": variants["typed_current_fact"]["accuracy"]
-        >= gates["typed_accuracy_min"],
-        "typed_stale_value_rate": variants["typed_current_fact"]["stale_value_rate"]
-        <= gates["typed_stale_value_rate_max"],
+        "bm25_top1_accuracy": variants["bm25_top1_current_only"]["accuracy"]
+        >= gates["bm25_top1_accuracy_min"],
+        "bm25_slot_oracle_accuracy": variants["bm25_top20_plus_slot_oracle"]["accuracy"]
+        >= gates["bm25_slot_oracle_accuracy_min"],
+        "typed_slot_oracle_accuracy": variants["typed_slot_oracle"]["accuracy"]
+        >= gates["typed_slot_oracle_accuracy_min"],
+        "typed_slot_oracle_contradiction_free_accuracy": variants[
+            "typed_slot_oracle"
+        ]["contradiction_free_accuracy"]
+        >= gates["typed_slot_oracle_contradiction_free_accuracy_min"],
+        "typed_slot_oracle_stale_value_rate": variants["typed_slot_oracle"][
+            "stale_value_rate"
+        ]
+        <= gates["typed_slot_oracle_stale_value_rate_max"],
+        "typed_slot_oracle_contradiction_rate": variants["typed_slot_oracle"][
+            "contradiction_rate"
+        ]
+        <= gates["typed_slot_oracle_contradiction_rate_max"],
+        "repository_clean": repository_clean is gates["repository_clean"],
     }
     return {"passed": all(checks.values()), "checks": checks}
 
 
-def _validate_contract(contract: object, manifest: dict[str, Any]) -> None:
+def _validate_contract(
+    contract: object,
+    manifest: dict[str, Any],
+    *,
+    contract_sha256: str,
+) -> None:
     if (
         not isinstance(contract, dict)
+        or set(contract) != {
+            "schema_version",
+            "benchmark_id",
+            "primary_metric",
+            "official_metric",
+            "gates",
+        }
         or contract.get("schema_version") != 1
         or contract.get("benchmark_id") != manifest["benchmark_id"]
-        or contract.get("primary_metric") != "typed_current_fact_accuracy"
+        or contract.get("primary_metric")
+        != "typed_slot_oracle_contradiction_free_accuracy"
+        or contract.get("official_metric") != "substring_exact_match"
         or not isinstance(contract.get("gates"), dict)
+        or set(contract["gates"]) != _FROZEN_GATE_KEYS
+        or manifest.get("metric_contract")
+        != {
+            "path": "json/metric_contract.json",
+            "sha256": _FROZEN_CONTRACT_SHA256,
+        }
+        or contract_sha256 != _FROZEN_CONTRACT_SHA256
     ):
         raise ValueError("FactConsolidation metric contract does not match the manifest")
+    gates = contract["gates"]
+    count_keys = {
+        "accepted_count",
+        "current_fact_count",
+        "unique_current_slot_count",
+        "duplicate_current_slot_count_max",
+        "history_entry_count",
+    }
+    if any(type(gates[key]) is not int or gates[key] < 0 for key in count_keys):
+        raise ValueError("FactConsolidation metric contract has invalid count gates")
+    rate_keys = _FROZEN_GATE_KEYS - count_keys - {"repository_clean"}
+    if any(
+        isinstance(gates[key], bool)
+        or not isinstance(gates[key], (int, float))
+        or not math.isfinite(gates[key])
+        or not 0 <= gates[key] <= 1
+        for key in rate_keys
+    ):
+        raise ValueError("FactConsolidation metric contract has invalid rate gates")
+    if type(gates["repository_clean"]) is not bool:
+        raise ValueError("FactConsolidation metric contract has invalid repository gate")
 
 
 def _canonical_subject(value: str) -> str:

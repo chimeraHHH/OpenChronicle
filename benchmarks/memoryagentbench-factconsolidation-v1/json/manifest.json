@@ -1,6 +1,10 @@
 {
   "schema_version": 1,
   "benchmark_id": "mab-cr-factconsolidation-sh-6k-v1",
+  "metric_contract": {
+    "path": "json/metric_contract.json",
+    "sha256": "e576c9fda1ac259ac7053483ebb7f2bb820fa5e16d7c4fedccf268c36c53b27d"
+  },
   "upstream": {
     "repository": "https://github.com/HUST-AI-HYZ/MemoryAgentBench",
     "code_revision": "fe1735de8cf8b9908e1e3d3b5612afc815698062",
