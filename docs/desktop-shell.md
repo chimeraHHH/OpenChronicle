@@ -34,16 +34,18 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v14** cumulatively
+The bridge protocol is versioned and allowlisted. Protocol **v16** cumulatively
 includes immutable Daily Wrap reads, side-effect-free suggestions, Prompt and
 Reply Rescue review, exact-selection receipts, reviewed résumé source/import
-flows, deterministic preview/export, and supervised résumé proposal review.
+flows, deterministic preview/export, supervised résumé proposal review, and a
+bounded current published-memory snapshot.
 Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:
 
 - a local-only, model-ping-free status snapshot;
-- bounded recent timeline, review-inbox, and Daily Wrap summaries;
+- bounded recent timeline, review-inbox, current published-memory, and Daily
+  Wrap summaries;
 - one candidate read/edit/approve/reject operation with optimistic version
   checking;
 - two-phase permanent forget with a version- and closure-bound plan digest;
@@ -136,6 +138,15 @@ are redacted before display. That redaction is defense in depth rather than a
 claim that arbitrary captured prose can be classified perfectly as secret.
 React uses ordinary text nodes plus bidi isolation; no evidence string can
 navigate, invoke Tauri, or create a link.
+
+## Published Memory / About Me
+
+The Memory page is an inspect-only projection of current, authorized entries
+from active non-`event-*` Markdown files. It supports local text filtering and
+About Me/project scopes, and opens the exact entry's source lineage in the
+existing drawer. Superseded entries and reducer-owned session logs are excluded
+from the current view; the canonical Markdown history remains intact. New facts
+and corrections continue through the Review Inbox.
 
 ## Tauri security profile
 

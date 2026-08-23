@@ -44,7 +44,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 15
+PROTOCOL_VERSION = 16
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -230,6 +230,7 @@ def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
         optional={
             "timeline_limit",
             "candidate_limit",
+            "memory_limit",
             "wrap_limit",
             "suggestion_limit",
             "prompt_rescue_limit",
@@ -238,6 +239,7 @@ def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
     )
     timeline_limit = _bounded_int(params.get("timeline_limit", 12), 0, 24)
     candidate_limit = _bounded_int(params.get("candidate_limit", 50), 0, 100)
+    memory_limit = _bounded_int(params.get("memory_limit", 200), 0, 500)
     wrap_limit = _bounded_int(params.get("wrap_limit", 14), 0, 30)
     suggestion_limit = _bounded_int(params.get("suggestion_limit", 20), 0, 50)
     prompt_rescue_limit = _bounded_int(params.get("prompt_rescue_limit", 20), 0, 50)
@@ -249,6 +251,7 @@ def _snapshot(params: dict[str, Any]) -> dict[str, Any]:
             cfg,
             timeline_limit=timeline_limit,
             candidate_limit=candidate_limit,
+            memory_limit=memory_limit,
             wrap_limit=wrap_limit,
             suggestion_limit=suggestion_limit,
             prompt_rescue_limit=prompt_rescue_limit,

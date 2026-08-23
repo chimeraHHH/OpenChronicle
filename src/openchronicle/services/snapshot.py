@@ -23,6 +23,7 @@ from ..reply_rescue.service import validate_config as validate_reply_rescue
 from ..services.context import ContextService
 from ..services.evidence import EvidenceResolver
 from ..services.memory import MemoryService
+from ..store import entries as entries_store
 from ..store import files as files_store
 from ..store import fts
 from ..suggestions.service import SuggestionKernel
@@ -37,6 +38,7 @@ def build_snapshot(
     timeline_limit: int,
     candidate_limit: int,
     wrap_limit: int,
+    memory_limit: int = 200,
     suggestion_limit: int = 20,
     prompt_rescue_limit: int = 20,
     reply_rescue_limit: int = 20,
@@ -84,6 +86,7 @@ def build_snapshot(
             "archived_files": 0,
             "entries": 0,
         }
+        current_memories: list[dict[str, Any]] = []
         for file_row in fts.list_files(conn, include_dormant=True, include_archived=True):
             if candidate_store.is_tombstoned(conn, kind="memory_file", artifact_id=file_row.path):
                 continue
@@ -110,6 +113,26 @@ def build_snapshot(
             if status_key in memory_counts:
                 memory_counts[status_key] += 1
             memory_counts["entries"] += len(visible_entries)
+            if parsed.status == "active" and not parsed.path.name.startswith("event-"):
+                for entry in visible_entries:
+                    if entries_store.entry_index_superseded(entry):
+                        continue
+                    current_memories.append(
+                        {
+                            "id": str(entry.id)[:128],
+                            "path": str(parsed.path.name)[:512],
+                            "timestamp": str(entry.timestamp)[:100],
+                            "content": str(entry.body)[:10_000],
+                            "tags": [str(tag)[:100] for tag in entry.tags[:20]],
+                            "origin": str(entry.origin)[:100],
+                            "source_count": len(entry.evidence_refs),
+                        }
+                    )
+        current_memories.sort(
+            key=lambda item: (str(item["timestamp"]), str(item["path"]), str(item["id"])),
+            reverse=True,
+        )
+        memories = current_memories[:memory_limit] if memory_limit else []
         raw_timeline_count = int(conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0])
         visible_timeline = (
             [
@@ -239,6 +262,7 @@ def build_snapshot(
             }
             for block in timeline
         ],
+        "memories": memories,
         "candidates": [
             {
                 "id": str(candidate.id)[:128],

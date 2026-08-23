@@ -49,8 +49,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks digest-bound PDF preview as bridge protocol v15", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(15);
+  it("tracks published-memory snapshots as bridge protocol v16", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(16);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -62,6 +62,7 @@ describe("desktop bridge adapters", () => {
       request: {
         timeline_limit: 24,
         candidate_limit: 100,
+        memory_limit: 250,
         wrap_limit: 30,
         suggestion_limit: 50,
         prompt_rescue_limit: 50,
@@ -70,6 +71,11 @@ describe("desktop bridge adapters", () => {
     });
     expect(result.daemon).toMatchObject({ state: "running", health: "healthy", pid: 1234 });
     expect(result.capture).toMatchObject({ paused: false, state: "active", last_app: "Code" });
+    expect(result.memories[0]).toMatchObject({
+      id: "memory-entry-1",
+      path: "user-preferences.md",
+      source_count: 2,
+    });
     expect(result.review_counts).toEqual({ pending: 1, conflict: 0, applying: 0, accepted: 0, rejected: 0 });
     expect(result.timeline[0]).toMatchObject({
       id: "block-1",

@@ -5,14 +5,15 @@ export type PageId =
   | "reply-rescue"
   | "resume-rescue"
   | "review"
+  | "memory"
   | "daily-wrap"
   | "timeline"
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 15 adds digest-bound PDF preview pages;
-// résumé rescue still has no upload, application, submission, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 15 as const;
+// WebView result projection. Version 16 adds bounded, current published-memory
+// summaries; résumé rescue still has no upload, application, submission, or send capabilities.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 16 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -708,6 +709,16 @@ export interface Candidate {
   evidence: EvidenceRef[];
 }
 
+export interface MemorySummary {
+  id: string;
+  path: string;
+  timestamp: string;
+  content: string;
+  tags: string[];
+  origin: string;
+  source_count: number;
+}
+
 export interface ForgetPreview {
   candidate_id: string;
   expected_version: number;
@@ -835,6 +846,7 @@ export interface DesktopSnapshot {
     rejected: number;
   };
   purge_pending_count: number;
+  memories: MemorySummary[];
   candidates: CandidateSummary[];
   daily_wraps: DailyWrapSummary[];
   suggestions_enabled: boolean;

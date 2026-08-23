@@ -13,6 +13,7 @@ import type {
   JsonResumeImportReview,
   JsonResumeSelection,
   JsonResumeUpstreamSchema,
+  MemorySummary,
   OpenedJsonResumeReview,
   OpenedResumeDocumentReview,
   PrivacySnapshot,
@@ -399,6 +400,19 @@ function timelineItem(value: unknown): TimelineItem {
     entries: stringArray(raw.entries, "timeline entries"),
     apps: stringArray(raw.apps_used, "timeline applications"),
     capture_count: numberValue(raw.capture_count, "timeline capture count"),
+  };
+}
+
+function memorySummary(value: unknown): MemorySummary {
+  const raw = objectValue(value, "published memory summary");
+  return {
+    id: stringValue(raw.id, "published memory id"),
+    path: stringValue(raw.path, "published memory path"),
+    timestamp: stringValue(raw.timestamp, "published memory timestamp"),
+    content: stringValue(raw.content, "published memory content"),
+    tags: stringArray(raw.tags, "published memory tags"),
+    origin: stringValue(raw.origin, "published memory origin"),
+    source_count: numberValue(raw.source_count, "published memory source count"),
   };
 }
 
@@ -2714,6 +2728,7 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
       rejected: numberValue(candidateCounts.rejected, "rejected candidate count"),
     },
     purge_pending_count: 0,
+    memories: arrayValue(raw.memories, "published memory summaries").map(memorySummary),
     candidates,
     daily_wraps: dailyWraps,
     suggestions_enabled: booleanValue(
@@ -3044,6 +3059,7 @@ export const desktopApi = {
       {
         timeline_limit: 24,
         candidate_limit: 100,
+        memory_limit: 250,
         wrap_limit: 30,
         suggestion_limit: 50,
         prompt_rescue_limit: 50,

@@ -192,6 +192,9 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
 - [x] Authorized historical activity-evidence search for classifier-side
   cross-session pattern confirmation, kept separate from accepted-memory search
   and from the durable semantic index.
+- [x] Inspect-only Published Memory / About Me desktop slice for authorized
+  current facts, local filtering, scopes, and exact provenance opening. Editing,
+  export, and explicit entry-root forget remain open product work.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1

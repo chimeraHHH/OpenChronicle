@@ -7,7 +7,7 @@ installation locations and never search `PATH`.
 
 `npm run tauri:bundle` builds a PyInstaller 6.22.0 one-file bridge for the
 current allowlisted macOS architecture, verifies the Mach-O architecture,
-smoke-tests protocol v15 in an isolated data root, writes a SHA-256 manifest,
+smoke-tests protocol v16 in an isolated data root, writes a SHA-256 manifest,
 and passes the target-suffixed binary to Tauri through
 `tauri.bundle.conf.json`. Generated binaries and manifests are ignored.
 The finalizer checks both Mach-O files, preserves the sidecar hash in local

@@ -472,6 +472,75 @@ def test_snapshot_is_zero_network_and_zero_limits_skip_list_queries(
     assert "api_key" not in json.dumps(result)
 
 
+def test_snapshot_lists_only_current_non_event_published_memories(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        entries_store.create_file(
+            conn,
+            name="user-preferences.md",
+            description="reviewed preferences",
+            tags=["preference"],
+        )
+        entries_store.append_entry_once(
+            conn,
+            name="user-preferences.md",
+            content="User prefers cloud tools.",
+            tags=["preference"],
+            entry_id="published-old",
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+        )
+        replacement_id = entries_store.supersede_entry(
+            conn,
+            name="user-preferences.md",
+            old_entry_id="published-old",
+            new_content="User prefers local-first tools.",
+            reason="reviewed update",
+            tags=["preference", "local-first"],
+            new_entry_id="published-current",
+        )
+        assert replacement_id == "published-current"
+        entries_store.create_file(
+            conn,
+            name="event-2026-08-23.md",
+            description="session evidence",
+            tags=["event"],
+        )
+        entries_store.append_entry_once(
+            conn,
+            name="event-2026-08-23.md",
+            content="SESSION_ONLY_SECRET",
+            tags=["session"],
+            entry_id="event-only",
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+        )
+
+    response, exit_code = _request(
+        "snapshot",
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "memory_limit": 10,
+            "wrap_limit": 0,
+            "suggestion_limit": 0,
+            "prompt_rescue_limit": 0,
+            "reply_rescue_limit": 0,
+        },
+    )
+
+    assert exit_code == 0
+    memories = response["result"]["memories"]
+    assert [(item["path"], item["id"], item["content"]) for item in memories] == [
+        (
+            "user-preferences.md",
+            "published-current",
+            "User prefers local-first tools.",
+        )
+    ]
+    assert memories[0]["source_count"] == 1
+    assert "SESSION_ONLY_SECRET" not in json.dumps(response, ensure_ascii=False)
+
+
 def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(
     ac_root: Path,
     monkeypatch: pytest.MonkeyPatch,

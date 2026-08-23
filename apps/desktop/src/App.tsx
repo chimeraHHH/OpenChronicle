@@ -8,6 +8,7 @@ import { UntrustedText } from "./components/UntrustedText";
 import type { DesktopSnapshot, PageId, SourceSubject } from "./contracts";
 import { displayError } from "./format";
 import { DailyWrapPage } from "./pages/DailyWrapPage";
+import { MemoryPage } from "./pages/MemoryPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { PrivacyPage } from "./pages/PrivacyPage";
 import { PromptRescuePage } from "./pages/PromptRescuePage";
@@ -221,6 +222,9 @@ export function App({ api = desktopApi }: AppProps) {
               onForgotten={() => setSourceSubject(null)}
               onOpenSource={setSourceSubject}
             />
+          ) : null}
+          {snapshot && page === "memory" ? (
+            <MemoryPage memories={snapshot.memories} onOpenSource={setSourceSubject} />
           ) : null}
           {snapshot && page === "daily-wrap" ? (
             <DailyWrapPage

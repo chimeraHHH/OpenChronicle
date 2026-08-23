@@ -192,6 +192,35 @@ beforeEach(() => {
 });
 
 describe("trusted console", () => {
+  it("shows current published memory and opens its local sources", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Memory" }));
+
+    expect(await screen.findByRole("heading", { name: "Memory / About Me" })).toBeInTheDocument();
+    expect(
+      screen.getAllByText("User prefers local-first tools and concise technical reports.").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText(/Superseded versions are kept in history/i)).toBeInTheDocument();
+
+    const search = screen.getByRole("searchbox", { name: "Search remembered facts" });
+    await user.type(search, "unmatched phrase");
+    expect(screen.getByText("No current memories match this filter.")).toBeInTheDocument();
+    await user.clear(search);
+
+    await user.click(screen.getByRole("button", { name: "View sources" }));
+    expect(await screen.findByRole("heading", { name: "Memory sources" })).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenCalledWith("trace_provenance", {
+      request: {
+        kind: "memory_entry",
+        artifact_id: "memory-entry-1",
+        path: "user-preferences.md",
+        max_depth: 4,
+      },
+    });
+  });
+
   it("reviews an exact résumé projection without ATS, upload, or application capability", async () => {
     const user = userEvent.setup();
     render(<App />);

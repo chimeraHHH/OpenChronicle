@@ -16,6 +16,7 @@ const pages: Array<{ id: PageId; label: string; glyph: string }> = [
   { id: "reply-rescue", label: "Reply Rescue", glyph: "R" },
   { id: "resume-rescue", label: "Résumé Rescue", glyph: "CV" },
   { id: "review", label: "Review", glyph: "R" },
+  { id: "memory", label: "Memory", glyph: "M" },
   { id: "daily-wrap", label: "Daily Wrap", glyph: "D" },
   { id: "timeline", label: "Timeline", glyph: "T" },
   { id: "privacy", label: "Privacy", glyph: "P" },

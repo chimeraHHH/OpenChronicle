@@ -56,12 +56,14 @@ The classifier receives only these tools:
 
 - `read_memory`
 - `search_memory`
+- `search_activity_evidence`
 - `propose_memory_candidate`
 - `commit`
 
-It has no append, create, supersede, compact, file, shell, browser, messaging,
-or other side-effect tool. Screen-derived and retrieved strings are explicitly
-treated as untrusted quoted data.
+It has no direct append, create, compact, file, shell, browser, messaging, or
+other side-effect tool. `propose_memory_candidate` may stage a reviewed append
+or supersede operation, but never mutates Markdown. Screen-derived and
+retrieved strings are explicitly treated as untrusted quoted data.
 
 Each proposal must cite one or more evidence tokens that were present in the
 current context or returned by a read tool. Unknown tokens are rejected. A

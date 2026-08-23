@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 12 * 1024 * 1024;
-const PROTOCOL_VERSION: u8 = 15;
+const PROTOCOL_VERSION: u8 = 16;
 // The largest allowlisted response is wrap.get: the Python bridge bounds five
 // categories to 100 items each and each item to 20 bounded references. Even if
 // every bounded character needs JSON's six-byte control-character escape, the
@@ -713,21 +713,21 @@ mod tests {
 
     #[test]
     fn response_must_be_one_strict_versioned_line() {
-        let response = parse_response(b"{\"version\":15,\"ok\":true,\"result\":{}}\n")
+        let response = parse_response(b"{\"version\":16,\"ok\":true,\"result\":{}}\n")
             .expect("valid response");
         assert!(response.ok);
 
         assert!(
-            parse_response(b"{\"version\":15,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
+            parse_response(b"{\"version\":16,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
                 .is_err()
         );
         assert!(parse_response(b"{\"version\":2,\"ok\":true,\"result\":{}}\n").is_err());
         assert!(
-            parse_response(b"{\"version\":15,\"ok\":true,\"result\":{},\"unknown\":true}\n")
+            parse_response(b"{\"version\":16,\"ok\":true,\"result\":{},\"unknown\":true}\n")
                 .is_err()
         );
         assert!(parse_response(
-            b"{\"version\":15,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
+            b"{\"version\":16,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
         )
         .is_err());
     }
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn backend_error_is_mapped_by_code_only() {
         let response = parse_response(
-            b"{\"version\":15,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
+            b"{\"version\":16,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
         )
         .expect("valid error envelope");
         let error = DesktopError::from_bridge(&response.error.expect("error").code);

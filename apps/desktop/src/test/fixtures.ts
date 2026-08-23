@@ -5,6 +5,7 @@ import type {
   DailyWrapSummary,
   DesktopSnapshot,
   ForgetPreview,
+  MemorySummary,
   JsonResumeExport,
   OpenedJsonResumeReview,
   OpenedResumeDocumentReview,
@@ -73,6 +74,19 @@ export function candidateDetail(overrides: Partial<Candidate> = {}): Candidate {
         content_hash: "abc123",
       },
     ],
+    ...overrides,
+  };
+}
+
+export function memorySummary(overrides: Partial<MemorySummary> = {}): MemorySummary {
+  return {
+    id: "memory-entry-1",
+    path: "user-preferences.md",
+    timestamp: "2026-08-08T08:10:00+08:00",
+    content: "User prefers local-first tools and concise technical reports.",
+    tags: ["preference", "local-first"],
+    origin: "derived-v1",
+    source_count: 2,
     ...overrides,
   };
 }
@@ -695,6 +709,7 @@ export function snapshot(overrides: Partial<DesktopSnapshot> = {}): DesktopSnaps
     },
     review_counts: { pending: 1, conflict: 0, applying: 0, accepted: 0, rejected: 0 },
     purge_pending_count: 0,
+    memories: [memorySummary()],
     candidates: [candidateSummary()],
     daily_wraps: [wrapSummary()],
     suggestions_enabled: true,
@@ -847,6 +862,7 @@ export function bridgeSnapshot(value: DesktopSnapshot = snapshot()) {
       apps_used: item.apps,
       capture_count: item.capture_count,
     })),
+    memories: value.memories,
     candidates: value.candidates.map((item) => ({
       id: item.id,
       status: item.status,
