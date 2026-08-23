@@ -1,14 +1,14 @@
-"""Compact an explicitly manual memory file while preserving identity and facts.
+"""Compact an authorized memory file while preserving identity and provenance.
 
-Workflow: LLM rewrites the file, then a noun-phrase-preservation check blocks
-compressions that drop too many distinct tokens.
+Workflow: LLM rewrites individual leaf bodies, then exact trust/dependency
+checks and a noun-phrase-preservation gate reject unsafe compression.
 """
 
 from __future__ import annotations
 
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import frontmatter
@@ -18,6 +18,8 @@ from ..logger import get
 from ..memory_candidates import store as candidate_store
 from ..privacy.egress import model_egress_lock
 from ..prompts import load as load_prompt
+from ..provenance import store as provenance_store
+from ..provenance.models import EvidenceRef
 from ..services.context import ContextService
 from ..store import entries as entries_mod
 from ..store import files as files_mod
@@ -52,7 +54,7 @@ def compact_file(cfg: Config, conn: sqlite3.Connection, *, name: str) -> Compact
     attempt = _snapshot_and_call_compactor(cfg, conn, path=path, name=name)
     if isinstance(attempt, CompactResult):
         return attempt
-    original, before_unique, before_tokens, resp = attempt
+    original, before_unique, before_tokens, frozen_source_ids, resp = attempt
 
     new_text = llm_mod.extract_text(resp).strip()
     # Strip markdown code fences if the model wrapped the output
@@ -76,16 +78,19 @@ def compact_file(cfg: Config, conn: sqlite3.Connection, *, name: str) -> Compact
     original_entries = files_mod._parse_entries(original_post.content)
     original_identity = [(entry.id, entry.timestamp) for entry in original_entries]
     compacted_identity = [(entry.id, entry.timestamp) for entry in compacted_entries]
+    original_by_id = {entry.id: entry for entry in original_entries}
     if (
         not compacted_entries
         or len({entry.id for entry in compacted_entries}) != len(compacted_entries)
         or compacted_identity != original_identity
         or any(
             not entry.origin_valid
-            or entry.origin != files_mod.MANUAL_ENTRY_ORIGIN
             or not entry.provenance_valid
+            or entry.origin != original_by_id[entry.id].origin
+            or entry.tags != original_by_id[entry.id].tags
             or entry.provenance_present
-            or entry.evidence_refs
+            != original_by_id[entry.id].provenance_present
+            or entry.evidence_refs != original_by_id[entry.id].evidence_refs
             for entry in compacted_entries
         )
     ):
@@ -99,6 +104,40 @@ def compact_file(cfg: Config, conn: sqlite3.Connection, *, name: str) -> Compact
             0.0,
             "response changed canonical entry identity or trust markers",
         )
+    changed_frozen = [
+        entry.id
+        for entry in compacted_entries
+        if entry.id in frozen_source_ids
+        and entry.body != original_by_id[entry.id].body
+    ]
+    if changed_frozen:
+        return CompactResult(
+            name,
+            False,
+            before_tokens,
+            len(new_text) // 4,
+            len(before_unique),
+            0,
+            0.0,
+            "response changed an entry body referenced by dependent memory",
+        )
+    # Trust markers, dependency frames, supersede tags, and canonical headings
+    # remain local authority even after exact output validation.
+    compacted_entries = [
+        replace(
+            entry,
+            heading_line=original_by_id[entry.id].heading_line,
+            tags=list(original_by_id[entry.id].tags),
+            superseded_by=original_by_id[entry.id].superseded_by,
+            evidence_refs=list(original_by_id[entry.id].evidence_refs),
+            provenance_present=original_by_id[entry.id].provenance_present,
+            provenance_valid=original_by_id[entry.id].provenance_valid,
+            provenance_error=original_by_id[entry.id].provenance_error,
+            origin=original_by_id[entry.id].origin,
+            origin_valid=original_by_id[entry.id].origin_valid,
+        )
+        for entry in compacted_entries
+    ]
     # Frontmatter is local authority, not model output. Preserve it exactly
     # except for the flag this successful operation is meant to clear, and
     # render only parsed canonical entries so unframed model text is dropped.
@@ -218,7 +257,7 @@ def _snapshot_and_call_compactor(
     *,
     path,
     name: str,
-) -> tuple[str, set[str], int, Any] | CompactResult:
+) -> tuple[str, set[str], int, set[str], Any] | CompactResult:
     """Authorize the exact file snapshot and keep it stable through egress."""
     with model_egress_lock():
         with files_mod.store_write_lock(), files_mod.file_lock(path):
@@ -243,27 +282,8 @@ def _snapshot_and_call_compactor(
 
         before_unique = _unique_tokens(original)
         before_tokens = len(original) // 4
-        invalid = [
-            entry
-            for entry in parsed_original.entries
-            if not entry.provenance_valid
-        ]
-        projected = conn.execute(
-            """
-            SELECT 1 FROM provenance_edges
-             WHERE subject_kind='memory_entry' AND subject_path=? LIMIT 1
-            """,
-            (path.name,),
-        ).fetchone()
-        if invalid or projected or any(
-            entry.provenance_present or entry.evidence_refs
-            for entry in parsed_original.entries
-        ):
-            reason = (
-                "invalid provenance frame; refusing compaction"
-                if invalid
-                else "provenance-bearing entries require a provenance-aware compactor"
-            )
+        invalid = [entry for entry in parsed_original.entries if not entry.provenance_valid]
+        if invalid:
             return CompactResult(
                 name,
                 False,
@@ -272,11 +292,11 @@ def _snapshot_and_call_compactor(
                 len(before_unique),
                 len(before_unique),
                 1.0,
-                reason,
+                "invalid provenance frame; refusing compaction",
             )
+        context = ContextService(conn, cfg)
         if not parsed_original.entries or any(
-            not entry.origin_valid
-            or entry.origin != files_mod.MANUAL_ENTRY_ORIGIN
+            not context.memory_entry_allowed(path=path.name, entry=entry)
             for entry in parsed_original.entries
         ):
             return CompactResult(
@@ -287,7 +307,8 @@ def _snapshot_and_call_compactor(
                 len(before_unique),
                 len(before_unique),
                 1.0,
-                "only explicit manual-v1 entries may be compacted",
+                "one or more entries are not currently authorized; require explicit "
+                "manual-v1 roots or live provenance",
             )
         if len({entry.id for entry in parsed_original.entries}) != len(
             parsed_original.entries
@@ -316,9 +337,26 @@ def _snapshot_and_call_compactor(
                 "file metadata is not currently authorized",
             )
 
+        frozen_source_ids = {
+            entry.id
+            for entry in parsed_original.entries
+            if provenance_store.direct_dependents(
+                conn,
+                EvidenceRef(kind="memory_entry", id=entry.id, path=path.name),
+            )
+        }
+
         system = load_prompt("compact.md")
+        frozen_note = (
+            "\nBodies that must remain byte-for-byte unchanged because other "
+            "memory entries cite them: "
+            + (", ".join(sorted(frozen_source_ids)) or "(none)")
+            + "\n"
+        )
         user = (
-            "Compress this file. Output the full new Markdown including frontmatter.\n\n"
+            "Compress this file. Output the full new Markdown including frontmatter.\n"
+            + frozen_note
+            + "\n"
             "```markdown\n" + original + "\n```"
         )
         try:
@@ -342,7 +380,7 @@ def _snapshot_and_call_compactor(
                 1.0,
                 f"llm error: {type(exc).__name__}",
             )
-        return original, before_unique, before_tokens, response
+        return original, before_unique, before_tokens, frozen_source_ids, response
 
 
 def _unwrap_code_fence(text: str) -> str:

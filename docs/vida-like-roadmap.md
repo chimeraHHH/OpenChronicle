@@ -184,7 +184,9 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   implemented on the desktop-shell branch. This stays open until the bridge is
   bundled self-contained and a signed/notarized macOS build passes TCC,
   accessibility, pause-latency, and adversarial source-drawer validation.
-- [ ] Provenance-aware compaction and deterministic supersede proposals.
+- [x] Provenance-aware leaf compaction with exact evidence-frame preservation
+  and byte-frozen bodies for entries cited by downstream memory.
+- [ ] Deterministic reviewed supersede proposals.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1

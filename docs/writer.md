@@ -167,14 +167,17 @@ Every approved entry embeds exactly one final-line `oc-provenance` JSON comment 
 
 Proposal creation revalidates evidence and atomically commits the candidate, conflict classification, and source edges under an immediate SQLite transaction. Approval uses a deterministic entry ID, revision compare-and-swap, current-evidence hash checks, and exact replay validation. A re-entrant cross-process review-operation lock serializes proposal, edit, approval, rejection, purge, provenance-bearing append/supersede, and full provenance rebuild operations. Every dependent append rechecks its source inside that fence, so it either precedes a purge and enters the captured closure or follows it and fails closed. Supersede replacements cite the post-strike source entry, and rebuild resolves embedded memory dependencies to a fixed point rather than filename order. Purge combines SQLite edges with valid Markdown frames before atomically writing content-free tombstones; normal daemon startup always resumes an interrupted forget operation.
 
-Compaction accepts only non-empty files whose entries are all explicit
-`oc-origin:manual-v1` roots with unique canonical IDs and no provenance.
-Automation-origin, unmarked legacy, invalid-origin, and provenance-bearing files
-fail closed before provider egress. Accepted output must preserve every entry's
-ID, timestamp, order, origin marker, and provenance-free status. Local
-frontmatter remains authoritative, and stale-snapshot writeback is rejected.
-Provenance-preserving compaction and deterministic supersede approval remain
-later-stage work; see [Stage 1 memory and Daily Wrap](stage1-memory-daily-wrap.md).
+Compaction accepts only non-empty files whose entries are currently authorized
+as explicit `oc-origin:manual-v1` roots or live provenance-bearing derivatives.
+Automation-origin roots, unmarked legacy entries, invalid origins/frames, stale
+source projections, and policy-denied branches fail closed before provider
+egress. Accepted output must preserve every entry's ID, timestamp, order, tags,
+origin, and exact evidence list. Bodies cited by downstream memory are frozen
+byte-for-byte; only leaf bodies may shrink. Local frontmatter and canonical
+headings remain authoritative, provenance frames are reconstructed from the
+original snapshot, and stale-snapshot writeback is rejected. Deterministic
+reviewed supersede proposals remain later-stage work; see
+[Stage 1 memory and Daily Wrap](stage1-memory-daily-wrap.md).
 
 ## Sessions table
 

@@ -314,8 +314,11 @@ returned as the requested result.
   session, excluded evidence, or a rejected model item produces `partial`.
 - Stored job errors contain only an exception class and generic label, not a
   provider message that could repeat sensitive prompt content.
-- The LLM compactor accepts only explicit, provenance-free `manual-v1` files;
-  automation, unmarked legacy, invalid-origin, and derived files are refused.
+- The LLM compactor accepts only currently authorized manual roots and live
+  provenance-bearing derivatives. Automation roots, unmarked legacy entries,
+  invalid origins/frames, stale projections, and policy-denied branches are
+  refused before egress. Exact provenance lists survive, and any entry cited
+  by downstream memory has a byte-frozen body.
 - Daily Wrap is Suggest-only. It does not send, schedule, upload, modify files,
   create tasks, or perform any Action Plane operation.
 - Enabling a cloud-backed `[models.daily_wrap]` intentionally sends the bounded
@@ -354,8 +357,9 @@ The Stage 1 suite covers:
   trusted CLI commands are the current mutation UI.
 - Candidate operations currently materialize append/create-append behavior.
   Deterministic reviewed supersede remains pending.
-- The provenance-aware compactor remains pending; the current identity-
-  preserving compactor is limited to explicit `manual-v1` files.
+- Provenance-aware leaf compaction is implemented; it deliberately cannot
+  rewrite bodies that downstream memory cites. Cross-entry semantic merging is
+  not attempted.
 - There is no notification/outbox card yet, so exactly-once semantics currently
   cover the canonical job and MCP/CLI read surface, not a system notification.
 - Retroactive policy re-evaluation needs retained raw observation metadata. If
