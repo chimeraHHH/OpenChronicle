@@ -79,3 +79,8 @@ conversation, whether retrieval found the right evidence among longitudinal
 distractors, or whether an answer model produced a correct response. Those
 remain separate tiers so a model failure cannot be mislabeled as a storage
 failure.
+
+The first clean production-lifecycle result is recorded in
+[analysis/openchronicle-4bb887f.md](analysis/openchronicle-4bb887f.md). Its raw,
+machine-readable report is
+[`results/openchronicle-4bb887f.json`](results/openchronicle-4bb887f.json).
