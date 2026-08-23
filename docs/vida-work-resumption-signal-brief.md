@@ -173,6 +173,12 @@ separately evaluated continuity/resolution signal. The remaining canonical
 active-conversation and already-resolved false positives stay visible and are
 not claimed solved.
 
+The explicit-cue research and first-slice contract are now frozen in
+[vida-park-resume-scout-2026-08-23.md](vida-park-resume-scout-2026-08-23.md).
+The selected mechanism keeps a user-authored next step separate from observed
+activity, surfaces it only after a later verified gap, and makes no automatic
+same-task claim.
+
 Feedback instrumentation update: the desktop now asks for one structured
 dismissal reason (`not_relevant`, `wrong_timing`, `already_resolved`,
 `too_vague`, or `other`) and records `helpful` on acknowledgement. A local,
