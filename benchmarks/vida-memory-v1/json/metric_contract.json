@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "baseline_id": "vida-memory-retrieval-v1",
+  "acceptance_target": "hybrid-retrieval-ready",
+  "dataset": {
+    "id": "OC-Vida-Memory-Fixtures-v1",
+    "split": "retrieval-lifecycle-dev-v1",
+    "path": "benchmarks/vida-memory-v1/fixtures/cases.json"
+  },
+  "evaluation_path": "uv run python scripts/run_vida_memory_eval.py",
+  "primary_metric": "recall_at_k",
+  "metrics": {
+    "recall_at_k": {"direction": "higher", "required": true},
+    "mean_reciprocal_rank": {"direction": "higher", "required": true},
+    "semantic_recall_at_k": {"direction": "higher", "required": true},
+    "forbidden_hit_rate": {"direction": "lower", "required": true},
+    "abstention_accuracy": {"direction": "higher", "required": true},
+    "source_identity_coverage": {"direction": "higher", "required": true},
+    "latency_p95_ms": {"direction": "lower", "required": true}
+  },
+  "gates": {
+    "recall_at_k_min": 0.85,
+    "mean_reciprocal_rank_min": 0.80,
+    "semantic_recall_at_k_min": 0.80,
+    "forbidden_hit_rate_max": 0.0,
+    "abstention_accuracy_min": 1.0,
+    "source_identity_coverage_min": 1.0,
+    "latency_p95_ms_max": 100.0
+  },
+  "known_deviations": [
+    "This first split is a deterministic engineering fixture, not a human-rated personal-memory corpus.",
+    "It measures evidence retrieval and lifecycle filtering, not final answer generation or preference application.",
+    "The BM25 result is expected to miss semantic and cross-language cases; that failure is the frozen pre-hybrid baseline."
+  ]
+}
