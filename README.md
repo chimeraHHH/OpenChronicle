@@ -215,6 +215,7 @@ openchronicle timeline tick
 openchronicle timeline list
 openchronicle writer run
 openchronicle memory adoptions
+openchronicle memory explain-recall "editor preference" --top-k 5
 openchronicle memory usefulness --json
 openchronicle memory screen-adoption <adoption-id>
 openchronicle memory candidates
@@ -244,6 +245,13 @@ or artifact text. Normal first-run CLI initialization may still create config,
 log, and SQLite schema files. Unedited adoption is reported as a descriptive
 positive association; edited adoption remains ambiguous, and neither signal
 changes ranking automatically.
+
+`memory explain-recall` is the complementary local ranking view. It reports
+the current BM25/vector channel ranks, cosine similarity, and RRF score without
+returning memory text or echoing the raw query. It invokes no LLM, persists no
+query trace, and does not change ranking. If semantic search is enabled but its
+local backend is unavailable, the command reports that failure instead of
+silently falling back to BM25.
 
 ---
 
@@ -302,6 +310,7 @@ Documentation
 * [docs/writer.md](docs/writer.md) - reducer, classifier, and retry model
 * [docs/mcp.md](docs/mcp.md) - current tool surface and integrations
 * [docs/memory-format.md](docs/memory-format.md) - file layout and supersede semantics
+* [docs/memory-recall-explain-v1.md](docs/memory-recall-explain-v1.md) - local BM25/vector/RRF recall diagnostics and privacy boundary
 * [docs/memory-usefulness-v1.md](docs/memory-usefulness-v1.md) - exact memory revision to Prompt Rescue adoption outcome report
 * [docs/stage1-memory-daily-wrap.md](docs/stage1-memory-daily-wrap.md) - provenance, review inbox, Daily Wrap, privacy, and failure semantics
 * [docs/desktop-shell.md](docs/desktop-shell.md) - Tauri trust boundary, fixed bridge protocol, dangerous-action semantics, and release gates

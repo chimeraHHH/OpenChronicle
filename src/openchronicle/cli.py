@@ -1019,6 +1019,42 @@ memory_app = typer.Typer(help="Review and manage proposed durable memories.")
 app.add_typer(memory_app, name="memory")
 
 
+@memory_app.command("explain-recall")
+@privacy_egress_fenced
+def memory_explain_recall(
+    query: str = typer.Argument(..., help="Transient local recall query."),
+    top_k: int = typer.Option(5, "--top-k", "-k", min=1, max=20),
+    json_output: bool = typer.Option(False, "--json", help="Emit deterministic JSON."),
+) -> None:
+    """Explain local durable-memory ranking without returning memory content."""
+    cfg = _init()
+    from .services.memory_recall_explain import explain_memory_recall
+
+    with fts.cursor() as conn:
+        report = explain_memory_recall(conn, cfg, query=query, top_k=top_k)
+    if json_output:
+        typer.echo(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return
+    if error := report.get("error"):
+        console.print(f"[yellow]{error}[/yellow]")
+        return
+    table = Table("Rank", "Memory", "BM25", "Vector", "Similarity", "RRF")
+    for row in report["results"]:
+        table.add_row(
+            str(row["position"]),
+            f"{row['path']}#{row['id']}",
+            str(row["bm25_rank"] or "—"),
+            str(row["vector_rank"] or "—"),
+            "—" if row["vector_similarity"] is None else f"{row['vector_similarity']:.4f}",
+            "—" if row["rrf_score"] is None else f"{row['rrf_score']:.6f}",
+        )
+    console.print(table)
+    console.print(
+        f"Mode: {report['retrieval_mode']}; candidates inspected: "
+        f"{report['candidate_count']}; returned: {report['returned_count']}."
+    )
+
+
 @memory_app.command("adoptions")
 @privacy_egress_fenced
 def memory_adoptions(

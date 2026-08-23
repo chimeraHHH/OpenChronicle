@@ -385,13 +385,18 @@ The contract and limitations are documented in
 
 ### P1: transparent ranking signals
 
-Add current-state, explicit-temporary TTL, recency, and recall-use signals after
-the existing BM25/vector fusion, with an explain-search view. Time affects rank,
-not physical retention. Cross-encoder reranking is an experiment, not a default.
+The first explain-search slice is now implemented as
+`openchronicle memory explain-recall "<query>" --top-k 5 --json`. It exposes
+the existing BM25/vector channel ranks, similarity, and RRF score after
+canonical Markdown authorization. It omits memory content and raw query text,
+persists no trace, calls no LLM, and changes no ranking. Enabled semantic
+failure remains explicit with no BM25 fallback. See
+[memory-recall-explain-v1.md](memory-recall-explain-v1.md).
 
-The explanation should expose channel ranks, filters, temporal interpretation,
-projection/model identity, and an explicit unavailable/degraded reason. It does
-not need production observability infrastructure.
+Additional temporal and filter-rejection explanations remain evaluation-led
+follow-ups. Current-state, explicit-temporary TTL, recency, or recall-use
+signals must not become ranking features without a frozen downstream answer
+evaluation. Cross-encoder reranking remains an experiment, not a default.
 
 ### P2: only evidence-backed consolidation experiments
 
