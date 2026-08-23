@@ -170,3 +170,10 @@ gold turns within it—so it is not presented as independent turn-level ranking.
 Injected distractors are an upstream label and are not necessarily relevant to
 the selected question; their contamination rate is a context-purity diagnostic,
 not a query-target error rate.
+
+The first clean pre-registered result is recorded in
+[analysis/retrieval-9f4a437-bm25-top10.md](analysis/retrieval-9f4a437-bm25-top10.md),
+with its
+[`machine-readable report`](results/retrieval-9f4a437-bm25-top10.json). It
+passes nine of ten substantive retrieval checks but intentionally remains a
+failed gate because injected-distractor contamination exceeds the frozen limit.
