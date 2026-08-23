@@ -1,4 +1,4 @@
-"""Read-only outcome report for exact memory revisions used by Prompt Rescue."""
+"""Business-state-preserving report for exact Prompt Rescue memory revisions."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from ..store import entries as entries_store
 from ..store import files as files_store
 from ..store.facts import temporal_state
 from .current_facts import list_current_facts
+from .memory import entry_has_verified_successor
 
 _RevisionKey = tuple[str, str, str, str]
 
@@ -277,6 +278,12 @@ def _revision_status(
         return "missing", "timestamp_mismatch"
     if ref.content_hash != content_digest(entries_store.entry_index_content(entry)):
         return "missing", "hash_mismatch"
+    if entries_store.entry_index_superseded(entry) and not entry_has_verified_successor(
+        conn,
+        parsed,
+        entry,
+    ):
+        return "missing", "invalid_supersede_chain"
     if entries_store.entry_index_superseded(entry):
         return "superseded", f"superseded_by:{entry.superseded_by or 'unknown'}"
     if entry.fact_metadata is not None and temporal_state(

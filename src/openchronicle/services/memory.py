@@ -1524,16 +1524,17 @@ def _current_subject_conflicts(
             (entry for entry in parsed.entries if entry.id == candidate.applied_entry_id),
             None,
         )
-        if entry is None or not _entry_has_verified_successor(conn, parsed, entry):
+        if entry is None or not entry_has_verified_successor(conn, parsed, entry):
             current.append(candidate)
     return current
 
 
-def _entry_has_verified_successor(
+def entry_has_verified_successor(
     conn: sqlite3.Connection,
     parsed: files_store.ParsedFile,
     entry: files_store.ParsedEntry,
 ) -> bool:
+    """Verify a complete Markdown and durable-provenance supersession chain."""
     successor_id = entry.superseded_by
     if (
         not entry.provenance_valid

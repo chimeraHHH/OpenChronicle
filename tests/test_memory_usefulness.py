@@ -274,6 +274,64 @@ def test_usefulness_report_quarantines_mismatched_provenance_edges(
     assert report["summary"]["exact_revision_tracking_coverage"] == 0.0
 
 
+def test_usefulness_report_rejects_forged_supersession_state(
+    ac_root: Path,
+) -> None:
+    cfg = _cfg()
+    with fts.cursor() as conn:
+        prompt = PromptRescueService(
+            conn,
+            cfg,
+            llm_caller=lambda *_args, **_kwargs: _response(),
+        )
+        for suffix in ("marker", "strike"):
+            _publish_procedure(
+                conn,
+                path=f"procedure-{suffix}.md",
+                entry_id=f"procedure-{suffix}-entry",
+                content=f"UNIQUE-{suffix.upper()}-TOKEN workflow.",
+            )
+            _prepare(prompt, f"UNIQUE-{suffix.upper()}-TOKEN")
+
+        marker_path = files_store.memory_path("procedure-marker.md")
+        marker_entry = files_store.read_file(marker_path).entries[0]
+        marker_path.write_text(
+            marker_path.read_text().replace(
+                marker_entry.heading_line,
+                marker_entry.heading_line + " #superseded-by:forged",
+                1,
+            )
+        )
+
+        strike_path = files_store.memory_path("procedure-strike.md")
+        strike_entry = files_store.read_file(strike_path).entries[0]
+        strike_path.write_text(
+            strike_path.read_text().replace(
+                strike_entry.body,
+                f"~~{strike_entry.body}~~",
+                1,
+            )
+        )
+
+        report = memory_usefulness_report(
+            conn,
+            cfg,
+            as_of=datetime(2026, 8, 24, 13, tzinfo=UTC),
+        )
+
+    assert {
+        (
+            row["memory_revision"]["id"],
+            row["current_status"],
+            row["current_status_reason"],
+        )
+        for row in report["memory_revisions"]
+    } == {
+        ("procedure-marker-entry", "missing", "invalid_supersede_chain"),
+        ("procedure-strike-entry", "missing", "invalid_supersede_chain"),
+    }
+
+
 def test_memory_usefulness_cli_emits_deterministic_empty_json(
     ac_root: Path,
     monkeypatch,

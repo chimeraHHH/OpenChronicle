@@ -260,7 +260,7 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   exact digest/version, edited state, and first-use time. Copy and suggestion
   acknowledgement remain separate; deleting the source artifact deletes this
   local signal, and recording it never executes or learns a workflow.
-- [x] Read-only exact-revision usefulness report for reviewed memory used by
+- [x] Business-state-preserving exact-revision usefulness report for reviewed memory used by
   Prompt Rescue. It verifies durable provenance, preserves historical
   superseded/expired contribution, distinguishes unedited adoption from edited
   ambiguity, emits no text bodies, and does not change retrieval ranking.

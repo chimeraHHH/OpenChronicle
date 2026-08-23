@@ -14,9 +14,11 @@ openchronicle memory usefulness
 openchronicle memory usefulness --json
 ```
 
-The implementation is a read-only report over existing SQLite, Markdown, and
-provenance state. It adds no table, LLM call, background worker, ranking signal,
-decay rule, consolidation pass, or computer-use capability.
+The implementation preserves memory, Prompt Rescue, adoption, provenance, and
+ranking business state while reading SQLite and Markdown. Like other local CLI
+commands, first-run initialization can create the default config, log, and
+SQLite schema files. It adds no domain table, LLM call, background worker,
+ranking signal, decay rule, consolidation pass, or computer-use capability.
 
 ## Trusted join
 
@@ -85,7 +87,9 @@ The report resolves status in this order:
 
 1. an unresolvable path, entry, timestamp, hash, or provenance frame is
    `missing`;
-2. an exact historical body with a supersede marker is `superseded`;
+2. an exact historical body with a complete verified supersession chain is
+   `superseded`; a forged marker or isolated strike is `missing` with
+   `invalid_supersede_chain`;
 3. an exact unsuperseded revision beyond `valid_to` is `expired`;
 4. an exact active, authorized, current revision is `current`;
 5. other revisions that cannot currently be re-authorized are `missing`.

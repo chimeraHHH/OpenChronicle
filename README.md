@@ -237,11 +237,13 @@ Rescue text. A qualifying reusable workflow, checklist, or template is only
 staged in the ordinary review inbox; it is never approved, published, or
 executed automatically.
 
-`memory usefulness` is the read-only outcome view for local long-term memory.
-It joins an exact reviewed memory revision to Prompt Rescue outputs and their
-immutable adoption records without emitting prompt, memory, or artifact text.
-Unedited adoption is reported as a descriptive positive association; edited
-adoption remains ambiguous, and neither signal changes ranking automatically.
+`memory usefulness` is the business-state-preserving outcome view for local
+long-term memory. It joins an exact reviewed memory revision to Prompt Rescue
+outputs and their immutable adoption records without emitting prompt, memory,
+or artifact text. Normal first-run CLI initialization may still create config,
+log, and SQLite schema files. Unedited adoption is reported as a descriptive
+positive association; edited adoption remains ambiguous, and neither signal
+changes ranking automatically.
 
 ---
 

@@ -365,7 +365,9 @@ qualifying outputs enter the ordinary review inbox. Source deletion or mutation
 blocks staging/approval, and nothing is approved, published, or executed
 automatically.
 
-A read-only usefulness report now closes the first observable outcome loop:
+A business-state-preserving usefulness report now closes the first observable
+outcome loop (normal first-run CLI initialization may still create config, log,
+and SQLite schema files):
 `openchronicle memory usefulness --json` verifies each complete memory-entry
 revision against Prompt Rescue provenance, then associates it with immutable
 adoption digests. It preserves contribution history for superseded and expired
