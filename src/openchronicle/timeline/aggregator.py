@@ -57,6 +57,10 @@ class TimelineInputChanged(RuntimeError):
     """A cleanup or source change invalidated an in-flight timeline result."""
 
 
+class TimelineGenerationFailed(RuntimeError):
+    """A populated timeline window could not be normalized by its model."""
+
+
 def _capture_stem_in_window(stem: str, start: datetime, end: datetime) -> bool:
     """Parse the filename stem back to a datetime and check window membership."""
     ts = _stem_to_dt(stem)
@@ -194,12 +198,7 @@ def _load_captures(
     *,
     drop_screenshot: bool = False,
 ) -> list[tuple[Path, dict]]:
-    """Parse every capture JSON once. Files that fail to read/parse are dropped.
-
-    The window is small (≤30 files) so the entire parsed list stays cheap to
-    pass around; the win is avoiding a second ``json.loads`` per file when
-    ``_heuristic_entries`` runs after the LLM returns no usable output.
-    """
+    """Parse every capture JSON once. Files that fail to read/parse are dropped."""
     parsed: list[tuple[Path, dict]] = []
     for p in capture_files:
         if p.is_symlink() or not p.is_file():
@@ -493,8 +492,8 @@ def produce_block_for_window(
     # Capture policy is an egress boundary, not only an ingestion rule.  A
     # retained observation that was allowed when collected may be excluded by
     # the current config before this delayed model call runs.  Filter the
-    # authoritative parsed records before counting, prompt rendering,
-    # heuristic fallback, or provenance construction.
+    # authoritative parsed records before counting, prompt rendering, or
+    # provenance construction.
     # Explicit cleanup shares the long-lived review fence, so it either wins
     # before prompt authorization or waits for provider egress to finish.
     # Ordinary capture writes remain live: capture-store is held only for the
@@ -564,8 +563,7 @@ def produce_block_for_window(
                 block_id=None,
             )
 
-        # Capture JSON is parsed once; reused for prompt rendering AND the
-        # heuristic fallback so an LLM miss doesn't trigger a second read.
+        # Capture JSON is parsed once and reused for prompt rendering.
         events_text, apps_used = _format_events(parsed)
         capture_count = len(parsed)
         prompt = load_prompt("timeline_block.md").format(
@@ -575,7 +573,6 @@ def produce_block_for_window(
             events_text=events_text,
         )
 
-        entries: list[str] = []
         try:
             resp = llm_mod.call_llm(
                 cfg,
@@ -583,18 +580,25 @@ def produce_block_for_window(
                 messages=[{"role": "user", "content": prompt}],
                 json_mode=True,
             )
-            text = llm_mod.extract_text(resp).strip()
-            response_data = json.loads(text) if text else {}
-            raw = response_data.get("entries") if isinstance(response_data, dict) else None
-            if isinstance(raw, list):
-                entries = [str(e).strip() for e in raw if str(e).strip()]
-        except json.JSONDecodeError as exc:
-            logger.warning("timeline: malformed JSON from LLM: %s", exc)
         except Exception as exc:  # noqa: BLE001
             logger.warning("timeline: LLM call failed: %s", exc)
+            raise TimelineGenerationFailed("timeline model call failed") from exc
 
+        text = llm_mod.extract_text(resp).strip()
+        try:
+            response_data = json.loads(text) if text else {}
+        except json.JSONDecodeError as exc:
+            logger.warning("timeline: malformed JSON from LLM: %s", exc)
+            raise TimelineGenerationFailed("timeline model returned invalid JSON") from exc
+
+        raw = response_data.get("entries") if isinstance(response_data, dict) else None
+        entries = (
+            [entry.strip() for entry in raw if isinstance(entry, str) and entry.strip()]
+            if isinstance(raw, list)
+            else []
+        )
         if not entries:
-            entries = _heuristic_entries(parsed)
+            raise TimelineGenerationFailed("timeline model returned no usable entries")
 
     block = store.TimelineBlock(
         start_time=start,
@@ -922,24 +926,3 @@ def _record_block_sources(
         conn.execute("ROLLBACK TO SAVEPOINT timeline_block_provenance_repair")
         conn.execute("RELEASE SAVEPOINT timeline_block_provenance_repair")
         raise
-
-
-def _heuristic_entries(parsed: list[tuple[Path, dict]]) -> list[str]:
-    """Cheap fallback when the LLM returns no parseable entries."""
-    groups: list[tuple[str, str, int]] = []
-    for _p, data in parsed:
-        wm = data.get("window_meta") or {}
-        app = str(wm.get("app_name") or "Unknown")
-        title = str(wm.get("title") or "")
-        if groups and groups[-1][0] == app and groups[-1][1] == title:
-            groups[-1] = (app, title, groups[-1][2] + 1)
-        else:
-            groups.append((app, title, 1))
-
-    entries: list[str] = []
-    for app, title, _count in groups:
-        if title:
-            entries.append(f"[{app}] worked in window '{title}', involving —")
-        else:
-            entries.append(f"[{app}] active, involving —")
-    return entries

@@ -128,6 +128,7 @@ def test_deterministic_entry_replay_rejects_content_or_provenance_mismatch(
 def test_timeline_block_and_observation_edges_are_atomic(
     ac_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK_JSON", '{"entries":["Completed release"]}')
     cfg = config_mod.Config()
     start = datetime(2026, 4, 21, 10, 0, tzinfo=UTC)

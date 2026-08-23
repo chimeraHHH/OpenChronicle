@@ -68,6 +68,10 @@ def test_clean_captures_finalizes_or_invalidates_window_receipt(
     cfg.timeline.cold_lookback_minutes = 0
     monkeypatch.setattr(timeline_tick, "_now", lambda: end)
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
+    monkeypatch.setenv(
+        "OPENCHRONICLE_LLM_MOCK_JSON",
+        '{"entries":["[Notes] explicit cleanup receipt"]}',
+    )
     path = scheduler._write_capture(
         {
             "timestamp": (start + timedelta(seconds=10)).isoformat(),

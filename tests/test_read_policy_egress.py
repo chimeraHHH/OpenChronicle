@@ -356,6 +356,7 @@ def test_timeline_screenshot_projection_preserves_authoritative_source_hash(
     legacy_response = mcp_captures._format_response(capture_path, capture, include_screenshot=True)
     assert "screenshot_b64" not in legacy_response
     assert "screenshot_mime" not in legacy_response
+    monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK_JSON", '{"entries":["bounded prompt text"]}')
 
     with fts.cursor() as conn:

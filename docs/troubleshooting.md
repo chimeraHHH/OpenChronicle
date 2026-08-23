@@ -229,7 +229,7 @@ Check `timeline.log`:
 tail -30 ~/.openchronicle/logs/timeline.log
 ```
 
-If you see window scans but no production, the aggregator window is empty. The fallback heuristic still produces *something*, so total silence means the tick itself isn't firing.
+An empty or policy-excluded window produces no block. If a populated window's timeline model call fails or returns unusable output, OpenChronicle leaves the watermark before that window and retries it on a later tick; it does not write a local heuristic summary.
 
 Force a scan:
 

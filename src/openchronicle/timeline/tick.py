@@ -370,6 +370,12 @@ def _run_once_locked(
                             if conn.in_transaction:
                                 conn.execute("ROLLBACK")
                             raise
+            except aggregator.TimelineGenerationFailed as exc:
+                # A populated window must be normalized by the configured
+                # model. Keep the watermark before it so the next tick retries
+                # instead of publishing a lower-fidelity local substitute.
+                logger.warning("timeline generation failed; retaining window for retry: %s", exc)
+                return 0
             except (aggregator.TimelineInputChanged, ValueError) as exc:
                 # Explicit clean/source mutation or an incompatible receipt
                 # epoch leaves the watermark before this window.

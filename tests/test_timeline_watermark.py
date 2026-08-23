@@ -8,6 +8,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -339,6 +340,54 @@ def test_wall_clock_forward_then_rollback_rewinds_future_empty_proof(
             base,
             base + timedelta(minutes=2),
         )
+
+
+def test_model_failure_retains_populated_window_until_retry(
+    ac_root: Path,
+    monkeypatch,
+) -> None:
+    base = datetime(2026, 4, 21, 11, 0, tzinfo=_TZ)
+    end = base + timedelta(minutes=1)
+    cfg = config_mod.Config()
+    cfg.capture.deny_unknown_windows = False
+    cfg.timeline.window_minutes = 1
+    cfg.timeline.cold_lookback_minutes = 0
+    monkeypatch.setattr(timeline_tick, "_now", lambda: end)
+    capture_path = capture_scheduler._write_capture(
+        _capture_dict((base + timedelta(seconds=10)).isoformat(), "Luna retry evidence")
+    )
+    failing = {"value": True}
+
+    def flaky_model(*_args, **_kwargs):
+        if failing["value"]:
+            raise RuntimeError("Luna unavailable")
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content='{"entries":["[Editor] retained Luna evidence"]}'
+                    )
+                )
+            ]
+        )
+
+    monkeypatch.setattr(timeline_tick.aggregator.llm_mod, "call_llm", flaky_model)
+
+    assert timeline_tick._run_once(cfg) == 0
+    with fts.cursor() as conn:
+        assert timeline_store.get_window(conn, base, end) is None
+        assert timeline_store.get_processed_range(conn) == (base, base)
+        assert timeline_store.capture_receipt_paths(conn) == set()
+    assert capture_path.exists()
+
+    failing["value"] = False
+    assert timeline_tick._run_once(cfg) == 1
+    with fts.cursor() as conn:
+        block = timeline_store.get_window(conn, base, end)
+        assert block is not None
+        assert block.entries == ["[Editor] retained Luna evidence"]
+        assert timeline_store.get_processed_range(conn) == (base, end)
+        assert timeline_store.capture_receipt_paths(conn) == {capture_path.name}
 
 
 def test_late_capture_replaces_populated_window_and_cleanup_waits_for_receipt(
@@ -812,6 +861,10 @@ def test_late_capture_after_full_window_retirement_rewinds_and_safe_stalls(
     cfg.timeline.cold_lookback_minutes = 0
     monkeypatch.setattr(timeline_tick, "_now", lambda: clock["now"])
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
+    monkeypatch.setenv(
+        "OPENCHRONICLE_LLM_MOCK_JSON",
+        json.dumps({"entries": ["[Editor] retired source"]}),
+    )
     first = capture_scheduler._write_capture(
         _capture_dict((base + timedelta(seconds=10)).isoformat(), "retired source")
     )
@@ -865,6 +918,10 @@ def test_v1_migration_never_auto_heals_inconsistent_block_sources(
     cfg.timeline.cold_lookback_minutes = 0
     monkeypatch.setattr(timeline_tick, "_now", lambda: end)
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
+    monkeypatch.setenv(
+        "OPENCHRONICLE_LLM_MOCK_JSON",
+        json.dumps({"entries": ["[Editor] invalid legacy source"]}),
+    )
     capture_path = capture_scheduler._write_capture(
         _capture_dict((base + timedelta(seconds=10)).isoformat(), "invalid legacy source")
     )
@@ -937,6 +994,10 @@ def test_screenshot_strip_preserves_block_and_receipt_semantics(
     cfg.timeline.cold_lookback_minutes = 0
     monkeypatch.setattr(timeline_tick, "_now", lambda: end)
     monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
+    monkeypatch.setenv(
+        "OPENCHRONICLE_LLM_MOCK_JSON",
+        json.dumps({"entries": ["[Editor] screenshot evidence"]}),
+    )
     capture = _capture_dict((base + timedelta(seconds=10)).isoformat(), "pixels")
     capture["screenshot"] = {"image_base64": "AAAA", "mime_type": "image/jpeg"}
     capture_path = capture_scheduler._write_capture(capture)
