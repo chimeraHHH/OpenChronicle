@@ -166,6 +166,32 @@ def test_semantic_projection_is_rebuildable_and_removes_orphans(ac_root: Path) -
     assert remaining == {ids["typora"]}
 
 
+def test_semantic_projection_can_sync_one_path_incrementally(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        ids = _seed(conn)
+        first = semantic.sync_index(
+            conn,
+            embedder=FixtureEmbedder(),
+            paths=["user-preferences.md"],
+        )
+        indexed_after_first = {
+            row["entry_id"] for row in conn.execute("SELECT entry_id FROM memory_embeddings")
+        }
+        second = semantic.sync_index(
+            conn,
+            embedder=FixtureEmbedder(),
+            paths=["project-openchronicle.md"],
+        )
+        indexed_after_second = {
+            row["entry_id"] for row in conn.execute("SELECT entry_id FROM memory_embeddings")
+        }
+
+    assert first.indexed == 1 and first.reused == 0
+    assert indexed_after_first == {ids["typora"]}
+    assert second.indexed == 1 and second.reused == 0
+    assert indexed_after_second == {ids["typora"], ids["sqlite"]}
+
+
 def test_event_entries_are_excluded_unless_enabled(ac_root: Path) -> None:
     with fts.cursor() as conn:
         entries_mod.create_file(

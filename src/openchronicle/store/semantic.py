@@ -159,30 +159,42 @@ def sync_index(
     embedder: Embedder,
     include_events: bool = False,
     batch_size: int = 64,
+    paths: Sequence[str] | None = None,
 ) -> IndexSyncResult:
     """Make the derived vector projection match the canonical FTS projection."""
     ensure_schema(conn)
     if type(batch_size) is not int or not 1 <= batch_size <= 512:
         raise ValueError("semantic batch_size must be in [1, 512]")
+    scoped_paths = tuple(dict.fromkeys(paths or ()))
+    if paths is not None and (
+        not scoped_paths
+        or any(not isinstance(path, str) or not path.strip() for path in scoped_paths)
+    ):
+        raise ValueError("semantic paths must contain non-empty strings")
+    where = ""
+    params: tuple[object, ...] = ()
+    if paths is not None:
+        where = f" WHERE path IN ({','.join('?' for _ in scoped_paths)})"
+        params = scoped_paths
     rows = conn.execute(
-        "SELECT id, path, tags, content FROM entries ORDER BY rowid"
-    ).fetchall()
-    eligible = [row for row in rows if include_events or not str(row["path"]).startswith("event-")]
-    eligible_ids = {str(row["id"]) for row in eligible}
+        f"SELECT id, path, tags, content FROM entries{where} ORDER BY rowid",
+        params,
+    )
     existing = {
         str(row["entry_id"]): row
-        for row in conn.execute("SELECT * FROM memory_embeddings").fetchall()
-    }
-    stale_ids = set(existing) - eligible_ids
-    if stale_ids:
-        conn.executemany(
-            "DELETE FROM memory_embeddings WHERE entry_id=?",
-            [(entry_id,) for entry_id in sorted(stale_ids)],
+        for row in conn.execute(
+            f"SELECT entry_id, path, content_hash, model_id FROM memory_embeddings{where}",
+            params,
         )
+    }
 
     pending: list[tuple[sqlite3.Row, str, str]] = []
+    eligible_ids: set[str] = set()
     reused = 0
-    for row in eligible:
+    for row in rows:
+        if not include_events and str(row["path"]).startswith("event-"):
+            continue
+        eligible_ids.add(str(row["id"]))
         text = _embedding_text(row["path"], row["tags"], row["content"])
         digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
         current = existing.get(str(row["id"]))
@@ -194,6 +206,13 @@ def sync_index(
             reused += 1
             continue
         pending.append((row, text, digest))
+
+    stale_ids = set(existing) - eligible_ids
+    if stale_ids:
+        conn.executemany(
+            "DELETE FROM memory_embeddings WHERE entry_id=?",
+            [(entry_id,) for entry_id in sorted(stale_ids)],
+        )
 
     indexed = 0
     for start in range(0, len(pending), batch_size):

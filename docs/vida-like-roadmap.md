@@ -29,6 +29,10 @@ rejected directions live in
 Every product slice must also satisfy the executable gates in
 [vida-parity-evaluation-contract.md](vida-parity-evaluation-contract.md); a demo
 or vendor parity claim is not an acceptance result.
+The Memory Plane's pinned external longitudinal adapter is documented in
+[longmemeval-v2-adapter.md](longmemeval-v2-adapter.md); implementation and a
+real-trajectory retrieval smoke do not close the pending clean small-tier
+LongMemEval-V2 score.
 The selected follow-up for Work Resumption timing is recorded in
 [vida-work-resumption-signal-brief.md](vida-work-resumption-signal-brief.md).
 The clean-room interaction, source-binding, runtime, and evaluation contract for

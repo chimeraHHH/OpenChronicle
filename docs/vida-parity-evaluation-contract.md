@@ -138,6 +138,11 @@ accuracy and query latency by ability, including abstention, dynamic state,
 workflow knowledge, environment gotchas, and premise awareness. This benchmark
 does not replace OpenChronicle privacy or provenance tests.
 
+The pinned text-only adapter and official-harness wrapper are implemented and
+documented in [longmemeval-v2-adapter.md](longmemeval-v2-adapter.md). Its
+contract and real-trajectory smoke tests do not substitute for the still-open
+clean small-tier reader/evaluator run.
+
 After Stage 3 exists, pin a small
 [OSWorld-V2](https://github.com/xlang-ai/OSWorld-V2) release and task subset.
 Report task success together with approvals requested, denied actions,
