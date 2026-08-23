@@ -220,6 +220,30 @@ export function ReplyRescuePage({
     }
   }
 
+  async function markUsed() {
+    if (!detail?.output) return;
+    setBusy("adopt");
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.recordArtifactAdoption(
+        "reply_rescue",
+        detail.id,
+        detail.version,
+        detail.output_digest,
+      );
+      setNotice(
+        result.created
+          ? "Recorded that you used this exact reviewed reply. Nothing was sent and no workflow was learned automatically."
+          : "This exact reviewed reply was already marked as used.",
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
   const providerIsLocal = rescue.provider.location === "local";
 
   return (
@@ -358,7 +382,7 @@ export function ReplyRescuePage({
               <div className="button-row">
                 <button className="button button--danger-outline" disabled={Boolean(busy)} onClick={() => void deleteJob()} type="button">Delete locally</button>
                 {detail.status === "failed" ? <button className="button button--secondary" disabled={Boolean(busy)} onClick={() => void retry()} type="button">Retry preparation</button> : null}
-                {detail.status === "ready" ? <><button className="button button--secondary" disabled={Boolean(busy) || !replyDraft.trim() || replyDraft === detail.output?.reply_body} onClick={() => void saveEdit()} type="button">Save reviewed edit</button><button className="button button--primary" disabled={!replyDraft || Boolean(busy)} onClick={() => void copyReply()} type="button">Copy reviewed reply</button></> : null}
+                {detail.status === "ready" ? <><button className="button button--secondary" disabled={Boolean(busy) || !replyDraft.trim() || replyDraft === detail.output?.reply_body} onClick={() => void saveEdit()} type="button">Save reviewed edit</button><button className="button button--primary" disabled={!replyDraft || Boolean(busy)} onClick={() => void copyReply()} type="button">Copy reviewed reply</button><button className="button button--secondary" disabled={Boolean(busy) || replyDraft !== detail.output?.reply_body} onClick={() => void markUsed()} type="button">I used this</button></> : null}
               </div>
             </>
           ) : null}

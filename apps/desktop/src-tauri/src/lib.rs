@@ -52,6 +52,7 @@ pub fn run() {
             commands::edit_reply_rescue,
             commands::retry_reply_rescue,
             commands::delete_reply_rescue,
+            commands::record_artifact_adoption,
             commands::get_resume_rescue_state,
             commands::queue_resume_rescue_rewrite,
             commands::retry_resume_rescue_rewrite,

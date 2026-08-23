@@ -15,6 +15,8 @@ import {
 } from "../api";
 import { DESKTOP_BRIDGE_PROTOCOL_VERSION } from "../contracts";
 import {
+  artifactAdoption,
+  bridgeArtifactAdoption,
   bridgeCandidateGet,
   bridgeCandidateMutation,
   bridgeResolvedEvidence,
@@ -56,8 +58,53 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks on-demand Published Memory history as bridge protocol v23", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(23);
+  it("tracks explicit prepared-artifact adoption as bridge protocol v24", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(24);
+  });
+
+  it("records only an exact digest-bound prepared artifact adoption", async () => {
+    tauri.invoke.mockResolvedValueOnce(bridgeArtifactAdoption());
+
+    const result = await desktopApi.recordArtifactAdoption(
+      "prompt_rescue",
+      "prompt-rescue-1",
+      3,
+      "a".repeat(64),
+    );
+
+    expect(result).toEqual(bridgeArtifactAdoption());
+    expect(tauri.invoke).toHaveBeenCalledWith("record_artifact_adoption", {
+      request: {
+        artifact_kind: "prompt_rescue",
+        artifact_id: "prompt-rescue-1",
+        expected_version: 3,
+        expected_artifact_digest: "a".repeat(64),
+      },
+    });
+
+    tauri.invoke.mockResolvedValueOnce(
+      bridgeArtifactAdoption(artifactAdoption({ action_capability: "paste" as "none" })),
+    );
+    await expect(
+      desktopApi.recordArtifactAdoption(
+        "prompt_rescue",
+        "prompt-rescue-1",
+        3,
+        "a".repeat(64),
+      ),
+    ).rejects.toMatchObject({ code: "BRIDGE_PROTOCOL_ERROR" });
+
+    tauri.invoke.mockResolvedValueOnce(
+      bridgeArtifactAdoption(artifactAdoption({ artifact_id: "prompt-rescue-other" })),
+    );
+    await expect(
+      desktopApi.recordArtifactAdoption(
+        "prompt_rescue",
+        "prompt-rescue-1",
+        3,
+        "a".repeat(64),
+      ),
+    ).rejects.toMatchObject({ code: "BRIDGE_PROTOCOL_ERROR" });
   });
 
   it("loads one revision-bound Published Memory lineage", async () => {

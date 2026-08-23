@@ -44,6 +44,7 @@ permissions = [
   "allow-edit-reply-rescue",
   "allow-retry-reply-rescue",
   "allow-delete-reply-rescue",
+  "allow-record-artifact-adoption",
   "allow-save-resume-rescue-profile",
   "allow-save-resume-rescue-opportunity",
   "allow-replace-resume-rescue-opportunity",

@@ -445,6 +445,15 @@ pub(crate) struct ReplyRescueCasRequest {
     pub expected_version: u64,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ArtifactAdoptionRequest {
+    pub artifact_kind: String,
+    pub artifact_id: String,
+    pub expected_version: u64,
+    pub expected_artifact_digest: String,
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct ResumeRescueStateRequest {
@@ -1179,6 +1188,28 @@ pub async fn delete_reply_rescue(
                 "The Reply Rescue deletion worker stopped unexpectedly.",
             )
         })?
+}
+
+#[tauri::command]
+pub async fn record_artifact_adoption(
+    request: ArtifactAdoptionRequest,
+) -> Result<Value, DesktopError> {
+    if !matches!(
+        request.artifact_kind.as_str(),
+        "prompt_rescue" | "reply_rescue"
+    ) {
+        return Err(DesktopError::invalid_request(
+            "The prepared artifact kind is unavailable.",
+        ));
+    }
+    match request.artifact_kind.as_str() {
+        "prompt_rescue" => validate_prompt_rescue_job_id(&request.artifact_id)?,
+        "reply_rescue" => validate_reply_rescue_job_id(&request.artifact_id)?,
+        _ => unreachable!(),
+    }
+    validate_prompt_rescue_version(request.expected_version)?;
+    validate_resume_digest(&request.expected_artifact_digest)?;
+    invoke(Operation::ArtifactAdoptionRecord, &request).await
 }
 
 #[tauri::command]

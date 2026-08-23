@@ -14,6 +14,11 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import config as config_mod
 from . import paths
+from .artifact_adoptions import store as artifact_adoption_store
+from .artifact_adoptions.service import (
+    ArtifactAdoptionConflict,
+    ArtifactAdoptionService,
+)
 from .daily_wrap import store as daily_wrap_store
 from .daily_wrap.service import DailyWrapService
 from .memory_candidates import store as candidate_store
@@ -52,7 +57,7 @@ from .suggestions import store as suggestion_store
 from .suggestions.feedback import valid_feedback_reason
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 23
+PROTOCOL_VERSION = 24
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -104,6 +109,8 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         return _error("VERSION_CONFLICT", "The Prompt Rescue job changed."), 2
     except reply_rescue_store.ReplyRescueConflict:
         return _error("VERSION_CONFLICT", "The Reply Rescue job changed."), 2
+    except ArtifactAdoptionConflict:
+        return _error("VERSION_CONFLICT", "The prepared artifact changed."), 2
     except resume_rescue_store.ResumeRescueConflict:
         return _error("VERSION_CONFLICT", "The Résumé Rescue source changed."), 2
     except resume_rewrite_store.ResumeRewriteConflict:
@@ -207,6 +214,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "reply_rescue.edit": _reply_rescue_edit,
         "reply_rescue.retry": _reply_rescue_retry,
         "reply_rescue.delete": _reply_rescue_delete,
+        "artifact_adoption.record": _artifact_adoption_record,
         "resume_rescue.state": _resume_rescue_state,
         "resume_rescue.save_profile": _resume_rescue_save_profile,
         "resume_rescue.save_opportunity": _resume_rescue_save_opportunity,
@@ -457,6 +465,41 @@ def _reply_rescue_delete(params: dict[str, Any]) -> dict[str, Any]:
     with fts.cursor() as conn:
         ReplyRescueService(conn, cfg).delete(job_id, expected_version=expected_version)
         return {"job_id": job_id, "deleted": True}
+
+
+def _artifact_adoption_record(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={
+            "artifact_kind",
+            "artifact_id",
+            "expected_version",
+            "expected_artifact_digest",
+        },
+    )
+    artifact_kind = _bounded_string(params["artifact_kind"], 50, nonempty=True)
+    if artifact_kind not in artifact_adoption_store.ARTIFACT_KINDS:
+        raise ValueError("unsupported artifact adoption kind")
+    artifact_id = _bounded_string(params["artifact_id"], 128, nonempty=True)
+    expected_version = _bounded_int(params["expected_version"], 1, 2_147_483_647)
+    expected_digest = _bounded_string(
+        params["expected_artifact_digest"],
+        64,
+        nonempty=True,
+    )
+    if len(expected_digest) != 64 or any(
+        character not in "0123456789abcdef" for character in expected_digest
+    ):
+        raise ValueError("artifact adoption digest is invalid")
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        adoption, created = ArtifactAdoptionService(conn, cfg).record_used(
+            artifact_kind=artifact_kind,
+            artifact_id=artifact_id,
+            expected_version=expected_version,
+            expected_artifact_digest=expected_digest,
+        )
+        return {"adoption": _artifact_adoption_payload(adoption), "created": created}
 
 
 def _resume_rescue_state(params: dict[str, Any]) -> dict[str, Any]:
@@ -1392,6 +1435,7 @@ def _prompt_rescue_payload(job) -> dict[str, Any]:
         "model_identity": str(job.model_identity)[:256],
         "provider_location": str(job.provider_location)[:50],
         "output": _bounded_prompt_rescue_output(output),
+        "output_digest": str(job.output_digest)[:64],
         "output_edited": bool(job.output_edited),
         "error_code": str(job.error_code)[:50],
         "attempt_count": int(job.attempt_count),
@@ -1476,6 +1520,7 @@ def _reply_rescue_payload(job) -> dict[str, Any]:
         "model_identity": str(job.model_identity)[:256],
         "provider_location": str(job.provider_location)[:50],
         "output": _bounded_reply_rescue_output(output),
+        "output_digest": str(job.output_digest)[:64],
         "output_edited": bool(job.output_edited),
         "error_code": str(job.error_code)[:50],
         "attempt_count": int(job.attempt_count),
@@ -1506,6 +1551,20 @@ def _bounded_reply_rescue_output(output: dict[str, Any] | None) -> dict[str, Any
             for value in claims[:50]
             if isinstance(value, dict)
         ],
+    }
+
+
+def _artifact_adoption_payload(adoption) -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "id": str(adoption.id)[:128],
+        "artifact_kind": str(adoption.artifact_kind)[:50],
+        "artifact_id": str(adoption.artifact_id)[:128],
+        "artifact_digest": str(adoption.artifact_digest)[:64],
+        "artifact_version": int(adoption.artifact_version),
+        "output_edited": bool(adoption.output_edited),
+        "adopted_at": str(adoption.adopted_at)[:100],
+        "action_capability": "none",
     }
 
 

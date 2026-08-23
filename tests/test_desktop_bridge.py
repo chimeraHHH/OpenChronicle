@@ -18,6 +18,7 @@ import pytest
 
 from openchronicle import config as config_mod
 from openchronicle import desktop_bridge, paths
+from openchronicle.artifact_adoptions import store as artifact_adoption_store
 from openchronicle.capture import scheduler
 from openchronicle.daily_wrap import store as daily_wrap_store
 from openchronicle.desktop_bridge import (
@@ -819,6 +820,7 @@ def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(
     detail, detail_code = _request("prompt_rescue.get", {"job_id": ready.id})
     assert detail_code == 0
     assert detail["result"]["job"]["output"] == output
+    assert len(detail["result"]["job"]["output_digest"]) == 64
     assert set(detail["result"]) == {"job"}
 
     edited, edit_code = _request(
@@ -830,8 +832,67 @@ def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(
         },
     )
     assert edit_code == 0
-    assert edited["result"]["job"]["output_edited"] is True
-    assert edited["result"]["job"]["output"]["action_capability"] == "none"
+    edited_job = edited["result"]["job"]
+    assert edited_job["output_edited"] is True
+    assert edited_job["output"]["action_capability"] == "none"
+
+    adopted, adopted_code = _request(
+        "artifact_adoption.record",
+        {
+            "artifact_kind": "prompt_rescue",
+            "artifact_id": ready.id,
+            "expected_version": edited_job["version"],
+            "expected_artifact_digest": edited_job["output_digest"],
+        },
+    )
+    assert adopted_code == 0
+    assert adopted["result"]["created"] is True
+    assert adopted["result"]["adoption"] == {
+        "schema_version": 1,
+        "id": adopted["result"]["adoption"]["id"],
+        "artifact_kind": "prompt_rescue",
+        "artifact_id": ready.id,
+        "artifact_digest": edited_job["output_digest"],
+        "artifact_version": edited_job["version"],
+        "output_edited": True,
+        "adopted_at": adopted["result"]["adoption"]["adopted_at"],
+        "action_capability": "none",
+    }
+    replay, replay_code = _request(
+        "artifact_adoption.record",
+        {
+            "artifact_kind": "prompt_rescue",
+            "artifact_id": ready.id,
+            "expected_version": edited_job["version"],
+            "expected_artifact_digest": edited_job["output_digest"],
+        },
+    )
+    assert replay_code == 0
+    assert replay["result"] == {**adopted["result"], "created": False}
+
+    malformed, malformed_code = _request(
+        "artifact_adoption.record",
+        {
+            "artifact_kind": "prompt_rescue",
+            "artifact_id": ready.id,
+            "expected_version": edited_job["version"],
+            "expected_artifact_digest": "z" * 64,
+        },
+    )
+    assert malformed_code == 2
+    assert malformed["error"]["code"] == "INVALID_PARAMS"
+
+    changed, changed_code = _request(
+        "artifact_adoption.record",
+        {
+            "artifact_kind": "prompt_rescue",
+            "artifact_id": ready.id,
+            "expected_version": edited_job["version"],
+            "expected_artifact_digest": "0" * 64,
+        },
+    )
+    assert changed_code == 2
+    assert changed["error"]["code"] == "VERSION_CONFLICT"
 
     stale, stale_code = _request(
         "prompt_rescue.edit",
@@ -844,13 +905,19 @@ def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(
     assert stale_code == 2
     assert stale["error"]["code"] == "VERSION_CONFLICT"
 
-    current_version = edited["result"]["job"]["version"]
+    current_version = edited_job["version"]
     deleted, delete_code = _request(
         "prompt_rescue.delete",
         {"job_id": ready.id, "expected_version": current_version},
     )
     assert delete_code == 0
     assert deleted["result"] == {"job_id": ready.id, "deleted": True}
+    with fts.cursor() as conn:
+        assert artifact_adoption_store.list_for_artifact(
+            conn,
+            artifact_kind="prompt_rescue",
+            artifact_id=ready.id,
+        ) == []
     missing, missing_code = _request("prompt_rescue.get", {"job_id": ready.id})
     assert missing_code == 2
     assert missing["error"]["code"] == "NOT_FOUND"
@@ -1044,6 +1111,7 @@ def test_reply_rescue_bridge_is_manual_review_only_and_cas_bound(
     detail, detail_code = _request("reply_rescue.get", {"job_id": ready.id})
     assert detail_code == 0
     assert detail["result"]["job"]["output"] == output
+    assert len(detail["result"]["job"]["output_digest"]) == 64
 
     edited, edit_code = _request(
         "reply_rescue.edit",
@@ -1059,6 +1127,22 @@ def test_reply_rescue_bridge_is_manual_review_only_and_cas_bound(
     assert edited_job["output"]["claims"] == []
     assert edited_job["output"]["addressed_questions"] == []
     assert edited_job["output"]["action_capability"] == "none"
+
+    adopted, adopted_code = _request(
+        "artifact_adoption.record",
+        {
+            "artifact_kind": "reply_rescue",
+            "artifact_id": ready.id,
+            "expected_version": edited_job["version"],
+            "expected_artifact_digest": edited_job["output_digest"],
+        },
+    )
+    assert adopted_code == 0
+    assert adopted["result"]["created"] is True
+    assert adopted["result"]["adoption"]["artifact_kind"] == "reply_rescue"
+    assert adopted["result"]["adoption"]["artifact_digest"] == edited_job["output_digest"]
+    assert adopted["result"]["adoption"]["output_edited"] is True
+    assert adopted["result"]["adoption"]["action_capability"] == "none"
 
     stale, stale_code = _request(
         "reply_rescue.edit",
@@ -1077,6 +1161,12 @@ def test_reply_rescue_bridge_is_manual_review_only_and_cas_bound(
     )
     assert delete_code == 0
     assert deleted["result"] == {"job_id": ready.id, "deleted": True}
+    with fts.cursor() as conn:
+        assert artifact_adoption_store.list_for_artifact(
+            conn,
+            artifact_kind="reply_rescue",
+            artifact_id=ready.id,
+        ) == []
     missing, missing_code = _request("reply_rescue.get", {"job_id": ready.id})
     assert missing_code == 2
     assert missing["error"]["code"] == "NOT_FOUND"

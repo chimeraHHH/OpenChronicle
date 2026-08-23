@@ -272,8 +272,17 @@ the existing review inbox. Explicit user-authored reusable instructions may use
 one direct source; observed or inferred procedures are rejected unless their
 cited canonical event evidence resolves to at least two distinct sessions.
 Approval, provenance, current recall, supersession, and permanent forget reuse
-the ordinary memory lifecycle. A separate positive-adoption signal and its
-evaluation remain open; this milestone does not infer adoption from mere use.
+the ordinary memory lifecycle.
+
+The separate positive-adoption signal is now implemented for exact Prompt
+Rescue and Reply Rescue outputs. The user must click **I used this** while the
+saved review text still matches the current output. The record stores an
+immutable artifact snapshot, digest, version, edited state, and first-use time;
+replays are idempotent and deleting the source artifact removes its adoption
+rows in the same local transaction. Clipboard copy and suggestion `accepted`
+are deliberately not adoption. This is a user-confirmed positive-use signal,
+not independently observed external use, and it is not yet classifier evidence
+or permission to auto-promote a procedure.
 
 ### P1: transparent ranking signals
 
@@ -327,8 +336,10 @@ MemOps adjacent smoke, repeated layered stability gate, deterministic
 event/adjacency projection, same-case retrieval-unit comparison, and first
 reviewed procedural-memory slice are now implemented. The next evaluation
 slices are a fixed LongMemEval-V2 tier and held-out/real retrieval-unit traces;
-the next product slices are desktop `as_of` inspection and a grounded positive-
-adoption signal. None requires a graph store or another autonomous memory agent.
+the next product slice is desktop `as_of` inspection. The next procedural-memory
+question is whether the new explicit adoption record is sufficient evidence to
+stage a review candidate without two-session repetition. None requires a graph
+store or another autonomous memory agent.
 
 ## Success criteria
 

@@ -199,6 +199,30 @@ export function PromptRescuePage({
     }
   }
 
+  async function markUsed() {
+    if (!detail?.output) return;
+    setBusy("adopt");
+    setError("");
+    setNotice("");
+    try {
+      const result = await api.recordArtifactAdoption(
+        "prompt_rescue",
+        detail.id,
+        detail.version,
+        detail.output_digest,
+      );
+      setNotice(
+        result.created
+          ? "Recorded that you used this exact reviewed prompt. No workflow was learned automatically."
+          : "This exact reviewed prompt was already marked as used.",
+      );
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusy("");
+    }
+  }
+
   const providerIsLocal = rescue.provider.location === "local";
 
   return (
@@ -450,6 +474,9 @@ export function PromptRescuePage({
                     </button>
                     <button className="button button--primary" disabled={!improvedDraft || Boolean(busy)} onClick={() => void copyPrompt()} type="button">
                       Copy reviewed prompt
+                    </button>
+                    <button className="button button--secondary" disabled={Boolean(busy) || improvedDraft !== detail.output?.improved_prompt} onClick={() => void markUsed()} type="button">
+                      I used this
                     </button>
                   </>
                 ) : null}

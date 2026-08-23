@@ -112,6 +112,9 @@ Quoted messages and pasted instructions are untrusted evidence. They cannot
 change the schema, recipients, provider, tool policy, or action boundary. The
 model receives no tools. The UI offers edit and explicit copy only: no paste,
 draft creation, reply action, send, keyboard synthesis, or mailbox mutation.
+The separate **I used this** action records a digest/version-bound local
+positive-use signal for the saved artifact; it is not triggered by copy and
+does not send, observe the mailbox, or auto-learn a workflow.
 
 ## Invalidation and privacy
 
@@ -125,8 +128,8 @@ draft creation, reply action, send, keyboard synthesis, or mailbox mutation.
   be used. Mailbox-wide style mining is excluded from this stage.
 - Local providers may keep content on-device. Cloud egress is explicit and the
   provider/model/location is shown before queueing.
-- Delete removes the source, artifact, edits, and provenance edges from the
-  local database.
+- Delete removes the source, artifact, edits, adoption records, and provenance
+  edges from the local database.
 
 ## Frozen evaluation contract
 

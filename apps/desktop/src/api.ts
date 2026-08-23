@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  ArtifactAdoption,
+  ArtifactAdoptionKind,
   AssertionKind,
   Candidate,
   CandidateStatus,
@@ -877,8 +879,12 @@ function promptRescueJob(value: unknown): PromptRescueJob {
   const sourceKind = promptRescueSourceKind(raw.source_kind);
   const output = promptRescueOutput(raw.output);
   const status = promptRescueStatus(raw.status);
+  const outputDigest = stringValue(raw.output_digest, "Prompt Rescue output digest");
   if ((status === "ready") !== (output !== null)) {
     return protocolError("Prompt Rescue output state");
+  }
+  if ((status === "ready") !== /^[0-9a-f]{64}$/.test(outputDigest)) {
+    return protocolError("Prompt Rescue output digest");
   }
   return {
     id: stringValue(raw.id, "Prompt Rescue id"),
@@ -893,6 +899,7 @@ function promptRescueJob(value: unknown): PromptRescueJob {
     model_identity: stringValue(raw.model_identity, "Prompt Rescue model"),
     provider_location: promptRescueProviderLocation(raw.provider_location),
     output,
+    output_digest: outputDigest,
     output_edited: booleanValue(raw.output_edited, "Prompt Rescue edited state"),
     error_code: stringValue(raw.error_code, "Prompt Rescue error code"),
     attempt_count: numberValue(raw.attempt_count, "Prompt Rescue attempt count"),
@@ -1077,8 +1084,12 @@ function replyRescueJob(value: unknown): ReplyRescueJob {
   );
   const status = replyRescueStatus(raw.status);
   const output = replyRescueOutput(raw.output);
+  const outputDigest = stringValue(raw.output_digest, "Reply Rescue output digest");
   if ((status === "ready") !== (output !== null)) {
     return protocolError("Reply Rescue output state");
+  }
+  if ((status === "ready") !== /^[0-9a-f]{64}$/.test(outputDigest)) {
+    return protocolError("Reply Rescue output digest");
   }
   return {
     id: stringValue(raw.id, "Reply Rescue id"),
@@ -1088,6 +1099,7 @@ function replyRescueJob(value: unknown): ReplyRescueJob {
     model_identity: stringValue(raw.model_identity, "Reply Rescue model"),
     provider_location: replyRescueProviderLocation(raw.provider_location),
     output,
+    output_digest: outputDigest,
     output_edited: booleanValue(raw.output_edited, "Reply Rescue edited state"),
     error_code: stringValue(raw.error_code, "Reply Rescue error code"),
     attempt_count: numberValue(raw.attempt_count, "Reply Rescue attempt count"),
@@ -3443,6 +3455,68 @@ export function normalizeReplyRescueDelete(value: unknown): {
   };
 }
 
+export function normalizeArtifactAdoption(value: unknown): {
+  adoption: ArtifactAdoption;
+  created: boolean;
+} {
+  const response = closedObject(value, ["adoption", "created"], "artifact adoption response");
+  const raw = closedObject(
+    response.adoption,
+    [
+      "schema_version",
+      "id",
+      "artifact_kind",
+      "artifact_id",
+      "artifact_digest",
+      "artifact_version",
+      "output_edited",
+      "adopted_at",
+      "action_capability",
+    ],
+    "artifact adoption",
+  );
+  if (
+    numberValue(raw.schema_version, "artifact adoption schema") !== 1 ||
+    stringValue(raw.action_capability, "artifact adoption capability") !== "none"
+  ) {
+    return protocolError("artifact adoption contract");
+  }
+  const kind = stringValue(raw.artifact_kind, "artifact adoption kind");
+  if (kind !== "prompt_rescue" && kind !== "reply_rescue") {
+    return protocolError("artifact adoption kind");
+  }
+  const digest = stringValue(raw.artifact_digest, "artifact adoption digest");
+  const version = numberValue(raw.artifact_version, "artifact adoption version");
+  const id = stringValue(raw.id, "artifact adoption id");
+  const artifactId = stringValue(raw.artifact_id, "artifact adoption artifact id");
+  const adoptedAt = stringValue(raw.adopted_at, "artifact adoption time");
+  if (
+    !/^aa-[0-9a-f]{32}$/.test(id) ||
+    !artifactId ||
+    artifactId.length > 128 ||
+    !/^[0-9a-f]{64}$/.test(digest) ||
+    !Number.isSafeInteger(version) ||
+    version < 1 ||
+    !adoptedAt
+  ) {
+    return protocolError("artifact adoption identity");
+  }
+  return {
+    adoption: {
+      schema_version: 1,
+      id,
+      artifact_kind: kind,
+      artifact_id: artifactId,
+      artifact_digest: digest,
+      artifact_version: version,
+      output_edited: booleanValue(raw.output_edited, "artifact adoption edited state"),
+      adopted_at: adoptedAt,
+      action_capability: "none",
+    },
+    created: booleanValue(response.created, "artifact adoption created state"),
+  };
+}
+
 async function request<T>(command: string, payload: object, normalize: (value: unknown) => T): Promise<T> {
   try {
     const value = await invoke<unknown>(command, { request: payload });
@@ -3885,6 +3959,32 @@ export const desktopApi = {
       (value) => {
         const result = normalizeReplyRescueDelete(value);
         if (result.job_id !== jobId) return protocolError("Reply Rescue delete identity");
+        return result;
+      },
+    ),
+  recordArtifactAdoption: (
+    artifactKind: ArtifactAdoptionKind,
+    artifactId: string,
+    expectedVersion: number,
+    expectedArtifactDigest: string,
+  ) =>
+    request(
+      "record_artifact_adoption",
+      {
+        artifact_kind: artifactKind,
+        artifact_id: artifactId,
+        expected_version: expectedVersion,
+        expected_artifact_digest: expectedArtifactDigest,
+      },
+      (value) => {
+        const result = normalizeArtifactAdoption(value);
+        if (
+          result.adoption.artifact_kind !== artifactKind ||
+          result.adoption.artifact_id !== artifactId ||
+          result.adoption.artifact_digest !== expectedArtifactDigest
+        ) {
+          return protocolError("artifact adoption mutation identity");
+        }
         return result;
       },
     ),

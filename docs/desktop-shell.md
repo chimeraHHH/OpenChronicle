@@ -70,10 +70,11 @@ only:
   an independent quality score;
 - Prompt Rescue manual-input and global-shortcut exact-selection queue,
   read/edit/retry/delete operations, and explicit clipboard copy in the
-  WebView;
+  WebView, plus a separate digest/version-bound **I used this** record;
 - Reply Rescue manual-conversation and distinct global-shortcut exact-selection
   queues, read/edit/retry/delete operations, visible unverified conversation-
-  identity/recipient warnings, and explicit clipboard copy;
+  identity/recipient warnings, explicit clipboard copy, and a separate exact-
+  artifact **I used this** record;
 - Résumé Rescue reviewed profile versions, immutable opportunity snapshots,
   unchecked PDF/DOCX/JSON imports, exact fact selection and requirement
   ledgers, deterministic preview, and loss-explicit JSON/DOCX/PDF export;
@@ -100,20 +101,23 @@ submission, or any other external effect.
 - **Copy reviewed prompt** writes only the reviewed prepared text to the shared
   clipboard. OpenChronicle does not claim where it will be pasted and has no
   command to paste or submit it.
+- **I used this** records the exact saved Prompt/Reply Rescue output digest and
+  version as a local positive-use signal. It does not paste, submit, send, infer
+  use from a copy, or automatically learn a workflow. Unsaved edits disable it.
 - **Import selected text** is initiated with `Command-Shift-Space` while the
   external app still owns focus. The native probe reads only a stable
   `AXSelectedText` range, rejects secure/multiple/empty/policy-excluded/racing
   sources, queues the receipt, and only then focuses OpenChronicle. It never
   reads `AXValue` or the clipboard as a fallback.
 - **Delete Prompt Rescue job** uses a native confirmation and version-bound
-  delete to remove the local rough input, artifact, and provenance edge. It
-  does not alter clipboard contents or another application.
+  delete to remove the local rough input, artifact, adoption records, and
+  provenance edge. It does not alter clipboard contents or another application.
 - **Copy reviewed reply** writes only the reviewed reply body to the shared
   clipboard. It cannot create a provider draft, paste, address, or send it.
 - **Delete Reply Rescue job** uses a native confirmation and version-bound
-  delete to remove the local conversation, artifact, and provenance edge. It
-  does not alter any mailbox, provider draft, clipboard content, or external
-  application.
+  delete to remove the local conversation, artifact, adoption records, and
+  provenance edge. It does not alter any mailbox, provider draft, clipboard
+  content, or external application.
 - **Accept résumé wording** applies exactly one digest-bound, locally validated
   proposal to a new opportunity-specific version. It never modifies the
   reviewed master profile, and there is no accept-all command.

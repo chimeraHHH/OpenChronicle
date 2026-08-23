@@ -132,6 +132,9 @@ submission/tool call.
   invalidates provenance edges; exports are not added in this slice.
 - Copy is an explicit user action. Automatic paste, Enter/Return synthesis,
   accessibility writes, API submission, and tool execution are absent.
+- A separate **I used this** action records only the exact saved output digest,
+  version, edited state, and immutable local artifact snapshot. Copy does not
+  trigger it, and the signal does not auto-learn a procedure.
 
 ## Evaluation contract
 

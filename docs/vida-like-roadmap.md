@@ -249,8 +249,13 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   two-session observed/inferred text workflows, templates, and checklists. It
   reuses the existing review/provenance/forget lifecycle, remains generation
   context, and never executes computer actions.
-- [ ] Add a separately grounded positive-adoption signal and evaluate whether
-  adopted generated artifacts should qualify without two-session repetition.
+- [x] Separate positive-adoption signal for Prompt/Reply Rescue artifacts:
+  only an explicit **I used this** action records an immutable output snapshot,
+  exact digest/version, edited state, and first-use time. Copy and suggestion
+  acknowledgement remain separate; deleting the source artifact deletes this
+  local signal, and recording it never executes or learns a workflow.
+- [ ] Evaluate whether an explicitly adopted generated artifact should qualify
+  as reviewable procedural-memory evidence without two-session repetition.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1

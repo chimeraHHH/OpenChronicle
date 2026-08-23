@@ -421,6 +421,8 @@ def edit_output(
 
 def delete(conn: sqlite3.Connection, *, job_id: str, expected_version: int) -> None:
     with _atomic(conn, "reply_rescue_delete"):
+        from ..artifact_adoptions import store as adoption_store
+
         row = conn.execute("SELECT version FROM reply_rescue_jobs WHERE id=?", (job_id,)).fetchone()
         if row is None or type(row["version"]) is not int or row["version"] != expected_version:
             raise ReplyRescueConflict("reply rescue changed")
@@ -430,6 +432,11 @@ def delete(conn: sqlite3.Connection, *, job_id: str, expected_version: int) -> N
         )
         if result.rowcount != 1:
             raise ReplyRescueConflict("reply rescue changed")
+        adoption_store.delete_for_artifact(
+            conn,
+            artifact_kind="reply_rescue",
+            artifact_id=job_id,
+        )
         conn.execute(
             """
             DELETE FROM provenance_edges

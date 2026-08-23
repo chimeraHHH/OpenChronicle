@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 12 * 1024 * 1024;
-const PROTOCOL_VERSION: u8 = 23;
+const PROTOCOL_VERSION: u8 = 24;
 // The largest allowlisted response is wrap.get: the Python bridge bounds five
 // categories to 100 items each and each item to 20 bounded references. Even if
 // every bounded character needs JSON's six-byte control-character escape, the
@@ -77,6 +77,7 @@ pub(crate) enum Operation {
     ReplyRescueEdit,
     ReplyRescueRetry,
     ReplyRescueDelete,
+    ArtifactAdoptionRecord,
     ResumeRescueState,
     ResumeRescueSaveProfile,
     ResumeRescueSaveOpportunity,
@@ -137,6 +138,7 @@ impl Operation {
             Self::ReplyRescueEdit => "reply_rescue.edit",
             Self::ReplyRescueRetry => "reply_rescue.retry",
             Self::ReplyRescueDelete => "reply_rescue.delete",
+            Self::ArtifactAdoptionRecord => "artifact_adoption.record",
             Self::ResumeRescueState => "resume_rescue.state",
             Self::ResumeRescueSaveProfile => "resume_rescue.save_profile",
             Self::ResumeRescueSaveOpportunity => "resume_rescue.save_opportunity",
@@ -635,6 +637,10 @@ mod tests {
             "reply_rescue.queue_selection"
         );
         assert_eq!(Operation::ReplyRescueEdit.as_str(), "reply_rescue.edit");
+        assert_eq!(
+            Operation::ArtifactAdoptionRecord.as_str(),
+            "artifact_adoption.record"
+        );
         assert_eq!(Operation::ReplyRescueRetry.as_str(), "reply_rescue.retry");
         assert_eq!(Operation::ReplyRescueDelete.as_str(), "reply_rescue.delete");
         assert_eq!(
@@ -743,21 +749,21 @@ mod tests {
 
     #[test]
     fn response_must_be_one_strict_versioned_line() {
-        let response = parse_response(b"{\"version\":23,\"ok\":true,\"result\":{}}\n")
+        let response = parse_response(b"{\"version\":24,\"ok\":true,\"result\":{}}\n")
             .expect("valid response");
         assert!(response.ok);
 
         assert!(
-            parse_response(b"{\"version\":23,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
+            parse_response(b"{\"version\":24,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
                 .is_err()
         );
         assert!(parse_response(b"{\"version\":2,\"ok\":true,\"result\":{}}\n").is_err());
         assert!(
-            parse_response(b"{\"version\":23,\"ok\":true,\"result\":{},\"unknown\":true}\n")
+            parse_response(b"{\"version\":24,\"ok\":true,\"result\":{},\"unknown\":true}\n")
                 .is_err()
         );
         assert!(parse_response(
-            b"{\"version\":23,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
+            b"{\"version\":24,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
         )
         .is_err());
     }
@@ -765,7 +771,7 @@ mod tests {
     #[test]
     fn backend_error_is_mapped_by_code_only() {
         let response = parse_response(
-            b"{\"version\":23,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
+            b"{\"version\":24,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
         )
         .expect("valid error envelope");
         let error = DesktopError::from_bridge(&response.error.expect("error").code);

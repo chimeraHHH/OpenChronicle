@@ -15,6 +15,8 @@ import { desktopApi } from "../api";
 import { SourceDrawer } from "../components/SourceDrawer";
 import "../styles.css";
 import {
+  artifactAdoption,
+  bridgeArtifactAdoption,
   bridgeCandidateGet,
   bridgeCandidateMutation,
   bridgeResolvedEvidence,
@@ -56,7 +58,7 @@ import {
   wrapSummary,
 } from "./fixtures";
 
-function commandResult(command: string) {
+function commandResult(command: string, args?: unknown) {
   if (command === "get_snapshot") return bridgeSnapshot();
   if (command === "get_candidate") return bridgeCandidateGet();
   if (command === "export_published_memory") {
@@ -112,7 +114,7 @@ function commandResult(command: string) {
   }
   if (command === "retry_prompt_rescue") {
     return bridgePromptRescueJob(
-      promptRescueJob({ status: "queued", output: null, version: 4 }),
+      promptRescueJob({ status: "queued", output: null, output_digest: "", version: 4 }),
     );
   }
   if (command === "delete_prompt_rescue") {
@@ -135,11 +137,29 @@ function commandResult(command: string) {
   }
   if (command === "retry_reply_rescue") {
     return bridgeReplyRescueJob(
-      replyRescueJob({ status: "queued", output: null, version: 4 }),
+      replyRescueJob({ status: "queued", output: null, output_digest: "", version: 4 }),
     );
   }
   if (command === "delete_reply_rescue") {
     return { job_id: "reply-rescue-1", deleted: true };
+  }
+  if (command === "record_artifact_adoption") {
+    const request = (args as {
+      request?: {
+        artifact_kind?: "prompt_rescue" | "reply_rescue";
+        artifact_id?: string;
+        expected_version?: number;
+        expected_artifact_digest?: string;
+      };
+    } | undefined)?.request;
+    return bridgeArtifactAdoption(
+      artifactAdoption({
+        artifact_kind: request?.artifact_kind ?? "prompt_rescue",
+        artifact_id: request?.artifact_id ?? "prompt-rescue-1",
+        artifact_version: request?.expected_version ?? 3,
+        artifact_digest: request?.expected_artifact_digest ?? "a".repeat(64),
+      }),
+    );
   }
   if (command === "get_resume_rescue_state") return resumeRescueState();
   if (command === "save_resume_rescue_profile") {
@@ -230,7 +250,9 @@ function commandResult(command: string) {
 beforeEach(() => {
   tauri.invoke.mockReset();
   tauri.listen.mockClear();
-  tauri.invoke.mockImplementation(async (command: string) => commandResult(command));
+  tauri.invoke.mockImplementation(async (command: string, args?: unknown) =>
+    commandResult(command, args),
+  );
 });
 
 describe("trusted console", () => {
@@ -727,6 +749,21 @@ describe("trusted console", () => {
         String(command).includes("send") || String(command).includes("mailbox"),
       ),
     ).toBe(false);
+    expect(tauri.invoke).not.toHaveBeenCalledWith(
+      "record_artifact_adoption",
+      expect.anything(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "I used this" }));
+    expect(tauri.invoke).toHaveBeenCalledWith("record_artifact_adoption", {
+      request: {
+        artifact_kind: "reply_rescue",
+        artifact_id: "reply-rescue-1",
+        expected_version: 3,
+        expected_artifact_digest: "b".repeat(64),
+      },
+    });
+    expect(screen.getByText(/Nothing was sent and no workflow was learned/i)).toBeInTheDocument();
   });
 
   it("prepares explicit manual input and copies without paste or submit capability", async () => {
@@ -755,6 +792,21 @@ describe("trusted console", () => {
         String(command).includes("paste") || String(command).includes("submit"),
       ),
     ).toBe(false);
+    expect(tauri.invoke).not.toHaveBeenCalledWith(
+      "record_artifact_adoption",
+      expect.anything(),
+    );
+
+    await user.click(screen.getByRole("button", { name: "I used this" }));
+    expect(tauri.invoke).toHaveBeenCalledWith("record_artifact_adoption", {
+      request: {
+        artifact_kind: "prompt_rescue",
+        artifact_id: "prompt-rescue-1",
+        expected_version: 3,
+        expected_artifact_digest: "a".repeat(64),
+      },
+    });
+    expect(screen.getByText(/No workflow was learned automatically/i)).toBeInTheDocument();
   });
 
   it("shows the global shortcut and exact selection receipt without an import button", async () => {

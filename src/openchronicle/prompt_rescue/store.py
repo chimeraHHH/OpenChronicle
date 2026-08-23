@@ -526,6 +526,8 @@ def delete(
     expected_version: int,
 ) -> None:
     with _atomic(conn, "prompt_rescue_delete"):
+        from ..artifact_adoptions import store as adoption_store
+
         row = conn.execute(
             "SELECT version FROM prompt_rescue_jobs WHERE id=?",
             (job_id,),
@@ -538,6 +540,11 @@ def delete(
         )
         if result.rowcount != 1:
             raise PromptRescueConflict("prompt rescue changed")
+        adoption_store.delete_for_artifact(
+            conn,
+            artifact_kind="prompt_rescue",
+            artifact_id=job_id,
+        )
         conn.execute(
             """
             DELETE FROM provenance_edges

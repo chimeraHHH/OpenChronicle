@@ -100,7 +100,10 @@ Procedural proposals reuse that same candidate, approval, provenance,
 supersession, and permanent-forget lifecycle. They do not introduce a second
 store or an autonomous executor. The first slice accepts explicit authored
 procedures and two-session observed/inferred patterns; positive adoption of a
-generated artifact is not yet a separate durable signal.
+generated Prompt/Reply Rescue artifact is now a separate immutable local
+signal. It remains outside classifier context pending a frozen evaluation of
+whether one explicit user-confirmed adoption can replace two-session evidence;
+copy and suggestion acknowledgement do not qualify.
 
 ### Durable delivery state machine
 

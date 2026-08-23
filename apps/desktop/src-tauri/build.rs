@@ -25,6 +25,7 @@ const COMMANDS: &[&str] = &[
     "edit_reply_rescue",
     "retry_reply_rescue",
     "delete_reply_rescue",
+    "record_artifact_adoption",
     "get_resume_rescue_state",
     "queue_resume_rescue_rewrite",
     "retry_resume_rescue_rewrite",

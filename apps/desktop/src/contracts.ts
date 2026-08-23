@@ -11,9 +11,23 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 23 adds revision-bound, on-demand
-// Published Memory history reads.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 23 as const;
+// WebView result projection. Version 24 adds explicit, digest-bound prepared-
+// artifact adoption records; copy and suggestion acknowledgement remain distinct.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 24 as const;
+
+export type ArtifactAdoptionKind = "prompt_rescue" | "reply_rescue";
+
+export interface ArtifactAdoption {
+  schema_version: 1;
+  id: string;
+  artifact_kind: ArtifactAdoptionKind;
+  artifact_id: string;
+  artifact_digest: string;
+  artifact_version: number;
+  output_edited: boolean;
+  adopted_at: string;
+  action_capability: "none";
+}
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -66,6 +80,7 @@ export interface PromptRescueJob
   constraints: string[];
   desired_format: string;
   output: PromptRescueOutput | null;
+  output_digest: string;
 }
 
 export interface PromptRescueSnapshot {
@@ -145,6 +160,7 @@ export interface ReplyRescueJob
   extends Omit<ReplyRescueJobSummary, "conversation_preview" | "identity_assurance"> {
   source: ReplyRescueSource;
   output: ReplyRescueOutput | null;
+  output_digest: string;
 }
 
 export interface ReplyRescueSnapshot {
