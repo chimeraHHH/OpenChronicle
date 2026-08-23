@@ -180,6 +180,118 @@ def test_activity_search_relaxes_only_after_zero_hit_across_event_boundary(
     assert strict["results"][0]["neighbors"] == []
 
 
+def test_activity_search_fills_partial_strict_results_from_relaxed_candidates(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        path = _create_event_file(conn)
+        _append_session(
+            conn,
+            path=path,
+            entry_id="session-strict-decoy",
+            session_id="sess_strict_decoy",
+            start="12:00",
+            end="12:10",
+            summary="Discussed the rejected treatment.",
+            tasks=[
+                (
+                    "12:00",
+                    "12:10",
+                    "Notes",
+                    "Mochi medicine schedule listed Milbemax as rejected",
+                )
+            ],
+        )
+        _append_session(
+            conn,
+            path=path,
+            entry_id="session-gold",
+            session_id="sess_gold",
+            start="12:10",
+            end="12:20",
+            summary="Recorded the current treatment.",
+            tasks=[("12:10", "12:20", "Notes", "Mochi now takes Milbemax")],
+        )
+
+        hits = activity_store.search(
+            conn,
+            query="Mochi medicine schedule Milbemax",
+            top_k=2,
+        )
+        visible = mcp_server._search_activity(
+            conn,
+            cfg=config_mod.Config(),
+            query="Mochi medicine schedule Milbemax",
+            top_k=2,
+            adjacent=0,
+        )
+
+    assert [hit.session_id for hit in hits] == ["sess_strict_decoy", "sess_gold"]
+    assert [hit.query_mode for hit in hits] == [
+        "strict_and",
+        "relaxed_or_after_partial_strict",
+    ]
+    assert [item["query_mode"] for item in visible["results"]] == [
+        "strict_and",
+        "relaxed_or_after_partial_strict",
+    ]
+
+
+def test_activity_search_partial_fill_paginates_without_duplicates(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        path = _create_event_file(conn)
+        for index, content in enumerate(
+            (
+                "Mochi medicine schedule",
+                "Mochi takes Milbemax",
+                "Mochi visits Greenfield",
+                "Mochi likes quiet rooms",
+            ),
+            start=1,
+        ):
+            start_minute = index * 10 - 10
+            end_minute = index * 10
+            _append_session(
+                conn,
+                path=path,
+                entry_id=f"session-page-{index}",
+                session_id=f"sess_page_{index}",
+                start=f"13:{start_minute:02d}",
+                end=f"13:{end_minute:02d}",
+                summary="Recorded a detail.",
+                tasks=[
+                    (
+                        f"13:{start_minute:02d}",
+                        f"13:{end_minute:02d}",
+                        "Notes",
+                        content,
+                    )
+                ],
+            )
+
+        first = activity_store.search(
+            conn,
+            query="Mochi medicine schedule",
+            top_k=2,
+        )
+        second = activity_store.search(
+            conn,
+            query="Mochi medicine schedule",
+            top_k=2,
+            offset=2,
+        )
+
+    ids = [hit.id for hit in [*first, *second]]
+    assert len(ids) == len(set(ids)) == 4
+    assert first[0].query_mode == "strict_and"
+    assert first[1].query_mode == "relaxed_or_after_partial_strict"
+    assert all(
+        hit.query_mode == "relaxed_or_after_partial_strict" for hit in second
+    )
+
+
 def test_classifier_activity_search_exposes_match_and_neighbor_sources(
     ac_root: Path,
 ) -> None:

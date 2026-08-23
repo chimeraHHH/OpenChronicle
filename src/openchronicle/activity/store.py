@@ -299,21 +299,41 @@ def search(
          ORDER BY rank, e.start_time, e.id
          LIMIT ? OFFSET ?
     """.format(where=" AND ".join(clauses))
-    args.extend((top_k, offset))
-    rows = conn.execute(sql, args).fetchall()
-    if rows or offset > 0:
-        return [_row_to_hit(row, query_mode="strict_and") for row in rows]
+    # Build one deterministic strict-first result stream before slicing the
+    # requested page. A partial AND page must not starve relevant OR candidates
+    # merely because one document happened to contain every query token.
+    window = offset + top_k
+    strict_args = [*args, window, 0]
+    strict_rows = conn.execute(sql, strict_args).fetchall()
+    if len(strict_rows) >= window:
+        return [
+            _row_to_hit(row, query_mode="strict_and")
+            for row in strict_rows[offset:window]
+        ]
 
-    # Event units are intentionally narrower than whole sessions. A strict
-    # query can therefore split its terms across the matching event and an
-    # adjacent event. Relax only after a zero-hit AND query; BM25 still ranks
-    # the local OR candidates and canonical authorization remains unchanged.
     relaxed_args = list(args)
     relaxed_args[0] = _safe_fts_or_query(query)
-    return [
-        _row_to_hit(row, query_mode="relaxed_or_after_zero_hits")
-        for row in conn.execute(sql, relaxed_args)
+    # OR contains every strict hit. Fetch enough rows to cover those duplicates
+    # plus the requested combined window, then append only new identities.
+    relaxed_args.extend((len(strict_rows) + window, 0))
+    relaxed_mode = (
+        "relaxed_or_after_partial_strict"
+        if strict_rows
+        else "relaxed_or_after_zero_hits"
+    )
+    combined = [
+        _row_to_hit(row, query_mode="strict_and") for row in strict_rows
     ]
+    seen = {hit.id for hit in combined}
+    for row in conn.execute(sql, relaxed_args):
+        hit = _row_to_hit(row, query_mode=relaxed_mode)
+        if hit.id in seen:
+            continue
+        seen.add(hit.id)
+        combined.append(hit)
+        if len(combined) >= window:
+            break
+    return combined[offset:window]
 
 
 def get(conn: sqlite3.Connection, event_id: str) -> ActivityEvent | None:

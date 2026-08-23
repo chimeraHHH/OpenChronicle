@@ -159,12 +159,12 @@ happened around the release failure?”; `search` remains the tool for durable
 facts and current preferences.
 
 Event recall first uses the ordinary implicit-AND FTS query. Because a narrow
-event boundary can place query terms on two neighboring events, a zero-hit
-strict query is retried once as a local OR/BM25 query; it does not relax a
-non-empty strict result or fall back to a model.
-Each matched event reports `query_mode=strict_and` or
-`relaxed_or_after_zero_hits`; neighbors have no query rank/mode because they
-were reached through the explicit temporal link.
+event boundary can place query terms on two neighboring events, an underfilled
+strict-AND result page is completed from a deduplicated local OR/BM25 stream.
+Strict hits remain first. This path does not fall back to a model. Each matched
+event reports `query_mode=strict_and`, `relaxed_or_after_zero_hits`, or
+`relaxed_or_after_partial_strict`; neighbors have no query rank/mode because
+they were reached through the explicit temporal link.
 
 ```json
 {

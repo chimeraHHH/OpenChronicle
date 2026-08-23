@@ -189,7 +189,7 @@ def run_evaluation(
         },
         "retrieval_contract": {
             "ranker": "production_activity_sqlite_fts5_bm25",
-            "query_mode": "strict_and_then_or_only_after_zero_hits",
+            "query_mode": "strict_first_then_relaxed_or_fill",
             "unit": "dataset_native_conversation_segment_proxy",
             "top_k": top_k,
             "adjacency_radius": 0,
@@ -384,6 +384,7 @@ def _evaluate_case(
         "non_gold_hit_count": sum(segment not in expected_set for segment in retrieved),
         "context_chars": sum(len(unit_by_segment[segment].content) for segment in retrieved),
         "query_mode": hits[0].query_mode if hits else "empty",
+        "query_modes": list(dict.fromkeys(hit.query_mode for hit in hits)),
     }
 
 
@@ -451,12 +452,22 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             6,
         ),
         "strict_and_case_rate": round(
-            sum(row["query_mode"] == "strict_and" for row in rows) / len(rows),
+            sum(_row_query_modes(row) == {"strict_and"} for row in rows) / len(rows),
             6,
         ),
-        "strict_and_case_count": sum(row["query_mode"] == "strict_and" for row in rows),
+        "strict_and_case_count": sum(
+            _row_query_modes(row) == {"strict_and"} for row in rows
+        ),
         "relaxed_or_case_count": sum(
-            row["query_mode"] == "relaxed_or_after_zero_hits" for row in rows
+            any(mode.startswith("relaxed_or_") for mode in _row_query_modes(row))
+            for row in rows
+        ),
+        "relaxed_or_after_zero_case_count": sum(
+            "relaxed_or_after_zero_hits" in _row_query_modes(row) for row in rows
+        ),
+        "relaxed_or_partial_fill_case_count": sum(
+            "relaxed_or_after_partial_strict" in _row_query_modes(row)
+            for row in rows
         ),
         "mean_context_chars": round(
             sum(int(row["context_chars"]) for row in rows) / len(rows),
@@ -475,6 +486,14 @@ def _metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
             for category in categories
         },
     }
+
+
+def _row_query_modes(row: dict[str, Any]) -> set[str]:
+    values = row.get("query_modes")
+    if isinstance(values, list) and all(isinstance(value, str) for value in values):
+        return set(values)
+    value = row.get("query_mode")
+    return {value} if isinstance(value, str) else set()
 
 
 def _seed_units(conn, units: tuple[RetrievalUnit, ...], *, setting: Setting) -> None:

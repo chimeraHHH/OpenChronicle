@@ -144,7 +144,12 @@ def _safe_event(event: activity_store.ActivityEvent | activity_store.ActivityEve
             isinstance(event.rank, (int, float))
             and not isinstance(event.rank, bool)
             and math.isfinite(float(event.rank))
-            and event.query_mode in {"strict_and", "relaxed_or_after_zero_hits"}
+            and event.query_mode
+            in {
+                "strict_and",
+                "relaxed_or_after_zero_hits",
+                "relaxed_or_after_partial_strict",
+            }
         )
     return True
 
