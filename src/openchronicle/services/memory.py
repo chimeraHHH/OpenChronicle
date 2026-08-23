@@ -296,10 +296,12 @@ class MemoryService:
             if invalid_sources:
                 raise ValueError("memory candidate evidence is missing or changed")
             conflicts = (
-                candidate_store.active_subject_conflicts(
-                    self.conn,
-                    subject_key=fact_metadata.subject_key,
-                    content_hash=digest,
+                _current_subject_conflicts(
+                    candidate_store.active_subject_conflicts(
+                        self.conn,
+                        subject_key=fact_metadata.subject_key,
+                        content_hash=digest,
+                    ),
                 )
                 if fact_metadata is not None
                 else candidate_store.active_conflicts(
@@ -412,10 +414,12 @@ class MemoryService:
             self.conn.execute("BEGIN IMMEDIATE")
             try:
                 edit_conflicts = (
-                    candidate_store.active_subject_conflicts(
-                        self.conn,
-                        subject_key=current.subject_key,
-                        content_hash=digest,
+                    _current_subject_conflicts(
+                        candidate_store.active_subject_conflicts(
+                            self.conn,
+                            subject_key=current.subject_key,
+                            content_hash=digest,
+                        ),
                     )
                     if current.subject_key
                     else candidate_store.active_conflicts(
@@ -1437,6 +1441,39 @@ def _markdown_entry_exists(path: str, entry_id: str) -> bool:
     except (OSError, ValueError):
         return False
     return any(entry.id == entry_id for entry in parsed.entries)
+
+
+def _current_subject_conflicts(
+    candidates: list[MemoryCandidate],
+) -> list[MemoryCandidate]:
+    """Exclude accepted candidates whose published fact is already historical.
+
+    Candidate rows are immutable review history, so an accepted candidate remains
+    accepted after its applied Markdown entry is superseded.  It no longer owns
+    the current subject slot in that state.  Missing or malformed publication
+    state remains a conflict so review fails closed.
+    """
+    current: list[MemoryCandidate] = []
+    for candidate in candidates:
+        if candidate.status != "accepted" or not candidate.applied_entry_id:
+            current.append(candidate)
+            continue
+        path = files_store.memory_path(candidate.target_path)
+        if not path.exists():
+            current.append(candidate)
+            continue
+        try:
+            parsed = files_store.read_file(path)
+        except (OSError, ValueError):
+            current.append(candidate)
+            continue
+        entry = next(
+            (entry for entry in parsed.entries if entry.id == candidate.applied_entry_id),
+            None,
+        )
+        if entry is None or not entry.provenance_valid or not entry.superseded_by:
+            current.append(candidate)
+    return current
 
 
 def _current_supersede_target(

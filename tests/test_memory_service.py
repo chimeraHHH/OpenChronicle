@@ -235,6 +235,53 @@ def test_reviewed_supersede_is_deterministic_and_preserves_history(
         assert fts.search(conn, query="local tools", top_k=5)
 
 
+def test_typed_fact_can_be_superseded_more_than_once(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        _ensure_source(conn)
+        common = {
+            "kind": "project_fact",
+            "target_path": "project-france.md",
+            "tags": ["project", "fact"],
+            "evidence": [_source()],
+            "confidence": 1.0,
+            "subject_key": "mab.capital.france",
+            "assertion_kind": "observed",
+        }
+
+        paris = service.propose_candidate(
+            **common,
+            content="The capital of France is Paris.",
+        )
+        assert paris.status == "pending"
+        paris = service.approve_candidate(paris.id, expected_version=paris.version)
+
+        harare = service.propose_candidate(
+            **common,
+            operation="supersede",
+            target_entry_id=paris.applied_entry_id or "",
+            content="The capital of France is Harare.",
+        )
+        assert harare.status == "pending"
+        harare = service.approve_candidate(harare.id, expected_version=harare.version)
+
+        lyon = service.propose_candidate(
+            **common,
+            operation="supersede",
+            target_entry_id=harare.applied_entry_id or "",
+            content="The capital of France is Lyon.",
+        )
+        assert lyon.status == "pending"
+        lyon = service.approve_candidate(lyon.id, expected_version=lyon.version)
+
+        parsed = files_store.read_file(files_store.memory_path("project-france.md"))
+        entries = {entry.id: entry for entry in parsed.entries}
+        assert entries[paris.applied_entry_id].superseded_by == harare.applied_entry_id
+        assert entries[harare.applied_entry_id].superseded_by == lyon.applied_entry_id
+        assert entries[lyon.applied_entry_id].superseded_by is None
+        assert entries[lyon.applied_entry_id].body == "The capital of France is Lyon."
+
+
 def test_supersede_approval_rejects_a_changed_target(ac_root: Path) -> None:
     with fts.cursor() as conn:
         service = _configured_service(conn)
