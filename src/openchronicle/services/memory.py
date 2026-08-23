@@ -563,28 +563,6 @@ class MemoryService:
         if current.status == "accepted":
             return current
 
-        entry_id = _candidate_entry_id(candidate_id)
-        if (
-            current.subject_key
-            and not _markdown_entry_exists(current.target_path, entry_id)
-            and _typed_candidate_has_conflict(
-                self.conn,
-                self.cfg,
-                current,
-            )
-        ):
-            detail = "typed memory subject became occupied before approval"
-            latest = self._required(candidate_id)
-            candidate_store.transition(
-                self.conn,
-                candidate_id=candidate_id,
-                expected_version=latest.version,
-                from_statuses=(latest.status,),
-                to_status="conflict",
-                error=detail,
-            )
-            raise candidate_store.CandidateConflict(detail)
-
         if current.status == "applying":
             applying = current
         else:
@@ -595,6 +573,7 @@ class MemoryService:
                 from_statuses=("pending",),
                 to_status="applying",
             )
+        entry_id = _candidate_entry_id(candidate_id)
         entry_sources = [_candidate_ref(candidate_id), *sources]
         try:
             # Cleanup and capture writes use the same lock. Re-read both the
@@ -1634,9 +1613,12 @@ def _published_subject_conflict(
     target_path: str,
     target_entry_id: str,
 ) -> bool:
-    for fact in list_current_facts(conn, cfg, limit=10_000):
-        if fact.subject_key != subject_key:
-            continue
+    for fact in list_current_facts(
+        conn,
+        cfg,
+        limit=10_000,
+        subject_key=subject_key,
+    ):
         if fact.path == target_path and fact.id == target_entry_id:
             continue
         return True
