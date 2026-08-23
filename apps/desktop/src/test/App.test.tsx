@@ -31,6 +31,7 @@ import {
   jsonResumeExport,
   maliciousText,
   memorySummary,
+  memoryForgetPreview,
   openedJsonResumeReview,
   openedResumeDocumentReview,
   provenanceTrace,
@@ -75,6 +76,16 @@ function commandResult(command: string) {
         tags: ["preference", "encrypted"],
         revision: "f".repeat(64),
       }),
+    };
+  }
+  if (command === "preview_forget_published_memory") return memoryForgetPreview();
+  if (command === "forget_published_memory") {
+    return {
+      path: "user-preferences.md",
+      entry_id: "memory-entry-1",
+      removed_entry: true,
+      removed_file_count: 0,
+      invalidated_wrap_ids: ["daily-wrap-memory"],
     };
   }
   if (command === "get_daily_wrap") return bridgeWrapGet();
@@ -269,6 +280,36 @@ describe("trusted console", () => {
         artifact_id: "memory-entry-1",
         path: "user-preferences.md",
         max_depth: 4,
+      },
+    });
+  });
+
+  it("previews and confirms complete Published Memory lineage deletion", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Memory" }));
+    await user.click(screen.getByRole("button", { name: "Review permanent forget…" }));
+
+    expect(await screen.findByRole("heading", { name: "Deletion impact" })).toBeInTheDocument();
+    expect(screen.getByText("2 memory version(s)")).toBeInTheDocument();
+    expect(screen.getByText("1 related proposal record(s)")).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenCalledWith("preview_forget_published_memory", {
+      request: {
+        path: "user-preferences.md",
+        entry_id: "memory-entry-1",
+        expected_revision: "e".repeat(64),
+      },
+    });
+
+    await user.click(screen.getByRole("button", { name: "Continue to system confirmation" }));
+    expect(await screen.findByText(/complete local revision history were deleted/i)).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenCalledWith("forget_published_memory", {
+      request: {
+        path: "user-preferences.md",
+        entry_id: "memory-entry-1",
+        expected_revision: "e".repeat(64),
+        plan_digest: "a".repeat(64),
       },
     });
   });

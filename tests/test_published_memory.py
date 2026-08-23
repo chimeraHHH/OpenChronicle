@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 
 from openchronicle import config as config_mod
+from openchronicle.memory_candidates import store as candidate_store
+from openchronicle.provenance.models import EvidenceRef, content_digest
 from openchronicle.services.current_facts import list_current_facts
+from openchronicle.services.memory import MemoryService
 from openchronicle.services.published_memory import (
     PublishedMemoryConflict,
     correct_current_fact,
@@ -152,3 +155,183 @@ def test_correction_rejects_noop_and_reserved_tags(ac_root: Path) -> None:
                 content="Changed.",
                 tags=["event"],
             )
+
+
+def test_fact_forget_removes_complete_manual_revision_chain_without_resurrection(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        _seed_current_fact(conn)
+        original = list_current_facts(conn, cfg)[0]
+        corrected = correct_current_fact(
+            conn,
+            cfg,
+            path=original.path,
+            entry_id=original.id,
+            expected_revision=original.revision,
+            content="User prefers encrypted local-first tools.",
+            tags=["preference", "encrypted"],
+        )
+        service = MemoryService(conn, cfg=cfg)
+
+        preview = service.preview_purge_fact(
+            path=corrected.path,
+            entry_id=corrected.id,
+            expected_revision=corrected.revision,
+        )
+
+        assert preview.candidate_ids == ()
+        assert {(entry["path"], entry["id"]) for entry in preview.entries} == {
+            (original.path, original.id),
+            (corrected.path, corrected.id),
+        }
+        assert preview.files == ()
+
+        result = service.purge_fact(
+            path=corrected.path,
+            entry_id=corrected.id,
+            expected_revision=corrected.revision,
+            expected_plan_digest=preview.plan_digest,
+        )
+
+        assert result.removed_entry is True
+        assert list_current_facts(conn, cfg) == []
+        parsed = files_store.read_file(files_store.memory_path(original.path))
+        assert parsed.entries == []
+
+
+def test_fact_forget_includes_review_candidate_and_candidate_owned_container(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        entries_store.create_file(
+            conn,
+            name="event-2026-08-23.md",
+            description="review source",
+            tags=["event"],
+        )
+        source_body = "User explicitly requested concise reporting."
+        entries_store.append_entry_once(
+            conn,
+            name="event-2026-08-23.md",
+            content=source_body,
+            tags=["source"],
+            entry_id="forget-source",
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+        )
+        candidate = MemoryService(conn, cfg=cfg).propose_candidate(
+            kind="preference",
+            target_path="user-forget-generated.md",
+            content="User prefers concise reports.",
+            tags=["preference"],
+            evidence=[
+                EvidenceRef(
+                    kind="memory_entry",
+                    id="forget-source",
+                    path="event-2026-08-23.md",
+                    content_hash=content_digest(source_body),
+                )
+            ],
+            subject_key="user.reporting.length",
+            assertion_kind="user_asserted",
+        )
+        candidate = MemoryService(conn, cfg=cfg).approve_candidate(
+            candidate.id,
+            expected_version=candidate.version,
+        )
+        original = next(
+            fact for fact in list_current_facts(conn, cfg) if fact.id == candidate.applied_entry_id
+        )
+        service = MemoryService(conn, cfg=cfg)
+        replacement = service.propose_candidate(
+            kind="preference",
+            operation="supersede",
+            target_path=original.path,
+            target_entry_id=original.id,
+            content="User prefers very concise reports.",
+            tags=["preference", "very-concise"],
+            evidence=[
+                EvidenceRef(
+                    kind="memory_entry",
+                    id="forget-source",
+                    path="event-2026-08-23.md",
+                    content_hash=content_digest(source_body),
+                )
+            ],
+            subject_key="user.reporting.length",
+            assertion_kind="user_asserted",
+        )
+        replacement = service.approve_candidate(
+            replacement.id,
+            expected_version=replacement.version,
+        )
+        current = next(
+            fact
+            for fact in list_current_facts(conn, cfg)
+            if fact.id == replacement.applied_entry_id
+        )
+
+        preview = service.preview_purge_fact(
+            path=current.path,
+            entry_id=current.id,
+            expected_revision=current.revision,
+        )
+
+        assert preview.candidate_ids == tuple(sorted((candidate.id, replacement.id)))
+        assert {entry["id"] for entry in preview.entries} == {
+            original.id,
+            current.id,
+        }
+        assert preview.files == ({"path": "user-forget-generated.md"},)
+        service.purge_fact(
+            path=current.path,
+            entry_id=current.id,
+            expected_revision=current.revision,
+            expected_plan_digest=preview.plan_digest,
+        )
+        assert candidate_store.get(conn, candidate.id) is None
+        assert candidate_store.get(conn, replacement.id) is None
+        assert not files_store.memory_path("user-forget-generated.md").exists()
+
+
+def test_fact_forget_rejects_preview_after_a_newer_correction(ac_root: Path) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        _seed_current_fact(conn)
+        original = list_current_facts(conn, cfg)[0]
+        first = correct_current_fact(
+            conn,
+            cfg,
+            path=original.path,
+            entry_id=original.id,
+            expected_revision=original.revision,
+            content="User prefers encrypted local-first tools.",
+            tags=["preference", "encrypted"],
+        )
+        service = MemoryService(conn, cfg=cfg)
+        preview = service.preview_purge_fact(
+            path=first.path,
+            entry_id=first.id,
+            expected_revision=first.revision,
+        )
+        second = correct_current_fact(
+            conn,
+            cfg,
+            path=first.path,
+            entry_id=first.id,
+            expected_revision=first.revision,
+            content="User prefers encrypted local-only tools.",
+            tags=["preference", "encrypted", "local-only"],
+        )
+
+        with pytest.raises(candidate_store.CandidateConflict, match="changed"):
+            service.purge_fact(
+                path=first.path,
+                entry_id=first.id,
+                expected_revision=first.revision,
+                expected_plan_digest=preview.plan_digest,
+            )
+
+        assert [fact.id for fact in list_current_facts(conn, cfg)] == [second.id]

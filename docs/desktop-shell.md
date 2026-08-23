@@ -34,12 +34,13 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v19** cumulatively
+The bridge protocol is versioned and allowlisted. Protocol **v20** cumulatively
 includes immutable Daily Wrap reads, side-effect-free suggestions, Prompt and
 Reply Rescue review, exact-selection receipts, reviewed résumé source/import
 flows, deterministic preview/export, supervised résumé proposal review, a
 bounded typed current-fact snapshot, explicit local current-memory export, and
-revision-bound direct correction with retained history.
+revision-bound direct correction with retained history, plus two-phase complete
+fact-lineage forget.
 Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:
@@ -53,7 +54,8 @@ only:
   revision digest and published as a provenance-linked superseding entry;
 - one candidate read/edit/approve/reject operation with optimistic version
   checking;
-- two-phase permanent forget with a version- and closure-bound plan digest;
+- two-phase permanent forget for either a review proposal or a current
+  Published Memory fact, with a version- and closure-bound plan digest;
 - exact Daily Wrap reads;
 - bounded Work Resumption cards with acknowledgement/dismissal only;
 - Prompt Rescue manual-input and global-shortcut exact-selection queue,
@@ -152,6 +154,11 @@ opens exact source lineage, exports the current view, and lets the user directly
 correct content or tags. A correction uses an optimistic revision precondition,
 creates a deterministic provenance-linked replacement, and retains the old
 value as superseded canonical history; it does not call a model or network.
+Permanent forget first resolves the selected current entry back to its oldest
+fact root, previews every downstream revision, related proposal, generated
+container, and Daily Wrap, then rechecks that exact closure before a native
+system confirmation. Deleting the whole chain prevents an older value from
+reappearing as current.
 Reducer-owned session logs are excluded. Model-generated new facts continue
 through the Review Inbox.
 

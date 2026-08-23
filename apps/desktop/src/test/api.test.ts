@@ -28,6 +28,8 @@ import {
   forgetPreview,
   jsonResumeExport,
   maliciousText,
+  memoryForgetPreview,
+  memorySummary,
   openedJsonResumeReview,
   openedResumeDocumentReview,
   provenanceTrace,
@@ -49,8 +51,41 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks revision-bound memory correction as bridge protocol v19", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(19);
+  it("tracks full-lineage Published Memory forget as bridge protocol v20", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(20);
+  });
+
+  it("previews and commits revision-bound Published Memory forget", async () => {
+    const memory = memorySummary();
+    const preview = memoryForgetPreview();
+    tauri.invoke.mockResolvedValueOnce(preview).mockResolvedValueOnce({
+      path: preview.path,
+      entry_id: preview.entry_id,
+      removed_entry: true,
+      removed_file_count: 0,
+      invalidated_wrap_ids: preview.wrap_ids,
+    });
+
+    const normalized = await desktopApi.previewForgetPublishedMemory(memory);
+    expect(normalized).toEqual(preview);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("preview_forget_published_memory", {
+      request: {
+        path: memory.path,
+        entry_id: memory.id,
+        expected_revision: memory.revision,
+      },
+    });
+
+    const result = await desktopApi.forgetPublishedMemory(normalized);
+    expect(result.removed_entry).toBe(true);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("forget_published_memory", {
+      request: {
+        path: preview.path,
+        entry_id: preview.entry_id,
+        expected_revision: preview.expected_revision,
+        plan_digest: preview.plan_digest,
+      },
+    });
   });
 
   it("corrects one published memory with a revision precondition", async () => {

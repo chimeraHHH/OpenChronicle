@@ -30,6 +30,8 @@ pub fn run() {
             commands::get_candidate,
             commands::export_published_memory,
             commands::correct_published_memory,
+            commands::preview_forget_published_memory,
+            commands::forget_published_memory,
             commands::edit_candidate,
             commands::approve_candidate,
             commands::reject_candidate,

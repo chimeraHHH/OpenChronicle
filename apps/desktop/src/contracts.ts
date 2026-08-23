@@ -11,9 +11,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 19 adds revision-bound direct correction
-// for canonical current memory while retaining the superseded entry history.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 19 as const;
+// WebView result projection. Version 20 adds two-phase full-lineage forget for
+// one revision-bound Published Memory fact.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 20 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -753,6 +753,23 @@ export interface MemoryExportResult {
 export interface ForgetPreview {
   candidate_id: string;
   expected_version: number;
+  candidate_ids: string[];
+  files: Array<{ path: string }>;
+  entries: Array<{ id: string; path: string }>;
+  wrap_ids: string[];
+  plan_digest: string;
+  counts: {
+    candidates: number;
+    memory_files: number;
+    memory_entries: number;
+    daily_wraps: number;
+  };
+}
+
+export interface MemoryForgetPreview {
+  path: string;
+  entry_id: string;
+  expected_revision: string;
   candidate_ids: string[];
   files: Array<{ path: string }>;
   entries: Array<{ id: string; path: string }>;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
-import type { DesktopApi } from "../api";
-import type { MemorySummary, SourceSubject } from "../contracts";
+import { DesktopApiError, type DesktopApi } from "../api";
+import type { MemoryForgetPreview, MemorySummary, SourceSubject } from "../contracts";
 import { displayError, formatDateTime, titleCase } from "../format";
 import { StatusBadge } from "../components/StatusBadge";
 import { UntrustedText } from "../components/UntrustedText";
@@ -44,6 +44,10 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
   const [saving, setSaving] = useState(false);
   const [editNotice, setEditNotice] = useState("");
   const [editError, setEditError] = useState("");
+  const [forgetPreview, setForgetPreview] = useState<MemoryForgetPreview | null>(null);
+  const [forgetBusy, setForgetBusy] = useState(false);
+  const [forgetNotice, setForgetNotice] = useState("");
+  const [forgetError, setForgetError] = useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visible = useMemo(
     () =>
@@ -74,6 +78,8 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
     setEditContent(selected?.content ?? "");
     setEditTags(selected?.tags.join(", ") ?? "");
     setEditError("");
+    setForgetPreview(null);
+    setForgetError("");
   }, [selected?.id, selected?.path, selected?.revision]);
 
   async function exportMemory(format: "json" | "markdown") {
@@ -119,6 +125,62 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
       setEditError(displayError(reason));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function previewForget() {
+    if (!selected) return;
+    setForgetBusy(true);
+    setForgetNotice("");
+    setForgetError("");
+    try {
+      setForgetPreview(await api.previewForgetPublishedMemory(selected));
+    } catch (reason) {
+      setForgetError(displayError(reason));
+    } finally {
+      setForgetBusy(false);
+    }
+  }
+
+  async function commitForget() {
+    if (!forgetPreview || !selected) return;
+    if (
+      forgetPreview.path !== selected.path ||
+      forgetPreview.entry_id !== selected.id ||
+      forgetPreview.expected_revision !== selected.revision
+    ) {
+      setForgetPreview(null);
+      setForgetError("The deletion preview is stale. Review the current memory again.");
+      return;
+    }
+    setForgetBusy(true);
+    setForgetNotice("");
+    setForgetError("");
+    try {
+      await api.forgetPublishedMemory(forgetPreview);
+      setForgetPreview(null);
+      try {
+        await onChanged();
+        setForgetNotice("Published memory and its complete local revision history were deleted.");
+      } catch {
+        setForgetNotice(
+          "Published memory was deleted, but the current-memory view could not be refreshed.",
+        );
+      }
+    } catch (reason) {
+      if (reason instanceof DesktopApiError && reason.code === "USER_CANCELLED") {
+        setForgetNotice("System confirmation was cancelled. Nothing was deleted.");
+      } else if (
+        reason instanceof DesktopApiError &&
+        (reason.code === "STALE_PURGE_PLAN" || reason.code === "VERSION_CONFLICT")
+      ) {
+        setForgetPreview(null);
+        setForgetError("The deletion impact changed. Nothing was deleted; review a new preview.");
+      } else {
+        setForgetError(displayError(reason));
+      }
+    } finally {
+      setForgetBusy(false);
     }
   }
 
@@ -178,6 +240,7 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
                 className="collection-list__button"
                 onClick={() => {
                   setEditNotice("");
+                  setForgetNotice("");
                   setSelectedKey(memoryKey(memory));
                 }}
                 type="button"
@@ -313,6 +376,8 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
                 onClick={() => {
                   setEditNotice("");
                   setEditError("");
+                  setForgetPreview(null);
+                  setForgetNotice("");
                   setEditContent(selected.content);
                   setEditTags(selected.tags.join(", "));
                   setEditing(true);
@@ -336,6 +401,81 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
                 View sources
               </button>
             </div>
+            <details className="danger-zone" open={forgetPreview !== null}>
+              <summary>Permanent local deletion</summary>
+              <p>
+                Forget removes this fact's complete local revision chain, related proposal records,
+                dependent Daily Wraps, and an empty candidate-created container when applicable.
+                Upstream captures and external backups are outside this purge.
+              </p>
+              {forgetPreview ? (
+                <div className="purge-preview" aria-live="polite">
+                  <h3>Deletion impact</h3>
+                  <ul>
+                    <li>{forgetPreview.counts.memory_entries} memory version(s)</li>
+                    <li>{forgetPreview.counts.candidates} related proposal record(s)</li>
+                    <li>{forgetPreview.counts.memory_files} generated memory file(s) cleaned or removed</li>
+                    <li>{forgetPreview.counts.daily_wraps} dependent Daily Wrap(s)</li>
+                  </ul>
+                  <div className="purge-targets">
+                    <h4>Memory entries</h4>
+                    <ul>
+                      {forgetPreview.entries.map((entry) => (
+                        <li key={`${entry.path}-${entry.id}`}>
+                          <UntrustedText>{entry.path}</UntrustedText> · <bdi>{entry.id}</bdi>
+                        </li>
+                      ))}
+                    </ul>
+                    {forgetPreview.candidate_ids.length > 0 ? (
+                      <>
+                        <h4>Proposal IDs</h4>
+                        <ul>
+                          {forgetPreview.candidate_ids.map((id) => <li key={id}><bdi>{id}</bdi></li>)}
+                        </ul>
+                      </>
+                    ) : null}
+                    {forgetPreview.wrap_ids.length > 0 ? (
+                      <>
+                        <h4>Daily Wrap IDs</h4>
+                        <ul>
+                          {forgetPreview.wrap_ids.map((id) => <li key={id}><bdi>{id}</bdi></li>)}
+                        </ul>
+                      </>
+                    ) : null}
+                  </div>
+                  <p>No undo is available after system confirmation.</p>
+                  <div className="button-row">
+                    <button
+                      className="button button--danger"
+                      disabled={forgetBusy}
+                      onClick={() => void commitForget()}
+                      type="button"
+                    >
+                      Continue to system confirmation
+                    </button>
+                    <button
+                      className="button button--ghost"
+                      disabled={forgetBusy}
+                      onClick={() => setForgetPreview(null)}
+                      type="button"
+                    >
+                      Cancel deletion
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  className="button button--danger-outline"
+                  disabled={forgetBusy || editing}
+                  onClick={() => void previewForget()}
+                  type="button"
+                >
+                  Review permanent forget…
+                </button>
+              )}
+            </details>
+            {forgetNotice ? <p className="success-banner" role="status">{forgetNotice}</p> : null}
+            {forgetError ? <p className="error-banner" role="alert">{forgetError}</p> : null}
             <p className="boundary-note">
               Corrections are direct user-authored local revisions. Model-generated new facts still
               go through the Review Inbox; no external application is changed.

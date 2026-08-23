@@ -195,7 +195,11 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
 - [x] Published Memory / About Me desktop slice for authorized current facts,
   local filtering, scopes, exact provenance opening, native JSON/Markdown
   export, and revision-bound direct correction that preserves superseded
-  history without a model call. Explicit entry-root forget remains open.
+  history without a model call.
+- [x] Two-phase Published Memory forget rooted at the selected current entry:
+  resolve its oldest fact version, preview the full revision/proposal/file/wrap
+  closure, revalidate a digest before native confirmation, and remove the whole
+  chain so an older value cannot reappear.
 - [x] Separate explicitly cited claim support from the full classifier input-flow
   closure while keeping both revision-bound; review UX shows the focused source
   set and privacy/purge semantics retain the complete dependency closure.

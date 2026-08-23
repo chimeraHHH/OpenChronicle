@@ -46,7 +46,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 19
+PROTOCOL_VERSION = 20
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -180,6 +180,8 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "candidate.forget_commit": _candidate_forget_commit,
         "memory.export": _memory_export,
         "memory.correct": _memory_correct,
+        "memory.forget_preview": _memory_forget_preview,
+        "memory.forget_commit": _memory_forget_commit,
         "wrap.get": _wrap_get,
         "suggestion.transition": _suggestion_transition,
         "prompt_rescue.get": _prompt_rescue_get,
@@ -1005,6 +1007,59 @@ def _memory_correct(params: dict[str, Any]) -> dict[str, Any]:
                 **memory.to_dict(),
                 "timestamp": memory.recorded_at,
             }
+        }
+
+
+def _memory_forget_preview(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"path", "entry_id", "expected_revision"})
+    path = _bounded_string(params["path"], 512, nonempty=True)
+    entry_id = _bounded_string(params["entry_id"], 128, nonempty=True)
+    expected_revision = _bounded_string(
+        params["expected_revision"],
+        64,
+        nonempty=True,
+    )
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
+        service.resume_pending_purges()
+        return service.preview_purge_fact(
+            path=path,
+            entry_id=entry_id,
+            expected_revision=expected_revision,
+        ).to_dict()
+
+
+def _memory_forget_commit(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={"path", "entry_id", "expected_revision", "plan_digest"},
+    )
+    path = _bounded_string(params["path"], 512, nonempty=True)
+    entry_id = _bounded_string(params["entry_id"], 128, nonempty=True)
+    expected_revision = _bounded_string(
+        params["expected_revision"],
+        64,
+        nonempty=True,
+    )
+    plan_digest = _bounded_string(params["plan_digest"], 64, nonempty=True)
+    if len(plan_digest) != 64 or any(char not in "0123456789abcdef" for char in plan_digest):
+        raise ValueError("invalid purge plan digest")
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
+        result = service.purge_fact(
+            path=path,
+            entry_id=entry_id,
+            expected_revision=expected_revision,
+            expected_plan_digest=plan_digest,
+        )
+        return {
+            "path": path,
+            "entry_id": entry_id,
+            "removed_entry": result.removed_entry,
+            "removed_file_count": len(result.removed_files),
+            "invalidated_wrap_ids": list(result.invalidated_wraps)[:100],
         }
 
 

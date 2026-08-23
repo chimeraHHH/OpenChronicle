@@ -6,6 +6,7 @@ import type {
   DesktopSnapshot,
   ForgetPreview,
   MemorySummary,
+  MemoryForgetPreview,
   JsonResumeExport,
   OpenedJsonResumeReview,
   OpenedResumeDocumentReview,
@@ -107,6 +108,31 @@ export function memorySummary(overrides: Partial<MemorySummary> = {}): MemorySum
     assertion_kind: "user_asserted",
     valid_from: "2026-08-08T08:00:00+08:00",
     state: "current",
+    ...overrides,
+  };
+}
+
+export function memoryForgetPreview(
+  overrides: Partial<MemoryForgetPreview> = {},
+): MemoryForgetPreview {
+  return {
+    path: "user-preferences.md",
+    entry_id: "memory-entry-1",
+    expected_revision: "e".repeat(64),
+    candidate_ids: ["mc-memory-root"],
+    files: [],
+    entries: [
+      { path: "user-preferences.md", id: "memory-root" },
+      { path: "user-preferences.md", id: "memory-entry-1" },
+    ],
+    wrap_ids: ["daily-wrap-memory"],
+    plan_digest: "a".repeat(64),
+    counts: {
+      candidates: 1,
+      memory_files: 0,
+      memory_entries: 2,
+      daily_wraps: 1,
+    },
     ...overrides,
   };
 }

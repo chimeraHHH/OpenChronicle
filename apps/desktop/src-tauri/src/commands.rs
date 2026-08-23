@@ -243,6 +243,23 @@ pub(crate) struct CorrectMemoryRequest {
     pub tags: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MemoryFactRequest {
+    pub path: String,
+    pub entry_id: String,
+    pub expected_revision: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ForgetPublishedMemoryRequest {
+    pub path: String,
+    pub entry_id: String,
+    pub expected_revision: String,
+    pub plan_digest: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MemoryExportResponse {
@@ -715,6 +732,15 @@ struct ForgetCounts {
 }
 
 #[derive(Debug, Deserialize)]
+struct PublishedMemoryForgetPreview {
+    path: String,
+    entry_id: String,
+    expected_revision: String,
+    plan_digest: String,
+    counts: ForgetCounts,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ResumePreviewResponse {
     preview: ResumePreviewPayload,
@@ -929,6 +955,31 @@ pub async fn correct_published_memory(
 ) -> Result<Value, DesktopError> {
     validate_correct_memory(&request)?;
     invoke(Operation::MemoryCorrect, &request).await
+}
+
+#[tauri::command]
+pub async fn preview_forget_published_memory(
+    request: MemoryFactRequest,
+) -> Result<Value, DesktopError> {
+    validate_memory_fact_identity(&request.path, &request.entry_id, &request.expected_revision)?;
+    invoke(Operation::MemoryForgetPreview, &request).await
+}
+
+#[tauri::command]
+pub async fn forget_published_memory(
+    app: AppHandle,
+    request: ForgetPublishedMemoryRequest,
+) -> Result<Value, DesktopError> {
+    validate_memory_fact_identity(&request.path, &request.entry_id, &request.expected_revision)?;
+    validate_digest(&request.plan_digest)?;
+    tauri::async_runtime::spawn_blocking(move || forget_published_memory_blocking(&app, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The published-memory forget worker stopped unexpectedly.",
+            )
+        })?
 }
 
 #[tauri::command]
@@ -1605,6 +1656,76 @@ fn forget_candidate_blocking(
     bridge::call_blocking(Operation::CandidateForgetCommit, commit_params)
 }
 
+fn forget_published_memory_blocking(
+    app: &AppHandle,
+    request: ForgetPublishedMemoryRequest,
+) -> Result<Value, DesktopError> {
+    let preview_params = serde_json::json!({
+        "path": request.path,
+        "entry_id": request.entry_id,
+        "expected_revision": request.expected_revision,
+    });
+    let preview_value = bridge::call_blocking(Operation::MemoryForgetPreview, preview_params)?;
+    let preview: PublishedMemoryForgetPreview =
+        serde_json::from_value(preview_value).map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_PROTOCOL_ERROR",
+                "The desktop bridge returned an invalid published-memory forget preview.",
+            )
+        })?;
+    if preview.path != request.path
+        || preview.entry_id != request.entry_id
+        || preview.expected_revision != request.expected_revision
+        || !constant_time_equal(
+            preview.plan_digest.as_bytes(),
+            request.plan_digest.as_bytes(),
+        )
+    {
+        return Err(DesktopError::new(
+            "STALE_PURGE_PLAN",
+            "The forget preview changed. Review the updated impact before continuing.",
+        ));
+    }
+    validate_digest(&preview.plan_digest).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid published-memory forget preview.",
+        )
+    })?;
+
+    let message = forget_confirmation_message(&preview.counts);
+    let mut dialog = MessageDialog::new()
+        .set_description(message)
+        .set_title("Permanently forget this published memory?")
+        .set_level(MessageLevel::Warning)
+        .set_buttons(MessageButtons::OkCancelCustom(
+            "Permanently Forget".to_owned(),
+            "Cancel".to_owned(),
+        ));
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let confirmed = match dialog.show() {
+        MessageDialogResult::Ok | MessageDialogResult::Yes => true,
+        MessageDialogResult::Custom(label) => label == "Permanently Forget",
+        _ => false,
+    };
+    if !confirmed {
+        return Err(DesktopError::new(
+            "USER_CANCELLED",
+            "Permanent forget was cancelled.",
+        ));
+    }
+
+    let commit_params = serde_json::json!({
+        "path": request.path,
+        "entry_id": request.entry_id,
+        "expected_revision": request.expected_revision,
+        "plan_digest": preview.plan_digest,
+    });
+    bridge::call_blocking(Operation::MemoryForgetCommit, commit_params)
+}
+
 fn delete_prompt_rescue_blocking(
     app: &AppHandle,
     request: PromptRescueCasRequest,
@@ -2144,28 +2265,7 @@ fn validate_memory_export_format(value: &str) -> Result<(), DesktopError> {
 }
 
 fn validate_correct_memory(request: &CorrectMemoryRequest) -> Result<(), DesktopError> {
-    validate_bounded_text(&request.path, 512, false)?;
-    if !request.path.ends_with(".md")
-        || request.path.starts_with("event-")
-        || request.path.contains('/')
-        || request.path.contains('\\')
-    {
-        return Err(DesktopError::invalid_request(
-            "The published memory path is invalid.",
-        ));
-    }
-    if request.entry_id.is_empty()
-        || request.entry_id.len() > MAX_CANDIDATE_ID_CHARS
-        || !request
-            .entry_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-    {
-        return Err(DesktopError::invalid_request(
-            "The published memory entry ID is invalid.",
-        ));
-    }
-    validate_digest(&request.expected_revision)?;
+    validate_memory_fact_identity(&request.path, &request.entry_id, &request.expected_revision)?;
     validate_multiline_text(&request.content, MAX_CONTENT_CHARS, false)?;
     if request.tags.len() > MAX_TAGS {
         return Err(DesktopError::invalid_request(
@@ -2184,6 +2284,34 @@ fn validate_correct_memory(request: &CorrectMemoryRequest) -> Result<(), Desktop
         }
     }
     Ok(())
+}
+
+fn validate_memory_fact_identity(
+    path: &str,
+    entry_id: &str,
+    expected_revision: &str,
+) -> Result<(), DesktopError> {
+    validate_bounded_text(path, 512, false)?;
+    if !path.ends_with(".md")
+        || path.starts_with("event-")
+        || path.contains('/')
+        || path.contains('\\')
+    {
+        return Err(DesktopError::invalid_request(
+            "The published memory path is invalid.",
+        ));
+    }
+    if entry_id.is_empty()
+        || entry_id.len() > MAX_CANDIDATE_ID_CHARS
+        || !entry_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(DesktopError::invalid_request(
+            "The published memory entry ID is invalid.",
+        ));
+    }
+    validate_digest(expected_revision)
 }
 
 fn validate_memory_export_payload(

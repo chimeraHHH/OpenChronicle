@@ -101,6 +101,14 @@ and valid-time metadata. A concurrent Markdown change produces a version
 conflict instead of an overwrite. This path is entirely local and does not use
 a model.
 
+The same current-fact identity supports explicit permanent forget. The preview
+walks from the selected revision to the oldest provenance-linked predecessor,
+then collects every downstream correction, reviewed proposal, candidate-owned
+container, and dependent Daily Wrap. Commit reconstructs and digest-compares
+that closure before the native confirmation and crash-resumable tombstones are
+written. All versions in the chain are removed together, so deletion cannot
+restore a superseded predecessor as current.
+
 Proposal creation revalidates every cited source while holding an immediate
 SQLite write transaction. The candidate row, conflict decision, and provenance
 edges commit atomically; a matching replay can repair a missing edge left by a

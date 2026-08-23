@@ -22,6 +22,7 @@ from ..store import entries as entries_store
 from ..store import files as files_store
 from ..store.facts import FactMetadata, make_fact_metadata, normalize_subject_key
 from .context import ContextService
+from .current_facts import list_current_facts
 
 logger = get("openchronicle.memory")
 
@@ -50,6 +51,38 @@ class PurgePreview:
         return {
             "candidate_id": self.candidate_id,
             "expected_version": self.expected_version,
+            "candidate_ids": list(self.candidate_ids),
+            "entries": [dict(entry) for entry in self.entries],
+            "files": [dict(file) for file in self.files],
+            "wrap_ids": list(self.wrap_ids),
+            "counts": {
+                "candidates": len(self.candidate_ids),
+                "memory_entries": len(self.entries),
+                "memory_files": len(self.files),
+                "daily_wraps": len(self.wrap_ids),
+            },
+            "plan_digest": self.plan_digest,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class FactPurgePreview:
+    """Exact deletion closure rooted at a current Published Memory entry."""
+
+    path: str
+    entry_id: str
+    expected_revision: str
+    candidate_ids: tuple[str, ...]
+    entries: tuple[dict[str, str], ...]
+    files: tuple[dict[str, str], ...]
+    wrap_ids: tuple[str, ...]
+    plan_digest: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "path": self.path,
+            "entry_id": self.entry_id,
+            "expected_revision": self.expected_revision,
             "candidate_ids": list(self.candidate_ids),
             "entries": [dict(entry) for entry in self.entries],
             "files": [dict(file) for file in self.files],
@@ -186,9 +219,7 @@ class MemoryService:
             raise ValueError("memory candidates require at least one evidence reference")
         if any(not ref.content_hash for ref in evidence):
             raise ValueError("memory candidate evidence must bind a source content hash")
-        claims = _unique_evidence_refs(
-            evidence if claim_evidence is None else claim_evidence
-        )
+        claims = _unique_evidence_refs(evidence if claim_evidence is None else claim_evidence)
         if not claims:
             raise ValueError("memory candidates require at least one claim-support source")
         if any(claim not in evidence for claim in claims):
@@ -362,9 +393,7 @@ class MemoryService:
                 _candidate_ref(candidate_id),
             )
             if not candidate_store.proposal_is_current(current, sources):
-                raise candidate_store.CandidateConflict(
-                    "candidate evidence binding changed"
-                )
+                raise candidate_store.CandidateConflict("candidate evidence binding changed")
             next_proposal_digest = candidate_store.proposal_digest(
                 kind=current.kind,
                 operation=current.operation,
@@ -424,9 +453,7 @@ class MemoryService:
 
     def approve_candidate(self, candidate_id: str, *, expected_version: int) -> MemoryCandidate:
         if self.cfg is None:
-            raise RuntimeError(
-                "candidate approval requires the current privacy configuration"
-            )
+            raise RuntimeError("candidate approval requires the current privacy configuration")
         with _review_operation_lock():
             return self._approve_candidate_locked(candidate_id, expected_version=expected_version)
 
@@ -467,16 +494,13 @@ class MemoryService:
                 )
                 raise candidate_store.CandidateConflict(detail) from exc
 
-        sources = provenance_store.direct_sources(
-            self.conn, _candidate_ref(candidate_id)
-        )
+        sources = provenance_store.direct_sources(self.conn, _candidate_ref(candidate_id))
         invalid_sources = [
             source for source in sources if not provenance_store.is_current(self.conn, source)
         ]
-        binding_changed = (
-            not candidate_store.projection_is_current(current)
-            or not candidate_store.proposal_is_current(current, sources)
-        )
+        binding_changed = not candidate_store.projection_is_current(
+            current
+        ) or not candidate_store.proposal_is_current(current, sources)
         assert self.cfg is not None
         policy_denied = bool(
             sources
@@ -543,12 +567,10 @@ class MemoryService:
                         not provenance_store.is_current(self.conn, source)
                         for source in publish_sources
                     )
-                    or not ContextService(
-                            self.conn, self.cfg
-                        ).evidence_allowed(
-                            _candidate_ref(candidate_id),
-                            embedded_sources=publish_sources,
-                        )
+                    or not ContextService(self.conn, self.cfg).evidence_allowed(
+                        _candidate_ref(candidate_id),
+                        embedded_sources=publish_sources,
+                    )
                 )
                 if publish_denied:
                     latest = self._required(candidate_id)
@@ -559,17 +581,13 @@ class MemoryService:
                             expected_version=latest.version,
                             from_statuses=("applying",),
                             to_status="conflict",
-                            error=(
-                                "candidate evidence changed or was excluded "
-                                "before publication"
-                            ),
+                            error=("candidate evidence changed or was excluded before publication"),
                         )
                     raise candidate_store.CandidateConflict(
                         "candidate evidence changed or was excluded before publication"
                     )
-                if (
-                    applying.operation == "supersede"
-                    and not _markdown_entry_exists(applying.target_path, entry_id)
+                if applying.operation == "supersede" and not _markdown_entry_exists(
+                    applying.target_path, entry_id
                 ):
                     try:
                         _require_current_supersede_target(applying)
@@ -684,6 +702,91 @@ class MemoryService:
             plan = self._build_purge_plan(root)
             return _purge_preview(plan)
 
+    def preview_purge_fact(
+        self,
+        *,
+        path: str,
+        entry_id: str,
+        expected_revision: str,
+    ) -> FactPurgePreview:
+        """Return the full lineage closure for one current published fact."""
+        with _review_operation_lock():
+            self._require_current_fact(path, entry_id, expected_revision)
+            return _fact_purge_preview(
+                self._build_fact_purge_plan(
+                    path=path,
+                    entry_id=entry_id,
+                    expected_revision=expected_revision,
+                )
+            )
+
+    def purge_fact(
+        self,
+        *,
+        path: str,
+        entry_id: str,
+        expected_revision: str,
+        expected_plan_digest: str,
+    ) -> PurgeResult:
+        """Crash-resumably delete a current fact's complete revision lineage."""
+        tombstone_id = _fact_tombstone_id(path=path, entry_id=entry_id)
+        with _review_operation_lock():
+            existing = next(
+                (
+                    tombstone
+                    for tombstone in candidate_store.list_tombstones(
+                        self.conn,
+                        kind="memory_fact",
+                    )
+                    if tombstone.artifact_id == tombstone_id and tombstone.path == path
+                ),
+                None,
+            )
+            if existing is not None:
+                plan = existing.plan
+                if (
+                    str(plan.get("root_entry_id") or "") != entry_id
+                    or str(plan.get("root_revision") or "") != expected_revision
+                ):
+                    raise candidate_store.CandidateConflict("published memory changed")
+                if _purge_plan_digest(plan) != expected_plan_digest:
+                    raise StalePurgePlan("purge closure changed after preview")
+                return self._execute_purge(existing)
+
+            self._require_current_fact(path, entry_id, expected_revision)
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self._require_current_fact(path, entry_id, expected_revision)
+                plan = self._build_fact_purge_plan(
+                    path=path,
+                    entry_id=entry_id,
+                    expected_revision=expected_revision,
+                )
+                if _purge_plan_digest(plan) != expected_plan_digest:
+                    raise StalePurgePlan("purge closure changed after preview")
+                candidate_store.put_tombstone(
+                    self.conn,
+                    kind="memory_fact",
+                    artifact_id=tombstone_id,
+                    path=path,
+                    plan=plan,
+                )
+                self._stage_purge_targets(plan)
+                self.conn.execute("COMMIT")
+            except BaseException:
+                if self.conn.in_transaction:
+                    self.conn.execute("ROLLBACK")
+                raise
+            tombstone = next(
+                tombstone
+                for tombstone in candidate_store.list_tombstones(
+                    self.conn,
+                    kind="memory_fact",
+                )
+                if tombstone.artifact_id == tombstone_id and tombstone.path == path
+            )
+            return self._execute_purge(tombstone)
+
     def purge_candidate(
         self,
         candidate_id: str,
@@ -751,38 +854,7 @@ class MemoryService:
                 artifact_id=candidate_id,
                 plan=plan,
             )
-            for entry in plan["entries"]:
-                assert isinstance(entry, dict)
-                candidate_store.put_tombstone(
-                    self.conn,
-                    kind="memory_entry",
-                    artifact_id=str(entry["id"]),
-                    path=str(entry["path"]),
-                )
-                # Hide plaintext from FTS immediately, before canonical file
-                # deletion. Replay remains protected by the tombstone.
-                self.conn.execute(
-                    "DELETE FROM entries WHERE id=? AND path=?",
-                    (str(entry["id"]), str(entry["path"])),
-                )
-            for file in plan["files"]:
-                assert isinstance(file, dict)
-                path = str(file["path"])
-                candidate_store.put_tombstone(
-                    self.conn,
-                    kind="memory_file",
-                    artifact_id=path,
-                )
-                # Some legacy/internal readers query ``files`` directly.  The
-                # deny-read tombstone protects canonical Markdown and rebuilds;
-                # deleting the projection in the same transaction also keeps
-                # candidate-derived descriptions/tags out of those readers if
-                # the process crashes before the physical unlink.
-                self.conn.execute("DELETE FROM files WHERE path=?", (path,))
-            for wrap_id in plan["wrap_ids"]:
-                candidate_store.put_tombstone(
-                    self.conn, kind="daily_wrap", artifact_id=str(wrap_id)
-                )
+            self._stage_purge_targets(plan)
             self.conn.execute("COMMIT")
         except BaseException:
             if self.conn.in_transaction:
@@ -795,11 +867,43 @@ class MemoryService:
         )
         return self._execute_purge(tombstone)
 
+    def _stage_purge_targets(self, plan: dict[str, object]) -> None:
+        """Commit deny-read tombstones for one already-built purge closure."""
+        for entry in plan["entries"]:
+            assert isinstance(entry, dict)
+            candidate_store.put_tombstone(
+                self.conn,
+                kind="memory_entry",
+                artifact_id=str(entry["id"]),
+                path=str(entry["path"]),
+            )
+            # Hide plaintext from FTS immediately, before canonical deletion.
+            self.conn.execute(
+                "DELETE FROM entries WHERE id=? AND path=?",
+                (str(entry["id"]), str(entry["path"])),
+            )
+        for file in plan["files"]:
+            assert isinstance(file, dict)
+            path = str(file["path"])
+            candidate_store.put_tombstone(
+                self.conn,
+                kind="memory_file",
+                artifact_id=path,
+            )
+            self.conn.execute("DELETE FROM files WHERE path=?", (path,))
+        for wrap_id in plan["wrap_ids"]:
+            candidate_store.put_tombstone(
+                self.conn,
+                kind="daily_wrap",
+                artifact_id=str(wrap_id),
+            )
+
     def resume_pending_purges(self) -> list[PurgeResult]:
         with _review_operation_lock():
             results: list[PurgeResult] = []
-            for tombstone in candidate_store.list_tombstones(self.conn, kind="memory_candidate"):
-                results.append(self._execute_purge(tombstone))
+            for tombstone in candidate_store.list_tombstones(self.conn):
+                if tombstone.kind in {"memory_candidate", "memory_fact"}:
+                    results.append(self._execute_purge(tombstone))
             return results
 
     def _execute_purge(self, tombstone: candidate_store.PurgeTombstone) -> PurgeResult:
@@ -890,7 +994,7 @@ class MemoryService:
                     )
                 candidate_store.delete_tombstone(
                     self.conn,
-                    kind="memory_candidate",
+                    kind=tombstone.kind,
                     artifact_id=tombstone.artifact_id,
                     path=tombstone.path,
                 )
@@ -902,7 +1006,7 @@ class MemoryService:
         except BaseException as exc:
             candidate_store.set_tombstone_error(
                 self.conn,
-                kind="memory_candidate",
+                kind=tombstone.kind,
                 artifact_id=tombstone.artifact_id,
                 path=tombstone.path,
                 error=f"{type(exc).__name__}: purge incomplete",
@@ -1021,6 +1125,201 @@ class MemoryService:
             "files": purge_files,
             "wrap_ids": sorted(wrap_ids),
         }
+
+    def _build_fact_purge_plan(
+        self,
+        *,
+        path: str,
+        entry_id: str,
+        expected_revision: str,
+    ) -> dict[str, object]:
+        """Build a downstream closure from the oldest entry in a fact chain."""
+        entry_lookup: dict[tuple[str, str], files_store.ParsedEntry] = {}
+        markdown_dependents: dict[tuple[str, str, str], list[EvidenceRef]] = {}
+        for memory_path in files_store.list_memory_files():
+            if candidate_store.is_tombstoned(
+                self.conn,
+                kind="memory_file",
+                artifact_id=memory_path.name,
+            ):
+                continue
+            parsed = files_store.read_file(memory_path)
+            for entry in parsed.entries:
+                if not entry.provenance_valid:
+                    raise PurgeClosureUnverifiable(
+                        "cannot establish purge closure: invalid provenance frame "
+                        f"in {memory_path.name}#{entry.id}"
+                    )
+                entry_lookup[(memory_path.name, entry.id)] = entry
+                dependent = EvidenceRef(
+                    kind="memory_entry",
+                    id=entry.id,
+                    path=memory_path.name,
+                )
+                for source in entry.evidence_refs:
+                    markdown_dependents.setdefault(
+                        (source.kind, source.path, source.id),
+                        [],
+                    ).append(dependent)
+
+        selected = entry_lookup.get((path, entry_id))
+        if selected is None:
+            raise KeyError(f"published memory entry not found: {path}#{entry_id}")
+        root = selected
+        while True:
+            predecessors = [
+                candidate
+                for (candidate_path, _candidate_id), candidate in entry_lookup.items()
+                if candidate_path == path
+                and candidate.superseded_by == root.id
+                and any(
+                    source.kind == "memory_entry"
+                    and source.path == path
+                    and source.id == candidate.id
+                    and source.content_hash == content_digest(candidate.body)
+                    for source in root.evidence_refs
+                )
+            ]
+            if len(predecessors) > 1:
+                raise PurgeClosureUnverifiable(
+                    "cannot establish published memory root: multiple predecessors"
+                )
+            if not predecessors:
+                break
+            root = predecessors[0]
+
+        all_candidates: dict[str, MemoryCandidate] = {}
+        target_candidates: dict[tuple[str, str], list[MemoryCandidate]] = {}
+        for row in self.conn.execute("SELECT id FROM memory_candidates ORDER BY id").fetchall():
+            candidate = candidate_store.get(self.conn, str(row["id"]))
+            if candidate is None:
+                continue
+            all_candidates[candidate.id] = candidate
+            if candidate.operation == "supersede" and candidate.target_entry_id:
+                target_candidates.setdefault(
+                    (candidate.target_path, candidate.target_entry_id),
+                    [],
+                ).append(candidate)
+
+        candidates: dict[str, MemoryCandidate] = {}
+        entries: dict[tuple[str, str], EvidenceRef] = {}
+        wrap_ids: set[str] = set()
+        queue: list[EvidenceRef] = []
+
+        def add_entry(ref: EvidenceRef) -> None:
+            key = (ref.path, ref.id)
+            if key in entries or key not in entry_lookup:
+                return
+            entries[key] = EvidenceRef(kind="memory_entry", id=ref.id, path=ref.path)
+            queue.append(entries[key])
+
+        def add_candidate(candidate: MemoryCandidate) -> None:
+            if candidate.id in candidates:
+                return
+            candidates[candidate.id] = candidate
+            queue.append(_candidate_ref(candidate.id))
+            for (candidate_path, candidate_entry_id), entry in entry_lookup.items():
+                if candidate_entry_id in {
+                    _candidate_entry_id(candidate.id),
+                    candidate.applied_entry_id or "",
+                } or any(
+                    source.kind == "memory_candidate" and source.id == candidate.id
+                    for source in entry.evidence_refs
+                ):
+                    add_entry(
+                        EvidenceRef(
+                            kind="memory_entry",
+                            id=candidate_entry_id,
+                            path=candidate_path,
+                        )
+                    )
+
+        add_entry(EvidenceRef(kind="memory_entry", id=root.id, path=path))
+        seen: set[tuple[str, str, str]] = set()
+        while queue:
+            source = queue.pop(0)
+            source_key = (source.kind, source.path, source.id)
+            if source_key in seen:
+                continue
+            seen.add(source_key)
+            if source.kind == "memory_entry":
+                entry = entry_lookup.get((source.path, source.id))
+                if entry is not None:
+                    for embedded in entry.evidence_refs:
+                        if embedded.kind == "memory_candidate":
+                            candidate = all_candidates.get(embedded.id)
+                            if candidate is not None:
+                                add_candidate(candidate)
+                    for candidate in target_candidates.get((source.path, source.id), []):
+                        add_candidate(candidate)
+            for dependent in markdown_dependents.get(source_key, []):
+                add_entry(dependent)
+            for dependent in provenance_store.direct_dependents(self.conn, source):
+                if dependent.kind == "memory_candidate":
+                    candidate = all_candidates.get(dependent.id)
+                    if candidate is not None:
+                        add_candidate(candidate)
+                elif dependent.kind == "memory_entry":
+                    add_entry(dependent)
+                elif dependent.kind == "daily_wrap":
+                    wrap_ids.add(dependent.id)
+                elif dependent.kind in {"daily_wrap_item", "daily_wrap_revision"}:
+                    if dependent.path:
+                        wrap_ids.add(dependent.path)
+
+        planned_entry_keys = set(entries)
+        purge_files: list[dict[str, str]] = []
+        for target_path in sorted({candidate.target_path for candidate in candidates.values()}):
+            record = _candidate_owned_file_purge_record(
+                target_path,
+                candidates=candidates,
+                planned_entry_keys=planned_entry_keys,
+            )
+            if record is not None:
+                purge_files.append(record)
+
+        return {
+            "root_kind": "memory_fact",
+            "root_path": path,
+            "root_entry_id": entry_id,
+            "root_revision": expected_revision,
+            "candidate_id": "",
+            "root_version": 0,
+            "candidates": sorted(candidates),
+            "entries": [
+                {"id": ref.id, "path": ref.path}
+                for ref in sorted(entries.values(), key=lambda item: (item.path, item.id))
+            ],
+            "files": purge_files,
+            "wrap_ids": sorted(wrap_ids),
+        }
+
+    def _require_current_fact(
+        self,
+        path: str,
+        entry_id: str,
+        expected_revision: str,
+    ) -> None:
+        if self.cfg is None:
+            raise RuntimeError("published memory purge requires current config")
+        fact = next(
+            (
+                fact
+                for fact in list_current_facts(self.conn, self.cfg, limit=10_000)
+                if fact.path == path and fact.id == entry_id
+            ),
+            None,
+        )
+        if fact is None:
+            try:
+                parsed = files_store.read_file(files_store.memory_path(path))
+            except (FileNotFoundError, OSError, ValueError):
+                parsed = None
+            if parsed is not None and any(entry.id == entry_id for entry in parsed.entries):
+                raise candidate_store.CandidateConflict("published memory changed")
+            raise KeyError(f"current published memory not found: {path}#{entry_id}")
+        if fact.revision != expected_revision:
+            raise candidate_store.CandidateConflict("published memory revision changed")
 
     def _verify_purge(
         self,
@@ -1157,9 +1456,7 @@ def _current_supersede_target(
     if not target.provenance_valid:
         raise ValueError(f"entry {target_entry_id} has an invalid provenance frame")
     if target.superseded_by:
-        raise ValueError(
-            f"entry {target_entry_id} is already superseded by {target.superseded_by}"
-        )
+        raise ValueError(f"entry {target_entry_id} is already superseded by {target.superseded_by}")
     return target
 
 
@@ -1262,7 +1559,7 @@ def _decode_purge_plan(
         if isinstance(raw_candidates, list)
         else [candidate_id]
     )
-    if candidate_id not in candidates:
+    if tombstone.kind == "memory_candidate" and candidate_id not in candidates:
         candidates.append(candidate_id)
 
     entries: list[dict[str, str]] = []
@@ -1345,6 +1642,15 @@ def _purge_plan_digest(plan: dict[str, object]) -> str:
         ),
         "wrap_ids": sorted(str(value) for value in plan.get("wrap_ids", [])),
     }
+    if plan.get("root_kind") == "memory_fact":
+        canonical.update(
+            {
+                "root_kind": "memory_fact",
+                "root_path": str(plan.get("root_path") or ""),
+                "root_entry_id": str(plan.get("root_entry_id") or ""),
+                "root_revision": str(plan.get("root_revision") or ""),
+            }
+        )
     payload = json.dumps(
         canonical,
         ensure_ascii=False,
@@ -1374,6 +1680,33 @@ def _purge_preview(plan: dict[str, object]) -> PurgePreview:
         wrap_ids=tuple(wrap_ids),
         plan_digest=_purge_plan_digest(plan),
     )
+
+
+def _fact_purge_preview(plan: dict[str, object]) -> FactPurgePreview:
+    _candidate_id, candidates, entries, files, wrap_ids = _decode_purge_plan(
+        candidate_store.PurgeTombstone(
+            kind="memory_fact",
+            artifact_id="",
+            path=str(plan.get("root_path") or ""),
+            plan=plan,
+            requested_at="",
+            last_error="",
+        )
+    )
+    return FactPurgePreview(
+        path=str(plan.get("root_path") or ""),
+        entry_id=str(plan.get("root_entry_id") or ""),
+        expected_revision=str(plan.get("root_revision") or ""),
+        candidate_ids=tuple(candidates),
+        entries=tuple(entries),
+        files=tuple({"path": file["path"]} for file in files),
+        wrap_ids=tuple(wrap_ids),
+        plan_digest=_purge_plan_digest(plan),
+    )
+
+
+def _fact_tombstone_id(*, path: str, entry_id: str) -> str:
+    return hashlib.sha256(f"published-memory-fact-v1\0{path}\0{entry_id}".encode()).hexdigest()
 
 
 def _normalize_target_path(path: str) -> str:

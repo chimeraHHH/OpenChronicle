@@ -15,6 +15,7 @@ import type {
   JsonResumeSelection,
   JsonResumeUpstreamSchema,
   MemorySummary,
+  MemoryForgetPreview,
   MemoryExportFormat,
   MemoryExportResult,
   OpenedJsonResumeReview,
@@ -2991,6 +2992,55 @@ export function normalizeForgetPreview(value: unknown): ForgetPreview {
   return preview;
 }
 
+export function normalizeMemoryForgetPreview(value: unknown): MemoryForgetPreview {
+  const raw = objectValue(value, "published memory forget preview");
+  const counts = objectValue(raw.counts, "published memory forget counts");
+  const files = arrayValue(raw.files, "published memory forget files").map((value) => {
+    const file = objectValue(value, "published memory forget file");
+    return { path: stringValue(file.path, "published memory forget file path") };
+  });
+  const entries = arrayValue(raw.entries, "published memory forget entries").map((value) => {
+    const entry = objectValue(value, "published memory forget entry");
+    return {
+      id: stringValue(entry.id, "published memory forget entry id"),
+      path: stringValue(entry.path, "published memory forget entry path"),
+    };
+  });
+  const planDigest = stringValue(raw.plan_digest, "published memory forget digest");
+  const expectedRevision = stringValue(
+    raw.expected_revision,
+    "published memory forget revision",
+  );
+  if (!/^[0-9a-f]{64}$/.test(planDigest) || !/^[0-9a-f]{64}$/.test(expectedRevision)) {
+    return protocolError("published memory forget digest");
+  }
+  const preview: MemoryForgetPreview = {
+    path: stringValue(raw.path, "published memory forget path"),
+    entry_id: stringValue(raw.entry_id, "published memory forget entry id"),
+    expected_revision: expectedRevision,
+    candidate_ids: stringArray(raw.candidate_ids, "published memory forget candidates"),
+    files,
+    entries,
+    wrap_ids: stringArray(raw.wrap_ids, "published memory forget wraps"),
+    plan_digest: planDigest,
+    counts: {
+      candidates: numberValue(counts.candidates, "published memory forget candidate count"),
+      memory_files: numberValue(counts.memory_files, "published memory forget file count"),
+      memory_entries: numberValue(counts.memory_entries, "published memory forget entry count"),
+      daily_wraps: numberValue(counts.daily_wraps, "published memory forget wrap count"),
+    },
+  };
+  if (
+    preview.counts.candidates !== preview.candidate_ids.length ||
+    preview.counts.memory_files !== preview.files.length ||
+    preview.counts.memory_entries !== preview.entries.length ||
+    preview.counts.daily_wraps !== preview.wrap_ids.length
+  ) {
+    return protocolError("published memory forget counts");
+  }
+  return preview;
+}
+
 export function normalizeForgetResult(value: unknown): {
   candidate_id: string;
   removed_entry: boolean;
@@ -3180,6 +3230,60 @@ export const desktopApi = {
         const memory = memorySummary(raw.memory);
         if (memory.path !== input.path) return protocolError("memory correction path identity");
         return memory;
+      },
+    ),
+  previewForgetPublishedMemory: (memory: MemorySummary) =>
+    request(
+      "preview_forget_published_memory",
+      {
+        path: memory.path,
+        entry_id: memory.id,
+        expected_revision: memory.revision,
+      },
+      (value) => {
+        const preview = normalizeMemoryForgetPreview(value);
+        if (
+          preview.path !== memory.path ||
+          preview.entry_id !== memory.id ||
+          preview.expected_revision !== memory.revision
+        ) {
+          return protocolError("published memory forget identity");
+        }
+        return preview;
+      },
+    ),
+  forgetPublishedMemory: (preview: MemoryForgetPreview) =>
+    request(
+      "forget_published_memory",
+      {
+        path: preview.path,
+        entry_id: preview.entry_id,
+        expected_revision: preview.expected_revision,
+        plan_digest: preview.plan_digest,
+      },
+      (value) => {
+        const raw = objectValue(value, "published memory forget result");
+        const path = stringValue(raw.path, "published memory forget result path");
+        const entryId = stringValue(raw.entry_id, "published memory forget result entry");
+        if (path !== preview.path || entryId !== preview.entry_id) {
+          return protocolError("published memory forget result identity");
+        }
+        return {
+          path,
+          entry_id: entryId,
+          removed_entry: booleanValue(
+            raw.removed_entry,
+            "published memory forget removed entry",
+          ),
+          removed_file_count: numberValue(
+            raw.removed_file_count,
+            "published memory forget removed files",
+          ),
+          invalidated_wrap_ids: stringArray(
+            raw.invalidated_wrap_ids,
+            "published memory forget invalidated wraps",
+          ),
+        };
       },
     ),
   editCandidate: (input: {

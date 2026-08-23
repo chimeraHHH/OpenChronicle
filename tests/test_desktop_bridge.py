@@ -593,12 +593,8 @@ def test_memory_export_bridge_returns_local_save_payload(ac_root: Path) -> None:
     assert exported["action_capability"] == "save_local_copy"
     assert exported["fact_count"] == 1
     assert exported["byte_count"] == len(exported["content"].encode())
-    assert hashlib.sha256(exported["content"].encode()).hexdigest() == exported[
-        "content_digest"
-    ]
-    assert json.loads(exported["content"])["facts"][0]["subject_key"] == (
-        "user.export.fact"
-    )
+    assert hashlib.sha256(exported["content"].encode()).hexdigest() == exported["content_digest"]
+    assert json.loads(exported["content"])["facts"][0]["subject_key"] == ("user.export.fact")
 
 
 def test_memory_correction_bridge_preserves_history_and_is_revision_bound(
@@ -625,9 +621,7 @@ def test_memory_correction_bridge_preserves_history_and_is_revision_bound(
         )
         revision = entries_store.memory_fact_revision(
             path="user-correction.md",
-            entry=files_store.read_file(
-                files_store.memory_path("user-correction.md")
-            ).entries[0],
+            entry=files_store.read_file(files_store.memory_path("user-correction.md")).entries[0],
         )
 
     response, exit_code = _request(
@@ -660,6 +654,74 @@ def test_memory_correction_bridge_preserves_history_and_is_revision_bound(
     )
     assert stale_code == 2
     assert stale["error"]["code"] == "VERSION_CONFLICT"
+
+
+def test_memory_forget_bridge_previews_and_commits_complete_fact_lineage(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        entries_store.create_file(
+            conn,
+            name="user-forget-bridge.md",
+            description="direct forget",
+            tags=["user"],
+        )
+        entries_store.append_entry_once(
+            conn,
+            name="user-forget-bridge.md",
+            content="Forget this published fact.",
+            tags=["forget"],
+            entry_id="bridge-forget-root",
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+            fact_metadata=make_fact_metadata(
+                subject_key="user.forget.bridge",
+                assertion_kind="user_asserted",
+            ),
+        )
+        entry = files_store.read_file(files_store.memory_path("user-forget-bridge.md")).entries[0]
+        revision = entries_store.memory_fact_revision(
+            path="user-forget-bridge.md",
+            entry=entry,
+        )
+
+    preview_response, preview_code = _request(
+        "memory.forget_preview",
+        {
+            "path": "user-forget-bridge.md",
+            "entry_id": "bridge-forget-root",
+            "expected_revision": revision,
+        },
+    )
+
+    assert preview_code == 0
+    preview = preview_response["result"]
+    assert preview["counts"] == {
+        "candidates": 0,
+        "memory_entries": 1,
+        "memory_files": 0,
+        "daily_wraps": 0,
+    }
+    assert len(preview["plan_digest"]) == 64
+
+    committed, commit_code = _request(
+        "memory.forget_commit",
+        {
+            "path": "user-forget-bridge.md",
+            "entry_id": "bridge-forget-root",
+            "expected_revision": revision,
+            "plan_digest": preview["plan_digest"],
+        },
+    )
+    assert commit_code == 0
+    assert committed["result"] == {
+        "path": "user-forget-bridge.md",
+        "entry_id": "bridge-forget-root",
+        "removed_entry": True,
+        "removed_file_count": 0,
+        "invalidated_wrap_ids": [],
+    }
+    with fts.cursor() as conn:
+        assert files_store.read_file(files_store.memory_path("user-forget-bridge.md")).entries == []
 
 
 def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(

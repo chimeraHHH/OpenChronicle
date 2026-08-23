@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-forget-published-memory"
+description = "Enables the forget_published_memory command without any pre-configured scope."
+commands.allow = ["forget_published_memory"]
+
+[[permission]]
+identifier = "deny-forget-published-memory"
+description = "Denies the forget_published_memory command without any pre-configured scope."
+commands.deny = ["forget_published_memory"]
