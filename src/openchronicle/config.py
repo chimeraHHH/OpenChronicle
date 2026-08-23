@@ -221,6 +221,14 @@ class ResumeRescueConfig:
 class SearchConfig:
     default_top_k: int = 5
     filter_superseded_by_default: bool = True
+    semantic_enabled: bool = False
+    embedding_backend: str = "fastembed"
+    embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    embedding_cache_dir: str = ""
+    semantic_include_events: bool = False
+    semantic_min_similarity: float = 0.30
+    hybrid_candidate_k: int = 20
+    hybrid_rrf_k: int = 60
 
 
 @dataclass
@@ -480,6 +488,14 @@ rewrite_max_output_chars = 200000 # closed proposal-set JSON bound
 [search]
 default_top_k = 5
 filter_superseded_by_default = true
+semantic_enabled = false              # install the semantic-memory extra before enabling
+embedding_backend = "fastembed"       # local inference; no memory text leaves the machine
+embedding_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+embedding_cache_dir = ""              # empty uses FastEmbed's local cache
+semantic_include_events = false        # keep high-volume daily event logs out of this projection
+semantic_min_similarity = 0.30         # below this, vector-only candidates abstain
+hybrid_candidate_k = 20
+hybrid_rrf_k = 60
 
 [mcp]
 auto_start = true                 # run an always-on MCP server inside the daemon

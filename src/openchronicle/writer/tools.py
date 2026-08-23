@@ -17,7 +17,7 @@ from ..services.memory import MemoryService
 from ..services.memory_projection import canonical_entry_hits_locked
 from ..store import entries as entries_mod
 from ..store import files as files_mod
-from ..store import fts
+from ..store import fts, semantic
 
 logger = get("openchronicle.writer")
 
@@ -147,6 +147,53 @@ def tool_search_memory(
         return {"error": "top_k must be an integer in [1, 20]"}
     with files_mod.store_write_lock():
         results: list[dict[str, Any]] = []
+        retrieval_mode = "hybrid_rrf" if cfg.search.semantic_enabled else "bm25"
+        if cfg.search.semantic_enabled:
+            try:
+                hits = semantic.configured_hybrid_search(
+                    conn,
+                    search_config=cfg.search,
+                    query=query,
+                    path_patterns=[
+                        f"{prefix}*"
+                        for prefix in files_mod.VALID_PREFIXES
+                        if prefix != "event-"
+                    ],
+                    top_k=_POLICY_SEARCH_RECALL_LIMIT,
+                    include_superseded=include_superseded,
+                )
+            except semantic.SemanticIndexUnavailable as exc:
+                return {
+                    "query": query,
+                    "retrieval_mode": "hybrid_unavailable",
+                    "error": str(exc),
+                    "results": [],
+                }
+            for hit in canonical_entry_hits_locked(conn, cfg, hits)[:top_k]:
+                ref = EvidenceRef(
+                    kind="memory_entry",
+                    id=hit.id,
+                    path=hit.path,
+                    timestamp=hit.timestamp,
+                    content_hash=content_digest(hit.content),
+                )
+                if state is not None:
+                    state.expose_evidence(ref)
+                results.append(
+                    {
+                        "id": hit.id,
+                        "path": hit.path,
+                        "timestamp": hit.timestamp,
+                        "content": hit.content,
+                        "rank": hit.rank,
+                        "evidence_token": ref.key,
+                    }
+                )
+            return {
+                "query": query,
+                "retrieval_mode": retrieval_mode,
+                "results": results,
+            }
         offset = 0
         while len(results) < top_k:
             hits = fts.search(
@@ -191,6 +238,7 @@ def tool_search_memory(
                 break
     return {
         "query": query,
+        "retrieval_mode": retrieval_mode,
         "results": results,
     }
 

@@ -356,6 +356,13 @@ def status() -> None:
             f"{memory['active_files']} active files, {memory['dormant_files']} dormant, "
             f"{memory['entries']} policy-visible entries",
         )
+        if cfg.search.semantic_enabled:
+            table.add_row(
+                "Memory Search",
+                f"hybrid_rrf — {cfg.search.embedding_backend}:{cfg.search.embedding_model}",
+            )
+        else:
+            table.add_row("Memory Search", "bm25")
         table.add_row("Timeline", f"{counts['timeline_blocks']} policy-visible blocks")
         review = counts["candidates"]
         review_total = sum(int(value) for value in review.values())

@@ -124,11 +124,13 @@ recall.
 
 ## Longitudinal and action benchmarks
 
-The native pre-hybrid retrieval baseline is versioned under
+The native retrieval benchmark is versioned under
 `benchmarks/vida-memory-v1`. It runs production Markdown writes, supersede, and
-FTS5 search in an isolated root and freezes exact, semantic, cross-language,
-update, history, entity-isolation, provenance-identity, and abstention cases.
-Its failing semantic cases are an engineering baseline, not a product claim.
+the selected production retrieval mode in an isolated root. It freezes exact,
+semantic, cross-language, update, history, entity-isolation,
+provenance-identity, and abstention cases. The BM25-only run remains the fixed
+engineering baseline; the hybrid run must improve it using the identical
+fixtures and gates, not an LLM judge.
 
 After local fixtures pass, adapt the Memory Plane to
 [LongMemEval-V2](https://github.com/xiaowu0162/LongMemEval-V2). Report answer

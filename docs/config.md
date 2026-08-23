@@ -491,9 +491,39 @@ model-derived content.
 [search]
 default_top_k = 5
 filter_superseded_by_default = true
+semantic_enabled = false
+embedding_backend = "fastembed"
+embedding_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+embedding_cache_dir = ""
+semantic_include_events = false
+semantic_min_similarity = 0.30
+hybrid_candidate_k = 20
+hybrid_rrf_k = 60
 ```
 
-Both apply to MCP `search` calls. Superseded entries are still searchable with `include_superseded=true`.
+The default remains FTS5 BM25. To enable local multilingual semantic retrieval:
+
+```bash
+uv sync --extra semantic-memory
+```
+
+Then set `semantic_enabled = true` and restart OpenChronicle. The default
+FastEmbed model is about 220 MB and runs locally; memory text is not sent to an
+embedding API. Its vectors live in the same SQLite database as a rebuildable
+projection of canonical Markdown. Changed entries are re-embedded lazily on
+search, unchanged vectors are reused, and removed entries are pruned.
+
+Enabled search fuses BM25 and cosine ranks with reciprocal-rank fusion (RRF).
+Exact lexical hits anchor vector expansion to the same Markdown file, reducing
+cross-project or cross-person contamination; when BM25 has no hit, global
+semantic recall remains available. `semantic_min_similarity` provides the
+vector-only abstention threshold. High-volume `event-*` files stay out of the
+semantic projection unless `semantic_include_events = true`.
+
+If semantic search is enabled but FastEmbed or its model cannot load, MCP and
+classifier search return `retrieval_mode = "hybrid_unavailable"` plus an error.
+They do not silently switch to BM25. Superseded entries remain searchable only
+with `include_superseded=true`.
 
 ## `[mcp]`
 

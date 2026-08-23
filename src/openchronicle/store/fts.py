@@ -162,6 +162,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     from ..suggestions import store as suggestion_store
     from ..timeline import store as timeline_store
     from ..writer import classifier_jobs
+    from . import semantic
 
     timeline_store.ensure_schema(conn)
     session_store.ensure_schema(conn)
@@ -173,6 +174,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     daily_wrap_store.ensure_schema(conn)
     suggestion_store.ensure_schema(conn)
     classifier_jobs.ensure_schema(conn)
+    semantic.ensure_schema(conn)
     _secure_db_files(db_path)
     return conn
 

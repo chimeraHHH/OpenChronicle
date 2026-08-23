@@ -18,7 +18,7 @@ from typing import Any
 from .. import paths
 from ..store import entries as entries_mod
 from ..store import files as files_mod
-from ..store import fts
+from ..store import fts, semantic
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,6 +106,8 @@ def run_evaluation(
     metric_contract_path: Path,
     repository_root: Path,
     latency_repeats: int = 5,
+    embedder: semantic.Embedder | None = None,
+    semantic_min_similarity: float = 0.30,
 ) -> dict[str, Any]:
     if type(latency_repeats) is not int or not 1 <= latency_repeats <= 50:
         raise ValueError("latency_repeats must be in [1, 50]")
@@ -119,12 +121,28 @@ def run_evaluation(
 
     with _isolated_root(), fts.cursor() as conn:
         ids = _seed_entries(conn, dataset.entries)
+        index_sync: dict[str, Any] | None = None
+        if embedder is not None:
+            index_started = time.perf_counter_ns()
+            sync = semantic.sync_index(conn, embedder=embedder)
+            index_sync = {
+                "model_id": sync.model_id,
+                "indexed": sync.indexed,
+                "reused": sync.reused,
+                "removed": sync.removed,
+                "latency_ms": round(
+                    (time.perf_counter_ns() - index_started) / 1_000_000,
+                    6,
+                ),
+            }
         outcomes = [
             _evaluate_case(
                 conn,
                 case,
                 ids=ids,
                 repeats=latency_repeats,
+                embedder=embedder,
+                semantic_min_similarity=semantic_min_similarity,
             )
             for case in dataset.cases
         ]
@@ -154,7 +172,10 @@ def run_evaluation(
         },
         "latency_repeats": latency_repeats,
         "variant": {
-            "id": "production_fts5_bm25",
+            "id": "production_hybrid_rrf" if embedder is not None else "production_fts5_bm25",
+            "embedding_model": embedder.model_id if embedder is not None else None,
+            "semantic_min_similarity": semantic_min_similarity if embedder is not None else None,
+            "index_sync": index_sync,
             "metrics": metrics,
             "gate_verdict": _gate_verdict(metrics, contract["gates"]),
             "cases": outcomes,
@@ -204,16 +225,29 @@ def _evaluate_case(
     *,
     ids: dict[str, tuple[str, str]],
     repeats: int,
+    embedder: semantic.Embedder | None,
+    semantic_min_similarity: float,
 ) -> dict[str, Any]:
     runs: list[tuple[list[Any], float]] = []
     for _ in range(repeats):
         started = time.perf_counter_ns()
-        hits = fts.search(
-            conn,
-            query=case.query,
-            top_k=case.top_k,
-            include_superseded=case.include_superseded,
-        )
+        if embedder is None:
+            hits = fts.search(
+                conn,
+                query=case.query,
+                top_k=case.top_k,
+                include_superseded=case.include_superseded,
+            )
+        else:
+            hits = semantic.hybrid_search(
+                conn,
+                query=case.query,
+                embedder=embedder,
+                top_k=case.top_k,
+                candidate_k=max(20, case.top_k),
+                include_superseded=case.include_superseded,
+                min_similarity=semantic_min_similarity,
+            )
         latency_ms = (time.perf_counter_ns() - started) / 1_000_000
         runs.append((hits, latency_ms))
     signatures = [tuple((hit.id, hit.path) for hit in hits) for hits, _ in runs]
@@ -456,6 +490,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", type=Path)
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--latency-repeats", type=int, default=5)
+    parser.add_argument("--hybrid", action="store_true")
+    parser.add_argument(
+        "--embedding-model",
+        default="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    )
+    parser.add_argument("--embedding-cache-dir", default="")
+    parser.add_argument("--semantic-min-similarity", type=float, default=0.30)
     args = parser.parse_args(argv)
     repository_root = Path(__file__).resolve().parents[3]
     baseline_root = repository_root / "benchmarks" / "vida-memory-v1"
@@ -465,11 +506,18 @@ def main(argv: list[str] | None = None) -> int:
         dataset_path = repository_root / dataset_path
     if not contract_path.is_absolute():
         contract_path = repository_root / contract_path
+    embedder = (
+        semantic.FastEmbedder(args.embedding_model, cache_dir=args.embedding_cache_dir)
+        if args.hybrid
+        else None
+    )
     report = run_evaluation(
         dataset_path=dataset_path,
         metric_contract_path=contract_path,
         repository_root=repository_root,
         latency_repeats=args.latency_repeats,
+        embedder=embedder,
+        semantic_min_similarity=args.semantic_min_similarity,
     )
     encoded = write_report(report, args.output)
     if not args.quiet:

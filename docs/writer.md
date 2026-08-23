@@ -85,7 +85,7 @@ Both paths then run a bounded, review-first tool-call loop over `writer/tools.py
 | Tool | Purpose |
 |---|---|
 | `read_memory(path, tail_n?)` | Fetch a durable (non-`event-*`) memory file's frontmatter + last 1–20 entries (default 10). |
-| `search_memory(query, top_k?, include_superseded?)` | BM25 search over durable, current, non-tombstoned memory only; `top_k` is 1–20. |
+| `search_memory(query, top_k?, include_superseded?)` | Local semantic + BM25 RRF when enabled, otherwise BM25, over durable current non-tombstoned memory; `top_k` is 1–20. Enabled backend failures are explicit. |
 | `propose_memory_candidate(kind, path, content, tags, evidence_tokens, confidence?, conflict_key?)` | Persist a pending candidate whose evidence tokens must have been authorized by the current prompt or an actual read/search result. It does not mutate Markdown. |
 | `commit(summary)` | End a model-driven round. Called exactly once; the proven-empty terminal path does not call the provider or this tool. |
 

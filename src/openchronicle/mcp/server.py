@@ -32,7 +32,7 @@ from ..provenance.models import EvidenceRef, timeline_block_digest
 from ..services.context import ContextService
 from ..services.memory_projection import CanonicalEntryHit, canonical_entry_hits_locked
 from ..store import files as files_mod
-from ..store import fts
+from ..store import fts, semantic
 from ..timeline import store as timeline_store
 from . import captures as captures_mod
 
@@ -217,23 +217,46 @@ def _search(
     include_superseded: bool = False,
 ) -> dict[str, Any]:
     requested_limit = min(max(top_k, 0), _POLICY_RECALL_LIMIT)
-    hits = _page_current_visible_hits(
-        conn,
-        cfg,
-        limit=requested_limit,
-        fetch_page=lambda page_size, offset: fts.search(
+    retrieval_mode = "hybrid_rrf" if cfg.search.semantic_enabled else "bm25"
+    if cfg.search.semantic_enabled:
+        try:
+            recall_hits = semantic.configured_hybrid_search(
+                conn,
+                search_config=cfg.search,
+                query=query,
+                path_patterns=paths,
+                since=since,
+                until=until,
+                top_k=_POLICY_RECALL_LIMIT,
+                include_superseded=include_superseded,
+            )
+        except semantic.SemanticIndexUnavailable as exc:
+            return {
+                "query": query,
+                "retrieval_mode": "hybrid_unavailable",
+                "error": str(exc),
+                "results": [],
+            }
+        hits = _current_visible_hits(conn, cfg, recall_hits)[:requested_limit]
+    else:
+        hits = _page_current_visible_hits(
             conn,
-            query=query,
-            path_patterns=paths,
-            since=since,
-            until=until,
-            top_k=page_size,
-            offset=offset,
-            include_superseded=include_superseded,
-        ),
-    )
+            cfg,
+            limit=requested_limit,
+            fetch_page=lambda page_size, offset: fts.search(
+                conn,
+                query=query,
+                path_patterns=paths,
+                since=since,
+                until=until,
+                top_k=page_size,
+                offset=offset,
+                include_superseded=include_superseded,
+            ),
+        )
     return {
         "query": query,
+        "retrieval_mode": retrieval_mode,
         "results": [
             {
                 "id": h.id,
@@ -816,7 +839,8 @@ def build_server(cfg: Config | None = None):
     ) -> str:
         """**ALWAYS CALL** before saying "I don't know" about something with a keyword in it.
 
-        BM25 full-text search across currently authorized entries in COMPRESSED memory files.
+        Hybrid local semantic + BM25 search across currently authorized entries in
+        COMPRESSED memory files when semantic memory is enabled; otherwise BM25.
         This searches the distilled Markdown layer — what the user has decided
         is durable knowledge (preferences, decisions, schedules, project state,
         people, summaries). It does NOT search raw screen content; for keywords

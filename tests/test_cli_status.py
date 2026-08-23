@@ -29,6 +29,8 @@ def test_status_renders_mocked_pings(ac_root: Path, monkeypatch: pytest.MonkeyPa
     assert "Model (classifier)" in out
     assert "Model (daily_wrap)" in out
     assert "Model (compact)" in out
+    assert "Memory Search" in out
+    assert "bm25" in out
     # All five stages share the default model, so they all show the mocked tick.
     assert out.count("mocked") >= 5
 

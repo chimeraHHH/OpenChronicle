@@ -113,16 +113,22 @@ Superseded entries include their replacement ID, so agents can follow the chain.
 
 ### `search(query, paths?, since?, until?, top_k=5, include_superseded=false)`
 
-*"BM25 full-text search across currently authorized memory entries. Best tool when you have specific keywords — a person's name, project / company name, topic, date, file path, or a phrase the user might have used."* Example invocations surfaced in the docstring: `search("interview")`, `search("Alice Q3 roadmap")`, `search("deadline Friday")`.
+*"Hybrid local semantic + BM25 search across currently authorized memory
+entries when semantic memory is enabled; otherwise BM25."* Example invocations
+surfaced in the docstring: `search("interview")`,
+`search("Alice Q3 roadmap")`, `search("deadline Friday")`.
 
-BM25 full-text search across `entries_fts`.
+The response declares `retrieval_mode`: `bm25`, `hybrid_rrf`, or
+`hybrid_unavailable`. The hybrid mode uses a rebuildable local FastEmbed
+projection plus `entries_fts`; an enabled backend failure is explicit rather
+than silently falling back.
 
 - `paths` — list of GLOB patterns (`project-*.md`, `user-*.md`). Omit to search everywhere.
 - `since` / `until` — ISO timestamp bounds.
 - `top_k` — default from `search.default_top_k`.
 - `include_superseded` — surface old versions too. Default `false` per `search.filter_superseded_by_default`.
 
-Result entries carry `rank` (BM25 score, lower = better match).
+Result entries carry `rank` (BM25 score or negative RRF score; lower is better).
 
 ### `recent_activity(since?, limit=20, prefix_filter?)`
 
