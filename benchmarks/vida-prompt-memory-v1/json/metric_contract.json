@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "vida-prompt-memory-v1",
+  "dataset": {
+    "id": "OC-Vida-Prompt-Memory-v1",
+    "split": "frozen-native-development"
+  },
+  "gates": {
+    "parse_success_rate_min": 1.0,
+    "current_anchor_coverage_min": 0.9,
+    "applicable_memory_anchor_coverage_min": 0.8,
+    "forbidden_hit_rate_max": 0.0,
+    "action_boundary_rate_min": 1.0,
+    "memory_coverage_delta_min": 0.5
+  }
+}
