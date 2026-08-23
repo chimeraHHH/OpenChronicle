@@ -28,7 +28,8 @@ For each session that ended, `reduce_session`:
 3. Renders the blocks into `prompts/session_reduce.md` and calls the `reducer` LLM stage with `json_mode=True`.
 4. Parses `{summary: str, sub_tasks: [str]}`. Each sub_task must look like `[HH:MM-HH:MM, <app>] <action>, involving <...>`.
 5. Appends one entry to `event-YYYY-MM-DD.md` (the date of `session.start`). Entry header: `**Session <sid>** (HH:MM–HH:MM)` for terminal reduces, or `**Session <sid> [flush]** (HH:MM–HH:MM)` for flush passes. Every new reducer entry carries `sid:<sid>` and an `oc-window-end:<encoded instant>` coverage tag; flush entries additionally carry `flush`.
-6. A flush advances `flush_end`. A terminal reduce instead sets `status=reduced` and records `classifier_terminal_pending`, the exact deterministic terminal entry ID, and its authoritative event-daily path. If durable timeline coverage proves that the terminal range contains zero blocks, it records a typed `classifier_terminal_noop` proof instead of inventing an entry. Crash replay reuses an existing Markdown entry, repairs its projection, and preserves the same terminal intent.
+6. Projects each canonical sub-task into the rebuildable `activity_events` / `activity_events_fts` tables and materializes previous/next links within the local day. Markdown remains authoritative; `rebuild-index` recreates this projection.
+7. A flush advances `flush_end`. A terminal reduce instead sets `status=reduced` and records `classifier_terminal_pending`, the exact deterministic terminal entry ID, and its authoritative event-daily path. If durable timeline coverage proves that the terminal range contains zero blocks, it records a typed `classifier_terminal_noop` proof instead of inventing an entry. Crash replay reuses an existing Markdown entry, repairs its projections, and preserves the same terminal intent.
 
 The reducer snapshots a content-generation fence before reading evidence. Entry
 repair/publication and the matching session bookmark or terminal intent are
@@ -37,12 +38,12 @@ current. Explicit timeline/memory cleanup bumps the generation first, so an
 in-flight pre-clean model result cannot republish deleted evidence or advance a
 post-clean bookmark.
 
-### Retry + heuristic fallback
+### Retry without local-summary fallback
 
 If the LLM call fails or returns unparseable JSON:
 
 - **Retry queue.** Backoff schedule `5 / 15 / 30 / 60 / 120` minutes (verbatim from Einsia). The session row moves to `status=failed` with `next_retry_at` set; the daily safety-net picks it up. (Flush failures don't schedule retries — the next flush covers a bigger window, and the terminal reduce is authoritative.)
-- **Exhausted retries.** A heuristic entry is written (one sub_task per distinct app, tagged `heuristic`), and the row is marked `reduced`. A session is never silently lost.
+- **Repeated failures.** The row remains failed and continues retrying at the final backoff interval. Provider failure or an empty/unparseable response never materializes a locally guessed summary or event.
 
 ### Event-daily file ownership
 
@@ -86,7 +87,7 @@ Both paths then run a bounded, review-first tool-call loop over `writer/tools.py
 |---|---|
 | `read_memory(path, tail_n?)` | Fetch a durable (non-`event-*`) memory file's frontmatter + last 1–20 entries (default 10). |
 | `search_memory(query, top_k?, include_superseded?)` | Local semantic + BM25 RRF when enabled, otherwise BM25, over durable current non-tombstoned memory; `top_k` is 1–20. Enabled backend failures are explicit. |
-| `search_activity_evidence(query, top_k?)` | Bounded BM25 recall over current, authorized, non-heuristic `event-*` session entries. It returns session IDs and evidence tokens for cross-session pattern confirmation; event entries remain outside the durable semantic index. |
+| `search_activity_evidence(query, top_k?, adjacent?)` | Bounded BM25 recall over event-level reducer sub-tasks. Each match includes 0–3 authorized previous/next events (default one), session IDs, exact ranges/apps, and source-entry evidence tokens for cross-session pattern confirmation. Event entries remain outside the durable semantic index. |
 | `propose_memory_candidate(kind, operation?, path, target_entry_id?, content, tags, evidence_tokens, subject_key, assertion_kind, valid_from?, valid_to?, confidence?, conflict_key?)` | Persist an append or supersede candidate whose evidence tokens must have been authorized by the current prompt or an actual read/search result. `subject_key` is the global fact slot; `assertion_kind` is user-asserted, observed, or inferred. Supersede preserves the slot and requires the exact reviewed target plus separate replacement evidence. It does not mutate Markdown. |
 | `commit(summary)` | End a model-driven round. Called exactly once; the proven-empty terminal path does not call the provider or this tool. |
 

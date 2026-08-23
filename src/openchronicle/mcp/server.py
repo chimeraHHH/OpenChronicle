@@ -6,7 +6,7 @@ depending on `[mcp] transport`. Exposes read-only memory, evidence, wrap, and
 capture tools:
 
   Compressed memory (Markdown layer):
-    list_memories, read_memory, search, recent_activity
+    list_memories, read_memory, search, search_activity, recent_activity
   Raw captures (S1 buffer):
     current_context, search_captures, read_recent_capture
   Reference:
@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ..activity import store as activity_store
 from ..capture import store_lock as capture_store
 from ..config import Config
 from ..config import load as load_config
@@ -30,6 +31,10 @@ from ..privacy.egress import privacy_egress_fenced
 from ..prompts import load as load_prompt
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, timeline_block_digest
+from ..services.activity_projection import (
+    CanonicalActivityEvent,
+    canonical_activity_events_locked,
+)
 from ..services.context import ContextService
 from ..services.memory_projection import CanonicalEntryHit, canonical_entry_hits_locked
 from ..store import files as files_mod
@@ -339,6 +344,94 @@ def _recent_activity(
             for r in rows
         ],
     }
+
+
+@privacy_egress_fenced
+def _search_activity(
+    conn,
+    *,
+    cfg: Config,
+    query: str,
+    since: str | None = None,
+    until: str | None = None,
+    top_k: int = 5,
+    adjacent: int = 1,
+) -> dict[str, Any]:
+    """Search event-level activity and expand bounded temporal neighbors."""
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 0 <= top_k <= 20:
+        return {"error": "top_k must be an integer in [0, 20]", "results": []}
+    if isinstance(adjacent, bool) or not isinstance(adjacent, int) or not 0 <= adjacent <= 3:
+        return {"error": "adjacent must be an integer in [0, 3]", "results": []}
+    results: list[dict[str, Any]] = []
+    offset = 0
+    with files_mod.store_write_lock():
+        while len(results) < top_k:
+            hits = activity_store.search(
+                conn,
+                query=query,
+                since=since,
+                until=until,
+                top_k=_POLICY_RECALL_LIMIT,
+                offset=offset,
+            )
+            if not hits:
+                break
+            offset += len(hits)
+            for hit in canonical_activity_events_locked(conn, cfg, hits):
+                neighbor_rows = activity_store.neighbors(conn, hit.id, radius=adjacent)
+                visible_neighbors = {
+                    event.id: event
+                    for event in canonical_activity_events_locked(
+                        conn,
+                        cfg,
+                        [event for _relation, _distance, event in neighbor_rows],
+                    )
+                }
+                results.append(
+                    {
+                        **_public_activity_payload(hit),
+                        "neighbors": [
+                            {
+                                "relation": relation,
+                                "distance": distance,
+                                **_public_activity_payload(visible_neighbors[event.id]),
+                            }
+                            for relation, distance, event in neighbor_rows
+                            if event.id in visible_neighbors
+                        ],
+                    }
+                )
+                if len(results) >= top_k:
+                    break
+            if len(hits) < _POLICY_RECALL_LIMIT:
+                break
+    return {
+        "query": query,
+        "retrieval_mode": "event_bm25_with_adjacency",
+        "adjacency_radius": adjacent,
+        "results": results,
+    }
+
+
+def _public_activity_payload(event: CanonicalActivityEvent) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "event_id": event.id,
+        "start_time": event.start_time,
+        "end_time": event.end_time,
+        "app_name": event.app_name,
+        "content": event.content,
+        "summary": event.summary,
+        "session_id": event.session_id,
+        "source": {
+            "kind": "memory_entry",
+            "id": event.source_entry_id,
+            "path": event.source_path,
+            "timestamp": event.source_entry_timestamp,
+        },
+    }
+    if event.rank is not None:
+        payload["rank"] = event.rank
+    return payload
 
 
 def _get_schema() -> dict[str, Any]:
@@ -723,6 +816,7 @@ Use it to recover context, not to invent certainty.
 - `list_memories()` — index of currently authorized non-empty memory files with one-line descriptions. Cheap first hop when you need to know what exists.
 - `read_memory(path, since?, until?, tags?, tail_n?)` — full or filtered contents of one Markdown memory file.
 - `search(query, paths?, since?, until?, top_k?)` — BM25 over compressed memory. Use for project names, decisions, preferences, people, and other already-distilled facts.
+- `search_activity(query, since?, until?, top_k?, adjacent?)` — event-level activity search with bounded previous/next context. Use for what happened around a matching task or task switch.
 - `recent_activity(since?, limit?, prefix_filter?)` — newest-first feed across memory files. Use for "what has the user been doing?" and recency-based disambiguation.
 
 ### Raw captures (S1 layer)
@@ -964,6 +1058,36 @@ def build_server(cfg: Config | None = None):
                     since=since,
                     limit=limit,
                     prefix_filter=prefix_filter,
+                ),
+                ensure_ascii=False,
+            )
+
+    @server.tool()
+    def search_activity(
+        query: str,
+        since: str | None = None,
+        until: str | None = None,
+        top_k: int = 5,
+        adjacent: int = 1,
+    ) -> str:
+        """Search reducer-produced activity at event rather than session granularity.
+
+        Use when the user asks what happened around a task, app, topic, or task
+        switch. A match is one reducer sub-task, not the whole session entry.
+        ``adjacent`` returns up to three previous/next event hops from the same
+        local day so a relevant activity is not presented as an isolated chunk.
+        Every result links back to its canonical event-daily memory entry.
+        """
+        with fts.cursor() as conn:
+            return json.dumps(
+                _search_activity(
+                    conn,
+                    cfg=cfg,
+                    query=query,
+                    since=since,
+                    until=until,
+                    top_k=top_k,
+                    adjacent=adjacent,
                 ),
                 ensure_ascii=False,
             )

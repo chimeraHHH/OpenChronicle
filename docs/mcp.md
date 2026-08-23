@@ -23,7 +23,7 @@ stdio is still available for clients that only speak it (`openchronicle mcp`).
 
 The instructions teach the client there are **two layers** of memory and that compressed memory rarely tells the whole story:
 
-- **Compressed memory** (Markdown files) — the durable, distilled layer. Tools: `list_memories`, `read_memory`, `search`, `recent_activity`.
+- **Compressed memory** (Markdown files) — the durable, distilled layer. Tools: `list_memories`, `read_memory`, `search`, `search_activity`, `recent_activity`.
 - **Capture buffer** (the S1 layer) — normal captures contain AX-derived screen
   text; active URL policy stores only approved address-control/identity metadata.
   Tools: `current_context`, `search_captures`, `read_recent_capture`.
@@ -32,6 +32,7 @@ The canonical flows spelled out for the client are:
 
 - "What am I doing right now?" → `current_context()` (one call, returns recent S1 + timeline blocks).
 - Keyword that might be on screen but not yet in memory → `search_captures` (raw layer) before falling back to `search` (compressed).
+- "What happened around this task?" → `search_activity` so a reducer sub-task is returned together with bounded previous/next events instead of an isolated whole-session hit.
 - Compressed → raw drill-down: every event-daily sub_task ends with an inline breadcrumb like `— raw: read_recent_capture(at="14:30", app_name="Cursor")` — call it verbatim.
 
 ## Tools
@@ -139,6 +140,47 @@ Result entries carry `rank` (BM25 score or negative RRF score; lower is better).
 *"Newest-first cross-file feed of recent memory entries. Best tool for open-ended 'what's new / what has the user been up to' questions."*
 
 Cross-file timeline of recent entries, newest first. `prefix_filter` keeps only entries whose path starts with any of `["project-", "user-", …]`.
+
+### `search_activity(query, since?, until?, top_k=5, adjacent=1)`
+
+Searches reducer-owned activity at the sub-task/event level. The reducer's
+canonical `[HH:MM-HH:MM, App]` bullets are projected into SQLite FTS rows;
+legacy event entries without structured bullets remain one coarse event. The
+Markdown entry is still authoritative. Before returning a row, MCP re-parses
+the source entry, checks its body hash, provenance, current policy, and purge
+state, then verifies every projected event field.
+
+`adjacent` accepts 0–3 hops and defaults to one. Neighbors are ordered as
+previous context followed by next context, and may sit just outside the
+explicit `since`/`until` match window because they are returned as context, not
+additional matches. Each event contains its exact time range, app, session,
+source entry, and BM25 rank. This tool is for episodic questions such as “what
+happened around the release failure?”; `search` remains the tool for durable
+facts and current preferences.
+
+```json
+{
+  "query": "release failure",
+  "retrieval_mode": "event_bm25_with_adjacency",
+  "adjacency_radius": 1,
+  "results": [{
+    "event_id": "activity-…",
+    "start_time": "2026-08-23T10:10+08:00",
+    "end_time": "2026-08-23T10:15+08:00",
+    "app_name": "Terminal",
+    "content": "inspected the release failure",
+    "source": {
+      "kind": "memory_entry",
+      "id": "session-…",
+      "path": "event-2026-08-23.md"
+    },
+    "neighbors": [
+      {"relation": "previous", "distance": 1, "app_name": "Cursor"},
+      {"relation": "next", "distance": 1, "app_name": "Google Chrome"}
+    ]
+  }]
+}
+```
 
 ### `get_daily_wrap(local_date, timezone, scope="default")`
 

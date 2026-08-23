@@ -1734,6 +1734,8 @@ def _clean_memory() -> tuple[int, int]:
         # File-level deny markers close direct-read and rebuild paths if an
         # unlink fails after projections have been cleared.
         with fts.cursor() as conn:
+            from .activity import store as activity_store
+
             entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
             conn.execute("BEGIN IMMEDIATE")
             try:
@@ -1742,6 +1744,7 @@ def _clean_memory() -> tuple[int, int]:
                     candidate_store.put_tombstone(conn, kind="memory_file", artifact_id=path.name)
                 conn.execute("DELETE FROM entries")
                 conn.execute("DELETE FROM files")
+                activity_store.clear(conn)
                 conn.execute("DELETE FROM memory_candidates")
                 conn.execute("DELETE FROM classifier_jobs")
                 conn.execute(

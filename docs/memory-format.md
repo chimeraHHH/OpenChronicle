@@ -6,7 +6,10 @@ Memory files are plain Markdown under `~/.openchronicle/memory/`. Three rules:
 2. Each file is YAML frontmatter + a list of append-only entries.
 3. When information changes, the *old entry* is struck through in place; new content is appended.
 
-A human can read, grep, diff, and hand-edit these files. The SQLite FTS index (`index.db`) is a derived mirror — rebuild it from the files any time with `openchronicle rebuild-index`.
+A human can read, grep, diff, and hand-edit these files. SQLite `index.db` is a
+derived mirror: ordinary entry FTS plus an event-level projection of reducer
+sub-tasks and their previous/next links. Rebuild all of it from Markdown at any
+time with `openchronicle rebuild-index`.
 
 ## File prefixes
 
@@ -61,6 +64,12 @@ User joined Acme Corp as a senior engineer.
 | `needs_compact` | flag_compact / writer | Signals the compact stage on the next round. |
 
 Hand-editing frontmatter is allowed; run `rebuild-index` afterward to sync the FTS tables.
+
+For `event-YYYY-MM-DD.md`, every canonical bullet beginning with
+`- [HH:MM-HH:MM, App]` becomes one rebuildable activity event. Its stable ID is
+derived from the source path, entry ID, and bullet ordinal; it is not written
+back into Markdown. Legacy event bodies without this shape stay searchable as
+one coarse event. The source entry remains the only authority.
 
 ### Entry heading
 

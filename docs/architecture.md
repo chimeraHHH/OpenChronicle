@@ -140,8 +140,8 @@ sequenceDiagram
     JOB->>CLF: claim exact-entry delivery
 
     Note over MCP,DB: any time
-    MCP->>DB: FTS search / list / read
-    DB-->>MCP: results
+    MCP->>DB: memory FTS or event-level FTS + adjacency / list / read
+    DB-->>MCP: canonically revalidated results
 ```
 
 ## Tasks in the daemon
@@ -465,7 +465,7 @@ apps/desktop/
   fences both AX and optional non-URL-policy CoreGraphics collection. A failed
   required stage produces no JSON, FTS row, session hook, or downstream model
   input.
-- **Session as the natural unit.** A "session" — a bounded chunk of focused work — is what humans remember. Cutting on idle / app-switch / timeout produces event-daily entries with accurate time ranges, which solves the v1 problem of long sessions being under-reported after the first append.
+- **Session for reduction, event for retrieval.** A bounded session keeps model input and durable delivery manageable. Inside it, the reducer already splits app/subject changes into time-ranged sub-tasks; those bullets become rebuildable event-level search rows with same-day previous/next links. The Markdown session entry remains the authority.
 - **Durable classifier delivery.** The 30-minute cadence requests only coverage proven by reducer `flush_end`; terminal reduction persists an exact-entry intent. A lease-fenced SQLite outbox binds deterministic jobs and evidence snapshots, receipts the explicit tool commit before atomically advancing `classified_end`, and recovers lost callbacks or post-commit crashes. Provider calls may repeat before a receipt, but stale workers cannot publish and stable proposal identities make local replay safe.
 - **Daily event files.** `event-YYYY-MM-DD.md` sorts alphabetically by day. Weekly files from v1 are left untouched — they stay searchable via FTS.
 - **One process, many tasks.** Avoids IPC overhead and keeps `index.db` single-writer in practice. SQLite WAL gives the MCP reader what it needs.

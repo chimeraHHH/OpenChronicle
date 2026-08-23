@@ -152,6 +152,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     conn.execute("PRAGMA wal_autocheckpoint=1000")
     conn.executescript(SCHEMA)
     _migrate_capture_schema(conn)
+    from ..activity import store as activity_store
     from ..daily_wrap import store as daily_wrap_store
     from ..memory_candidates import store as candidate_store
     from ..prompt_rescue import store as prompt_rescue_store
@@ -165,6 +166,7 @@ def connect(db_path: Path | None = None) -> sqlite3.Connection:
     from ..writer import classifier_jobs
     from . import semantic
 
+    activity_store.ensure_schema(conn)
     timeline_store.ensure_schema(conn)
     session_store.ensure_schema(conn)
     provenance_store.ensure_schema(conn)

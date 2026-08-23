@@ -177,6 +177,13 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
     run passed all eight cases and six operations with 1.00 operation F1,
     binding, value, provenance, and no-operation accuracy. This is not an
     official MemOps score.
+12. **Event-level episodic projection.** Reducer sub-tasks are now projected
+    into independently searchable activity events with stable identities,
+    exact ranges/apps, canonical source-entry hashes, and same-day
+    previous/next links. MCP and classifier evidence search expand a bounded
+    neighbor radius only after revalidating every row against Markdown,
+    provenance, policy, and purge state. This reuses the reducer's existing
+    app/subject segmentation and adds no model call.
 
 ## Remaining optimization sequence
 
@@ -220,15 +227,15 @@ do not build a universal ontology.
 
 ### P1: event segmentation and adjacency retrieval
 
-Keep minute timeline blocks, but materialize larger episodic segments using
-existing session boundaries plus app/window/topic discontinuities. A hit should
-optionally expand to neighboring segments. Do not introduce a new model call on
-every minute; segmentation should be deterministic where possible and model-
-assisted only for ambiguous topic shifts.
+The first implementation uses the reducer's existing grouped sub-tasks as
+event boundaries. It materializes one rebuildable row per
+`[HH:MM-HH:MM, App]` bullet and expands 0–3 same-day neighbors. This avoids a
+new model call and is already available through MCP `search_activity` and the
+classifier's `search_activity_evidence`.
 
-The materialized segment must remain a rebuildable projection over exact
-timeline/session evidence. Evaluate minute, session, and event/topic retrieval
-units on the same cases before changing the default.
+Next, evaluate minute, whole-session, and event units on the same cases. Add
+model-assisted topic boundaries only if the deterministic sub-task unit shows a
+measured failure; do not change the default on intuition.
 
 ### P1: procedural memory from adopted outcomes
 
@@ -283,12 +290,12 @@ corruption, hallucination, latency, and cost.
 
 ## Immediate decision
 
-The native lifecycle harness and inert model-decision adapter are implemented.
-The next evaluation slice is a fixed official MemOps tier; the next product
-slice is desktop `as_of` inspection. Neither requires a graph store or another
-autonomous memory agent. Together with the retrieval baselines, these results
-will tell us whether failures begin at extraction or retrieval before event
-segmentation or reranking is promoted on intuition.
+The native lifecycle harness, inert model-decision adapter, fixed official
+MemOps adjacent smoke, and deterministic event/adjacency projection are now
+implemented. The next evaluation slices are repeated MemOps stability, a fixed
+LongMemEval-V2 tier, and a same-case minute/session/event comparison; the next
+product slices are desktop `as_of` inspection and reviewed procedural memory.
+None requires a graph store or another autonomous memory agent.
 
 ## Success criteria
 

@@ -7,11 +7,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..activity import store as activity_store
 from ..config import Config
 from ..logger import get
 from ..memory_candidates import store as candidate_store
 from ..privacy.egress import privacy_egress_fenced
 from ..provenance.models import EvidenceRef, content_digest
+from ..services.activity_projection import (
+    CanonicalActivityEvent,
+    canonical_activity_events_locked,
+)
 from ..services.context import ContextService
 from ..services.memory import MemoryService
 from ..services.memory_projection import canonical_entry_hits_locked
@@ -250,6 +255,7 @@ def tool_search_activity_evidence(
     *,
     query: str,
     top_k: int = 10,
+    adjacent: int = 1,
     state: CommitState | None = None,
 ) -> dict[str, Any]:
     """Recall reducer-owned session evidence without treating it as memory.
@@ -260,52 +266,45 @@ def tool_search_activity_evidence(
     """
     if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 20:
         return {"error": "top_k must be an integer in [1, 20]"}
+    if isinstance(adjacent, bool) or not isinstance(adjacent, int) or not 0 <= adjacent <= 3:
+        return {"error": "adjacent must be an integer in [0, 3]"}
     with files_mod.store_write_lock():
         results: list[dict[str, Any]] = []
         offset = 0
         while len(results) < top_k:
-            hits = fts.search(
+            hits = activity_store.search(
                 conn,
                 query=query,
-                path_patterns=["event-*"],
                 top_k=_POLICY_SEARCH_RECALL_LIMIT,
                 offset=offset,
-                include_superseded=False,
             )
             if not hits:
                 break
             offset += len(hits)
-            for hit in canonical_entry_hits_locked(conn, cfg, hits):
-                if "heuristic" in hit.tags:
-                    continue
-                ref = EvidenceRef(
-                    kind="memory_entry",
-                    id=hit.id,
-                    path=hit.path,
-                    timestamp=hit.timestamp,
-                    content_hash=content_digest(hit.content),
-                )
-                if state is not None:
-                    state.expose_evidence(ref)
-                session_id = next(
-                    (
-                        tag.removeprefix("sid:")
-                        for tag in hit.tags
-                        if tag.startswith("sid:")
-                    ),
-                    "",
-                )
-                results.append(
+            for hit in canonical_activity_events_locked(conn, cfg, hits):
+                item = _classifier_activity_payload(hit, state=state)
+                neighbor_rows = activity_store.neighbors(conn, hit.id, radius=adjacent)
+                visible_neighbors = {
+                    event.id: event
+                    for event in canonical_activity_events_locked(
+                        conn,
+                        cfg,
+                        [event for _relation, _distance, event in neighbor_rows],
+                    )
+                }
+                item["neighbors"] = [
                     {
-                        "id": hit.id,
-                        "path": hit.path,
-                        "timestamp": hit.timestamp,
-                        "session_id": session_id,
-                        "content": hit.content,
-                        "rank": hit.rank,
-                        "evidence_token": ref.key,
+                        "relation": relation,
+                        "distance": distance,
+                        **_classifier_activity_payload(
+                            visible_neighbors[event.id],
+                            state=state,
+                        ),
                     }
-                )
+                    for relation, distance, event in neighbor_rows
+                    if event.id in visible_neighbors
+                ]
+                results.append(item)
                 if len(results) >= top_k:
                     break
             if len(hits) < _POLICY_SEARCH_RECALL_LIMIT:
@@ -313,8 +312,43 @@ def tool_search_activity_evidence(
     return {
         "query": query,
         "retrieval_mode": "bm25_activity_evidence",
+        "adjacency_radius": adjacent,
         "results": results,
     }
+
+
+def _classifier_activity_payload(
+    event: CanonicalActivityEvent,
+    *,
+    state: CommitState | None,
+) -> dict[str, Any]:
+    ref = EvidenceRef(
+        kind="memory_entry",
+        id=event.source_entry_id,
+        path=event.source_path,
+        timestamp=event.source_entry_timestamp,
+        content_hash=event.source_content_hash,
+    )
+    if state is not None:
+        state.expose_evidence(ref)
+    payload: dict[str, Any] = {
+        # Preserve the former entry-level identifiers for classifier prompt
+        # compatibility while exposing the finer event identity explicitly.
+        "id": event.source_entry_id,
+        "event_id": event.id,
+        "path": event.source_path,
+        "timestamp": event.source_entry_timestamp,
+        "session_id": event.session_id,
+        "start_time": event.start_time,
+        "end_time": event.end_time,
+        "app_name": event.app_name,
+        "content": event.content,
+        "summary": event.summary,
+        "evidence_token": ref.key,
+    }
+    if event.rank is not None:
+        payload["rank"] = event.rank
+    return payload
 
 
 def tool_propose_memory_candidate(
@@ -676,9 +710,9 @@ CLASSIFIER_TOOL_SCHEMAS: list[dict[str, Any]] = [
         "function": {
             "name": "search_activity_evidence",
             "description": (
-                "Search reducer-owned historical session evidence to verify a "
-                "behavior across independent sessions. Results are evidence, not "
-                "already accepted durable facts."
+                "Search reducer-owned historical activity events to verify a "
+                "behavior across independent sessions. Each match includes bounded "
+                "previous/next context. Results are evidence, not accepted facts."
             ),
             "parameters": {
                 "type": "object",
@@ -689,6 +723,13 @@ CLASSIFIER_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "minimum": 1,
                         "maximum": 20,
                         "default": 10,
+                    },
+                    "adjacent": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 3,
+                        "default": 1,
+                        "description": "Previous/next event hops returned around each match.",
                     },
                 },
                 "required": ["query"],
@@ -807,6 +848,7 @@ def dispatch_classifier(
             cfg,
             query=args["query"],
             top_k=args.get("top_k", 10),
+            adjacent=args.get("adjacent", 1),
             state=state,
         )
     if name == "propose_memory_candidate":

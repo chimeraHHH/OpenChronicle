@@ -230,8 +230,10 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   selected current fact and kept out of the default current-only snapshot.
 - [ ] `as_of` desktop query UX; the explicit MCP historical query is already
   implemented.
-- [ ] Rebuildable event/topic segmentation plus adjacent-event retrieval,
-  gated by a same-case comparison against minute and session retrieval units.
+- [x] Rebuildable reducer-subtask event projection plus bounded same-day
+  adjacent-event retrieval for both MCP and classifier evidence search.
+- [ ] Same-case comparison of event retrieval against minute and whole-session
+  units before adding model-driven topic-boundary inference.
 - [ ] Reviewed procedural memory derived only from repeated/adopted text
   workflows, templates, or checklists. It remains generation context and never
   executes computer actions.

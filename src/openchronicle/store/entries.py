@@ -304,6 +304,7 @@ def _append_entry(
                         needs_compact=1 if post.metadata.get("needs_compact") else 0,
                     ),
                 )
+                _replace_activity_entry(conn, path=path, entry=existing)
                 return entry_id, False
 
         current = post.content.rstrip()
@@ -369,6 +370,7 @@ def _append_entry(
                 needs_compact=1 if post.metadata.get("needs_compact") else 0,
             ),
         )
+        _replace_activity_entry(conn, path=path, entry=indexed_entry)
     return entry_id, True
 
 
@@ -479,6 +481,11 @@ def delete_entry(conn: sqlite3.Connection, *, name: str, entry_id: str) -> bool:
                             superseded=entry_index_superseded(entry),
                         )
                 _upsert_file_projection(conn, path=path, post=post)
+        _replace_activity_path(
+            conn,
+            path=path,
+            entries=files_mod._parse_entries(post.content) if post is not None else [],
+        )
     return removed
 
 
@@ -906,6 +913,7 @@ def _supersede_entry_locked(
                 needs_compact=1 if post.metadata.get("needs_compact") else 0,
             ),
         )
+        _replace_activity_path(conn, path=path, entries=updated_entries)
     return new_id
 
 
@@ -915,8 +923,11 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
     with files_mod.review_operation_lock(), files_mod.store_write_lock():
         conn.execute("BEGIN")
         try:
+            from ..activity import store as activity_store
+
             conn.execute("DELETE FROM entries")
             conn.execute("DELETE FROM files")
+            activity_store.clear(conn)
             conn.execute("DELETE FROM provenance_edges WHERE subject_kind='memory_entry'")
             file_count = 0
             entry_count = 0
@@ -990,6 +1001,7 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
                         subject=EvidenceRef(kind="memory_entry", id=e.id, path=path.name),
                         sources=e.evidence_refs,
                     )
+                    _replace_activity_entry(conn, path=path, entry=e)
                     rebuilt_hashes[(path.name, e.id)] = content_digest(e.body)
                     entry_count += 1
                     progressed = True
@@ -1008,6 +1020,36 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
                 conn.execute("ROLLBACK")
             raise
         return file_count, entry_count
+
+
+def _replace_activity_entry(
+    conn: sqlite3.Connection,
+    *,
+    path: Path,
+    entry: files_mod.ParsedEntry,
+) -> None:
+    if not path.name.startswith("event-"):
+        return
+    from ..activity import store as activity_store
+
+    activity_store.replace_source_entry(
+        conn,
+        source_path=path.name,
+        entry=entry,
+    )
+
+
+def _replace_activity_path(
+    conn: sqlite3.Connection,
+    *,
+    path: Path,
+    entries: list[files_mod.ParsedEntry],
+) -> None:
+    if not path.name.startswith("event-"):
+        return
+    from ..activity import store as activity_store
+
+    activity_store.replace_path(conn, source_path=path.name, entries=entries)
 
 
 def _require_live_dependency_sources(conn: sqlite3.Connection, sources: list[EvidenceRef]) -> None:
