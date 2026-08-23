@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub(crate) const MAX_REQUEST_BYTES: usize = 12 * 1024 * 1024;
-const PROTOCOL_VERSION: u8 = 22;
+const PROTOCOL_VERSION: u8 = 23;
 // The largest allowlisted response is wrap.get: the Python bridge bounds five
 // categories to 100 items each and each item to 20 bounded references. Even if
 // every bounded character needs JSON's six-byte control-character escape, the
@@ -57,6 +57,7 @@ pub(crate) enum Operation {
     CandidateForgetPreview,
     CandidateForgetCommit,
     MemoryExport,
+    MemoryHistory,
     MemoryCorrect,
     MemoryForgetPreview,
     MemoryForgetCommit,
@@ -116,6 +117,7 @@ impl Operation {
             Self::CandidateForgetPreview => "candidate.forget_preview",
             Self::CandidateForgetCommit => "candidate.forget_commit",
             Self::MemoryExport => "memory.export",
+            Self::MemoryHistory => "memory.history",
             Self::MemoryCorrect => "memory.correct",
             Self::MemoryForgetPreview => "memory.forget_preview",
             Self::MemoryForgetCommit => "memory.forget_commit",
@@ -594,6 +596,7 @@ mod tests {
             "candidate.forget_commit"
         );
         assert_eq!(Operation::MemoryExport.as_str(), "memory.export");
+        assert_eq!(Operation::MemoryHistory.as_str(), "memory.history");
         assert_eq!(Operation::MemoryCorrect.as_str(), "memory.correct");
         assert_eq!(
             Operation::MemoryForgetPreview.as_str(),
@@ -740,21 +743,21 @@ mod tests {
 
     #[test]
     fn response_must_be_one_strict_versioned_line() {
-        let response = parse_response(b"{\"version\":22,\"ok\":true,\"result\":{}}\n")
+        let response = parse_response(b"{\"version\":23,\"ok\":true,\"result\":{}}\n")
             .expect("valid response");
         assert!(response.ok);
 
         assert!(
-            parse_response(b"{\"version\":22,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
+            parse_response(b"{\"version\":23,\"ok\":true,\"result\":{}}\n{\"extra\":true}\n")
                 .is_err()
         );
         assert!(parse_response(b"{\"version\":2,\"ok\":true,\"result\":{}}\n").is_err());
         assert!(
-            parse_response(b"{\"version\":22,\"ok\":true,\"result\":{},\"unknown\":true}\n")
+            parse_response(b"{\"version\":23,\"ok\":true,\"result\":{},\"unknown\":true}\n")
                 .is_err()
         );
         assert!(parse_response(
-            b"{\"version\":22,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
+            b"{\"version\":23,\"ok\":false,\"result\":{},\"error\":{\"code\":\"BUSY\",\"message\":\"busy\"}}\n"
         )
         .is_err());
     }
@@ -762,7 +765,7 @@ mod tests {
     #[test]
     fn backend_error_is_mapped_by_code_only() {
         let response = parse_response(
-            b"{\"version\":22,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
+            b"{\"version\":23,\"ok\":false,\"error\":{\"code\":\"BUSY\",\"message\":\"secret detail\"}}\n",
         )
         .expect("valid error envelope");
         let error = DesktopError::from_bridge(&response.error.expect("error").code);

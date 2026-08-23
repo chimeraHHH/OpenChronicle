@@ -5,6 +5,7 @@ import type {
   DailyWrapSummary,
   DesktopSnapshot,
   ForgetPreview,
+  MemoryHistory,
   MemorySummary,
   MemoryForgetPreview,
   JsonResumeExport,
@@ -109,6 +110,52 @@ export function memorySummary(overrides: Partial<MemorySummary> = {}): MemorySum
     assertion_kind: "user_asserted",
     valid_from: "2026-08-08T08:00:00+08:00",
     state: "current",
+    ...overrides,
+  };
+}
+
+export function memoryHistory(overrides: Partial<MemoryHistory> = {}): MemoryHistory {
+  const current = memorySummary();
+  return {
+    path: current.path,
+    entry_id: current.id,
+    expected_revision: current.revision,
+    versions: [
+      {
+        id: current.id,
+        path: current.path,
+        content: current.content,
+        tags: current.tags,
+        origin: current.origin,
+        recorded_at: current.timestamp,
+        source_count: current.source_count,
+        revision: current.revision,
+        subject_key: current.subject_key ?? "",
+        assertion_kind: current.assertion_kind ?? "user_asserted",
+        valid_from: current.valid_from ?? "",
+        valid_to: "",
+        state: "current",
+        superseded_by: "",
+        superseded_at: "",
+      },
+      {
+        id: "memory-entry-0",
+        path: current.path,
+        content: "User prefers local-first tools.",
+        tags: ["preference", "local-first"],
+        origin: "derived-v1",
+        recorded_at: "2026-08-01T08:10:00+08:00",
+        source_count: 1,
+        revision: "d".repeat(64),
+        subject_key: current.subject_key ?? "",
+        assertion_kind: "user_asserted",
+        valid_from: "2026-08-01T08:00:00+08:00",
+        valid_to: "",
+        state: "superseded",
+        superseded_by: current.id,
+        superseded_at: current.timestamp,
+      },
+    ],
     ...overrides,
   };
 }

@@ -974,6 +974,14 @@ pub async fn correct_published_memory(
 }
 
 #[tauri::command]
+pub async fn get_published_memory_history(
+    request: MemoryFactRequest,
+) -> Result<Value, DesktopError> {
+    validate_memory_fact_identity(&request.path, &request.entry_id, &request.expected_revision)?;
+    invoke(Operation::MemoryHistory, &request).await
+}
+
+#[tauri::command]
 pub async fn preview_forget_published_memory(
     request: MemoryFactRequest,
 ) -> Result<Value, DesktopError> {

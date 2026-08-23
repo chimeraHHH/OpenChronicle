@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
 
 from ..config import Config
@@ -21,6 +22,141 @@ _REVISION_RE = re.compile(r"[0-9a-f]{64}")
 
 class PublishedMemoryConflict(RuntimeError):
     """The canonical fact changed after the user opened the edit form."""
+
+
+@dataclass(frozen=True, slots=True)
+class PublishedMemoryVersion:
+    id: str
+    path: str
+    content: str
+    tags: tuple[str, ...]
+    origin: str
+    recorded_at: str
+    source_count: int
+    subject_key: str
+    assertion_kind: str
+    valid_from: str
+    valid_to: str
+    revision: str
+    state: str
+    superseded_by: str
+    superseded_at: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "path": self.path,
+            "content": self.content,
+            "tags": list(self.tags),
+            "origin": self.origin,
+            "recorded_at": self.recorded_at,
+            "source_count": self.source_count,
+            "subject_key": self.subject_key,
+            "assertion_kind": self.assertion_kind,
+            "valid_from": self.valid_from,
+            "valid_to": self.valid_to,
+            "revision": self.revision,
+            "state": self.state,
+            "superseded_by": self.superseded_by,
+            "superseded_at": self.superseded_at,
+        }
+
+
+def list_revision_history(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    path: str,
+    entry_id: str,
+    expected_revision: str,
+    limit: int = 100,
+) -> list[PublishedMemoryVersion]:
+    """Return one current fact's immutable revision lineage, newest first."""
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("published memory history limit must be in [1, 100]")
+    clean_path = _normalize_path(path)
+    clean_entry_id = entry_id.strip()
+    if not re.fullmatch(r"[a-zA-Z0-9-]+", clean_entry_id):
+        raise ValueError("invalid published memory entry id")
+    clean_revision = expected_revision.strip().lower()
+    if not _REVISION_RE.fullmatch(clean_revision):
+        raise ValueError("invalid published memory revision")
+    selected = next(
+        (
+            fact
+            for fact in list_current_facts(conn, cfg, limit=10_000)
+            if fact.path == clean_path and fact.id == clean_entry_id
+        ),
+        None,
+    )
+    if selected is None:
+        raise PublishedMemoryConflict("published memory entry is no longer current")
+    if selected.revision != clean_revision:
+        raise PublishedMemoryConflict("published memory entry revision changed")
+
+    parsed = files_store.read_file(files_store.memory_path(clean_path))
+    if parsed.status != "active":
+        raise ValueError("published memory file is not active")
+    by_id = {entry.id: entry for entry in parsed.entries}
+    current = by_id.get(clean_entry_id)
+    if current is None:
+        raise PublishedMemoryConflict("published memory entry was not found")
+    predecessors: dict[str, list[files_store.ParsedEntry]] = {}
+    for entry in parsed.entries:
+        if entry.superseded_by:
+            predecessors.setdefault(entry.superseded_by, []).append(entry)
+
+    context = ContextService(conn, cfg)
+    lineage: list[files_store.ParsedEntry] = []
+    seen: set[str] = set()
+    while current is not None:
+        if current.id in seen:
+            raise ValueError("published memory revision history contains a cycle")
+        seen.add(current.id)
+        if (
+            not current.provenance_valid
+            or not current.origin_valid
+            or candidate_store.is_tombstoned(
+                conn,
+                kind="memory_entry",
+                artifact_id=current.id,
+                path=clean_path,
+            )
+            or not context.memory_entry_allowed(path=clean_path, entry=current)
+        ):
+            raise ValueError("published memory revision history is not currently authorized")
+        lineage.append(current)
+        prior = predecessors.get(current.id, [])
+        if len(prior) > 1:
+            raise ValueError("published memory revision history is ambiguous")
+        current = prior[0] if prior else None
+        if len(lineage) > limit:
+            raise ValueError("published memory revision history exceeds the bounded limit")
+
+    versions: list[PublishedMemoryVersion] = []
+    for index, entry in enumerate(lineage):
+        metadata = entry.fact_metadata
+        successor = lineage[index - 1] if index > 0 else None
+        versions.append(
+            PublishedMemoryVersion(
+                id=entry.id,
+                path=clean_path,
+                content=entries_store.entry_index_content(entry),
+                tags=tuple(tag for tag in entry.tags if not tag.startswith("superseded-by:")),
+                origin=entry.origin,
+                recorded_at=entry.timestamp,
+                source_count=len(entry.evidence_refs),
+                subject_key=metadata.subject_key if metadata else "",
+                assertion_kind=metadata.assertion_kind if metadata else "",
+                valid_from=metadata.valid_from if metadata else "",
+                valid_to=metadata.valid_to if metadata else "",
+                revision=entries_store.memory_fact_revision(path=clean_path, entry=entry),
+                state="current" if index == 0 else "superseded",
+                superseded_by=entry.superseded_by or "",
+                superseded_at=successor.timestamp if successor is not None else "",
+            )
+        )
+    return versions
 
 
 def correct_current_fact(
@@ -69,10 +205,14 @@ def correct_current_fact(
         raise ValueError("published memory entry is pending deletion")
     if not ContextService(conn, cfg).memory_entry_allowed(path=clean_path, entry=target):
         raise ValueError("published memory entry is not allowed by current policy")
-    if target.fact_metadata is not None and temporal_state(
-        target.fact_metadata,
-        as_of=as_of or datetime.now().astimezone(),
-    ) != "current":
+    if (
+        target.fact_metadata is not None
+        and temporal_state(
+            target.fact_metadata,
+            as_of=as_of or datetime.now().astimezone(),
+        )
+        != "current"
+    ):
         raise ValueError("published memory entry is not currently valid")
 
     actual_revision = entries_store.memory_fact_revision(path=clean_path, entry=target)

@@ -12,6 +12,7 @@ from openchronicle.services.memory import MemoryService
 from openchronicle.services.published_memory import (
     PublishedMemoryConflict,
     correct_current_fact,
+    list_revision_history,
 )
 from openchronicle.store import entries as entries_store
 from openchronicle.store import files as files_store
@@ -96,6 +97,62 @@ def test_correction_retry_is_idempotent(ac_root: Path) -> None:
         assert second == first
         parsed = files_store.read_file(files_store.memory_path(original.path))
         assert [entry.id for entry in parsed.entries] == [original.id, first.id]
+
+
+def test_revision_history_is_newest_first_and_bound_to_the_current_revision(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        _seed_current_fact(conn)
+        original = list_current_facts(conn, cfg)[0]
+        first = correct_current_fact(
+            conn,
+            cfg,
+            path=original.path,
+            entry_id=original.id,
+            expected_revision=original.revision,
+            content="User prefers encrypted local-first tools.",
+            tags=["preference", "encrypted"],
+        )
+        second = correct_current_fact(
+            conn,
+            cfg,
+            path=first.path,
+            entry_id=first.id,
+            expected_revision=first.revision,
+            content="User prefers encrypted, offline-capable local-first tools.",
+            tags=["preference", "encrypted", "offline"],
+        )
+
+        history = list_revision_history(
+            conn,
+            cfg,
+            path=second.path,
+            entry_id=second.id,
+            expected_revision=second.revision,
+        )
+
+        assert [version.id for version in history] == [second.id, first.id, original.id]
+        assert [version.state for version in history] == ["current", "superseded", "superseded"]
+        assert [version.content for version in history] == [
+            "User prefers encrypted, offline-capable local-first tools.",
+            "User prefers encrypted local-first tools.",
+            "User prefers local-first tools.",
+        ]
+        assert history[1].superseded_by == second.id
+        assert history[1].superseded_at == second.recorded_at
+        assert history[2].superseded_by == first.id
+        assert all(not tag.startswith("superseded-by:") for item in history for tag in item.tags)
+
+        with pytest.raises(PublishedMemoryConflict, match="no longer current"):
+            list_revision_history(
+                conn,
+                cfg,
+                path=original.path,
+                entry_id=original.id,
+                expected_revision=original.revision,
+            )
 
 
 def test_correction_rejects_stale_revision_without_writing(ac_root: Path) -> None:

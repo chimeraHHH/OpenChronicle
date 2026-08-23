@@ -3,6 +3,7 @@ const COMMANDS: &[&str] = &[
     "get_candidate",
     "export_published_memory",
     "correct_published_memory",
+    "get_published_memory_history",
     "preview_forget_published_memory",
     "forget_published_memory",
     "edit_candidate",

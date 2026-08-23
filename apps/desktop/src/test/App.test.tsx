@@ -31,6 +31,7 @@ import {
   forgetPreview,
   jsonResumeExport,
   maliciousText,
+  memoryHistory,
   memorySummary,
   memoryForgetPreview,
   openedJsonResumeReview,
@@ -80,6 +81,7 @@ function commandResult(command: string) {
       }),
     };
   }
+  if (command === "get_published_memory_history") return memoryHistory();
   if (command === "create_resume_cue") return bridgeResumeCueMutation();
   if (command === "transition_resume_cue") {
     return bridgeResumeCueMutation(resumeCue({ status: "resumed", version: 2 }));
@@ -242,10 +244,21 @@ describe("trusted console", () => {
     expect(
       screen.getAllByText("User prefers local-first tools and concise technical reports.").length,
     ).toBeGreaterThan(0);
-    expect(screen.getByText(/Superseded versions are kept in history/i)).toBeInTheDocument();
+    expect(screen.getByText(/Superseded versions are kept locally/i)).toBeInTheDocument();
     expect(screen.getByText("user.communication.report-style")).toBeInTheDocument();
     expect(screen.getByText("User Asserted")).toBeInTheDocument();
     expect(screen.getByText(/2026-08-08T08:00:00\+08:00.*Open end/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "View revision history" }));
+    expect(await screen.findByRole("heading", { name: "Revision history (2)" })).toBeInTheDocument();
+    expect(screen.getByText("User prefers local-first tools.")).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenCalledWith("get_published_memory_history", {
+      request: {
+        path: "user-preferences.md",
+        entry_id: "memory-entry-1",
+        expected_revision: "e".repeat(64),
+      },
+    });
 
     await user.click(screen.getByRole("button", { name: "Correct memory" }));
     const correction = screen.getByRole("textbox", { name: "Corrected fact" });

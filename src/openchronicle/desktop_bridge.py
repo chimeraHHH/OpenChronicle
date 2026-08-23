@@ -40,7 +40,11 @@ from .services.context import ContextService
 from .services.evidence import EvidenceResolver
 from .services.memory import MemoryService, PurgeClosureUnverifiable, StalePurgePlan
 from .services.memory_export import build_current_memory_export
-from .services.published_memory import PublishedMemoryConflict, correct_current_fact
+from .services.published_memory import (
+    PublishedMemoryConflict,
+    correct_current_fact,
+    list_revision_history,
+)
 from .services.snapshot import build_snapshot
 from .store import files as files_store
 from .store import fts
@@ -48,7 +52,7 @@ from .suggestions import store as suggestion_store
 from .suggestions.feedback import valid_feedback_reason
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 22
+PROTOCOL_VERSION = 23
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -183,6 +187,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "candidate.forget_preview": _candidate_forget_preview,
         "candidate.forget_commit": _candidate_forget_commit,
         "memory.export": _memory_export,
+        "memory.history": _memory_history,
         "memory.correct": _memory_correct,
         "memory.forget_preview": _memory_forget_preview,
         "memory.forget_commit": _memory_forget_commit,
@@ -1007,6 +1012,35 @@ def _memory_export(params: dict[str, Any]) -> dict[str, Any]:
     with fts.cursor() as conn:
         MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens).resume_pending_purges()
         return {"export": build_current_memory_export(conn, cfg, format=export_format)}
+
+
+def _memory_history(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"path", "entry_id", "expected_revision"})
+    path = _bounded_string(params["path"], 512, nonempty=True)
+    entry_id = _bounded_string(params["entry_id"], 128, nonempty=True)
+    expected_revision = _bounded_string(
+        params["expected_revision"],
+        64,
+        nonempty=True,
+    )
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
+        service.resume_pending_purges()
+        versions = list_revision_history(
+            conn,
+            cfg,
+            path=path,
+            entry_id=entry_id,
+            expected_revision=expected_revision,
+        )
+        current = versions[0]
+        return {
+            "path": current.path,
+            "entry_id": current.id,
+            "expected_revision": current.revision,
+            "versions": [version.to_dict() for version in versions],
+        }
 
 
 def _memory_correct(params: dict[str, Any]) -> dict[str, Any]:

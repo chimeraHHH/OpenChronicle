@@ -11,9 +11,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 22 adds explicit user-authored task
-// parking cues and cue-bound Work Resumption artifacts.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 22 as const;
+// WebView result projection. Version 23 adds revision-bound, on-demand
+// Published Memory history reads.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 23 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -791,6 +791,33 @@ export interface MemorySummary {
   valid_from?: string;
   valid_to?: string;
   state: "current";
+}
+
+export type MemoryVersionState = "current" | "superseded";
+
+export interface MemoryVersion {
+  id: string;
+  path: string;
+  content: string;
+  tags: string[];
+  origin: string;
+  recorded_at: string;
+  source_count: number;
+  revision: string;
+  subject_key?: string;
+  assertion_kind?: AssertionKind;
+  valid_from?: string;
+  valid_to?: string;
+  state: MemoryVersionState;
+  superseded_by: string;
+  superseded_at: string;
+}
+
+export interface MemoryHistory {
+  path: string;
+  entry_id: string;
+  expected_revision: string;
+  versions: MemoryVersion[];
 }
 
 export type MemoryExportFormat = "json" | "markdown";

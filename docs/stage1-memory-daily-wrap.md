@@ -99,7 +99,10 @@ matching request deterministically supersedes the old canonical entry, retains
 that entry as provenance-linked history, and preserves typed subject, assertion,
 and valid-time metadata. A concurrent Markdown change produces a version
 conflict instead of an overwrite. This path is entirely local and does not use
-a model.
+a model. The desktop can also request that selected current fact's authorized
+immutable lineage. This bounded, revision-bound read returns clean newest-first
+versions and their source identities only on demand; superseded text never
+enters the default current-memory snapshot.
 
 The same current-fact identity supports explicit permanent forget. The preview
 walks from the selected revision to the oldest provenance-linked predecessor,

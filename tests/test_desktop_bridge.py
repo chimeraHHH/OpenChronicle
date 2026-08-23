@@ -642,6 +642,27 @@ def test_memory_correction_bridge_preserves_history_and_is_revision_bound(
     assert memory["subject_key"] == "user.reporting.length"
     assert len(memory["revision"]) == 64
 
+    history_response, history_code = _request(
+        "memory.history",
+        {
+            "path": memory["path"],
+            "entry_id": memory["id"],
+            "expected_revision": memory["revision"],
+        },
+    )
+    assert history_code == 0
+    history = history_response["result"]
+    assert history["path"] == memory["path"]
+    assert history["entry_id"] == memory["id"]
+    assert [version["state"] for version in history["versions"]] == [
+        "current",
+        "superseded",
+    ]
+    assert [version["content"] for version in history["versions"]] == [
+        "User prefers concise status reports.",
+        "User prefers short status reports.",
+    ]
+
     stale, stale_code = _request(
         "memory.correct",
         {

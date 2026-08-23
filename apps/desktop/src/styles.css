@@ -577,6 +577,37 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.memory-history {
+  margin-top: 1rem;
+}
+
+.memory-history ol {
+  display: grid;
+  gap: 0.8rem;
+  padding: 0;
+  list-style: none;
+}
+
+.memory-history li {
+  padding: 0.9rem;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  border-radius: 0.8rem;
+}
+
+.memory-history__heading {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.7rem;
+}
+
+.memory-history__heading small {
+  color: var(--muted);
+}
+
 .edit-form {
   display: grid;
   gap: 0.9rem;

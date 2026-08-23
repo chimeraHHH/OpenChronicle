@@ -118,14 +118,14 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
 
 ### Corrected gap matrix
 
-| Capability | Current state at `c4459a3` | Remaining optimization |
+| Capability | Current state after the research implementation | Remaining optimization |
 |---|---|---|
 | Minute normalization | Model-backed, Luna-ready, retryable failure; no local rule summary | Measure quality/cost/latency on real replay data rather than adding another fallback. |
 | Session reduction | Model-backed and retryable; empty/malformed output is not materialized | Add stage-level extraction error fixtures and observable retry health. |
 | Cross-session pattern evidence | Dedicated bounded event-history BM25 tool, independent-session requirement | Evaluate pattern precision and unsupported generalization; semantic activity search is optional only if BM25 misses are measured. |
-| Durable fact lifecycle | Reviewed append/supersede, typed slot and valid time, current projection | Add public `as_of`/history queries plus disputed/retracted states only when product cases require them. |
-| Retrieval | Local BM25 + multilingual embedding + RRF, explicit unavailable state | Add temporal filters, adjacent event expansion, and ranking explanations; defer cross-encoder/graph. |
-| Published Memory | Current facts, source view, correction, export, complete revision-lineage forget | Expose history/as-of inspection; current view already intentionally hides superseded values. |
+| Durable fact lifecycle | Reviewed append/supersede, typed slot and valid time, current and historical projections | Add disputed/retracted states only when product cases require them. |
+| Retrieval | Local BM25 + multilingual embedding + RRF, explicit unavailable state, explicit MCP `as_of` | Add adjacent event expansion and ranking explanations; defer cross-encoder/graph. |
+| Published Memory | Current facts, source view, correction, export, complete revision-lineage forget, on-demand desktop history | Add desktop `as_of` query UX; current view intentionally hides superseded values. |
 | Evaluation | Native retrieval fixture, real LongMemEval-V2 trajectory smoke, adapter | Add lifecycle-operation evaluation and run a fixed public tier before making quality claims. |
 | Procedural memory | Suggestions and feedback exist, but no reviewed reusable workflow memory | Promote only repeated/adopted text workflows, templates, or checklists; never execute them. |
 
@@ -165,6 +165,10 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
    superseded revisions but returns only the version recorded and not yet
    replaced at the requested instant, while applying typed valid-time metadata
    at the same instant. Default recall remains current-only.
+10. **On-demand revision inspection.** Published Memory can fetch the selected
+    current fact's clean, newest-first immutable lineage through a
+    revision-bound desktop protocol. Each version retains its source-drawer
+    identity, while superseded values remain absent from the default snapshot.
 
 ## Remaining optimization sequence
 

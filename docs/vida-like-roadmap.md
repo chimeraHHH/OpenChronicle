@@ -217,7 +217,10 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   [local-long-term-memory-research-2026-08-23.md](local-long-term-memory-research-2026-08-23.md).
 - [x] Explicit MCP `search(as_of=...)` historical snapshot over recorded and
   typed valid time, kept separate from ordinary current-only recall.
-- [ ] Published Memory revision-history inspection and `as_of` desktop UX.
+- [x] On-demand Published Memory revision-history inspection, bound to the
+  selected current fact and kept out of the default current-only snapshot.
+- [ ] `as_of` desktop query UX; the explicit MCP historical query is already
+  implemented.
 - [ ] Rebuildable event/topic segmentation plus adjacent-event retrieval,
   gated by a same-case comparison against minute and session retrieval units.
 - [ ] Reviewed procedural memory derived only from repeated/adopted text

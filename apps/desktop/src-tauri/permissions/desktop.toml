@@ -4,6 +4,7 @@ description = "Bounded, local-only reads for the trusted review window."
 permissions = [
   "allow-get-snapshot",
   "allow-get-candidate",
+  "allow-get-published-memory-history",
   "allow-preview-forget-published-memory",
   "allow-preview-forget-candidate",
   "allow-get-daily-wrap",

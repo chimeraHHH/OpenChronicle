@@ -15,6 +15,8 @@ import type {
   JsonResumeSelection,
   JsonResumeUpstreamSchema,
   MemorySummary,
+  MemoryHistory,
+  MemoryVersion,
   MemoryForgetPreview,
   MemoryExportFormat,
   MemoryExportResult,
@@ -458,6 +460,67 @@ function memorySummary(value: unknown): MemorySummary {
     ...(validFrom ? { valid_from: validFrom } : {}),
     ...(validTo ? { valid_to: validTo } : {}),
     state: "current",
+  };
+}
+
+const memoryVersionStates = new Set(["current", "superseded"] as const);
+
+function memoryVersion(value: unknown): MemoryVersion {
+  const raw = closedObject(
+    value,
+    [
+      "id",
+      "path",
+      "content",
+      "tags",
+      "origin",
+      "recorded_at",
+      "source_count",
+      "subject_key",
+      "assertion_kind",
+      "valid_from",
+      "valid_to",
+      "revision",
+      "state",
+      "superseded_by",
+      "superseded_at",
+    ],
+    "published memory version",
+  );
+  const revision = stringValue(raw.revision, "published memory version revision");
+  if (!/^[0-9a-f]{64}$/.test(revision)) {
+    return protocolError("published memory version revision");
+  }
+  const subjectKey = optionalString(raw.subject_key, "published memory version subject key");
+  const assertionKind = optionalAssertionKind(raw.assertion_kind);
+  const validFrom = optionalString(raw.valid_from, "published memory version valid from");
+  const validTo = optionalString(raw.valid_to, "published memory version valid to");
+  return {
+    id: stringValue(raw.id, "published memory version id"),
+    path: stringValue(raw.path, "published memory version path"),
+    content: stringValue(raw.content, "published memory version content"),
+    tags: stringArray(raw.tags, "published memory version tags"),
+    origin: stringValue(raw.origin, "published memory version origin"),
+    recorded_at: stringValue(raw.recorded_at, "published memory version recorded at"),
+    source_count: numberValue(raw.source_count, "published memory version source count"),
+    revision,
+    ...(subjectKey ? { subject_key: subjectKey } : {}),
+    ...(assertionKind ? { assertion_kind: assertionKind } : {}),
+    ...(validFrom ? { valid_from: validFrom } : {}),
+    ...(validTo ? { valid_to: validTo } : {}),
+    state: allowedString(
+      raw.state,
+      memoryVersionStates,
+      "published memory version state",
+    ),
+    superseded_by: stringValue(
+      raw.superseded_by,
+      "published memory version successor",
+    ),
+    superseded_at: stringValue(
+      raw.superseded_at,
+      "published memory version superseded at",
+    ),
   };
 }
 
@@ -3041,6 +3104,63 @@ export function normalizeMemoryExport(value: unknown): MemoryExportResult {
   };
 }
 
+export function normalizeMemoryHistory(value: unknown): MemoryHistory {
+  const raw = closedObject(
+    value,
+    ["path", "entry_id", "expected_revision", "versions"],
+    "published memory history",
+  );
+  const path = stringValue(raw.path, "published memory history path");
+  const entryId = stringValue(raw.entry_id, "published memory history entry id");
+  const expectedRevision = stringValue(
+    raw.expected_revision,
+    "published memory history expected revision",
+  );
+  if (!/^[0-9a-f]{64}$/.test(expectedRevision)) {
+    return protocolError("published memory history expected revision");
+  }
+  const rawVersions = arrayValue(raw.versions, "published memory history versions");
+  if (rawVersions.length === 0 || rawVersions.length > 100) {
+    return protocolError("published memory history versions");
+  }
+  const versions = rawVersions.map(memoryVersion);
+  const current = versions[0];
+  if (!current) return protocolError("published memory history versions");
+  if (
+    current.state !== "current" ||
+    current.id !== entryId ||
+    current.revision !== expectedRevision ||
+    versions.some((version) => version.path !== path) ||
+    versions.filter((version) => version.state === "current").length !== 1 ||
+    new Set(versions.map((version) => version.id)).size !== versions.length
+  ) {
+    return protocolError("published memory history identity");
+  }
+  if (
+    current.superseded_by !== "" ||
+    current.superseded_at !== "" ||
+    versions.slice(1).some(
+      (version, index) => {
+        const successor = versions[index];
+        return (
+          !successor ||
+          version.state !== "superseded" ||
+          version.superseded_by !== successor.id ||
+          version.superseded_at === ""
+        );
+      },
+    )
+  ) {
+    return protocolError("published memory history lineage");
+  }
+  return {
+    path,
+    entry_id: entryId,
+    expected_revision: expectedRevision,
+    versions,
+  };
+}
+
 export function normalizeDailyWrap(value: unknown): DailyWrap {
   const raw = objectValue(value, "Daily Wrap response");
   return wrapPayload(raw.wrap);
@@ -3403,6 +3523,26 @@ export const desktopApi = {
       if (result.format !== expected) return protocolError("memory export format identity");
       return result;
     }),
+  getPublishedMemoryHistory: (memory: MemorySummary) =>
+    request(
+      "get_published_memory_history",
+      {
+        path: memory.path,
+        entry_id: memory.id,
+        expected_revision: memory.revision,
+      },
+      (value) => {
+        const history = normalizeMemoryHistory(value);
+        if (
+          history.path !== memory.path ||
+          history.entry_id !== memory.id ||
+          history.expected_revision !== memory.revision
+        ) {
+          return protocolError("published memory history request identity");
+        }
+        return history;
+      },
+    ),
   correctPublishedMemory: (input: {
     path: string;
     entryId: string;

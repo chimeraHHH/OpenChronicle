@@ -1,7 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { DesktopApiError, type DesktopApi } from "../api";
-import type { MemoryForgetPreview, MemorySummary, SourceSubject } from "../contracts";
+import type {
+  MemoryForgetPreview,
+  MemoryHistory,
+  MemorySummary,
+  SourceSubject,
+} from "../contracts";
 import { displayError, formatDateTime, titleCase } from "../format";
 import { StatusBadge } from "../components/StatusBadge";
 import { UntrustedText } from "../components/UntrustedText";
@@ -48,6 +53,9 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
   const [forgetBusy, setForgetBusy] = useState(false);
   const [forgetNotice, setForgetNotice] = useState("");
   const [forgetError, setForgetError] = useState("");
+  const [history, setHistory] = useState<MemoryHistory | null>(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError] = useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visible = useMemo(
     () =>
@@ -80,6 +88,8 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
     setEditError("");
     setForgetPreview(null);
     setForgetError("");
+    setHistory(null);
+    setHistoryError("");
   }, [selected?.id, selected?.path, selected?.revision]);
 
   async function exportMemory(format: "json" | "markdown") {
@@ -139,6 +149,20 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
       setForgetError(displayError(reason));
     } finally {
       setForgetBusy(false);
+    }
+  }
+
+  async function loadHistory() {
+    if (!selected) return;
+    setHistoryBusy(true);
+    setHistoryError("");
+    try {
+      setHistory(await api.getPublishedMemoryHistory(selected));
+    } catch (reason) {
+      setHistory(null);
+      setHistoryError(displayError(reason));
+    } finally {
+      setHistoryBusy(false);
     }
   }
 
@@ -278,7 +302,8 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
 
             <p className="trust-note">
               This is current, locally stored context available to text-generation workflows.
-              Superseded versions are kept in history but are not shown in this view.
+              Superseded versions are kept locally and loaded only when you request the revision
+              history below.
             </p>
 
             <section aria-labelledby="remembered-content-heading">
@@ -400,7 +425,74 @@ export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPag
               >
                 View sources
               </button>
+              <button
+                className="button button--secondary"
+                disabled={historyBusy}
+                onClick={() => void loadHistory()}
+                type="button"
+              >
+                {historyBusy
+                  ? "Loading history…"
+                  : history
+                    ? "Refresh revision history"
+                    : "View revision history"}
+              </button>
             </div>
+            {history ? (
+              <section aria-labelledby="memory-history-heading" className="memory-history">
+                <div className="section-heading-row">
+                  <div>
+                    <p className="eyebrow">Immutable local lineage</p>
+                    <h3 id="memory-history-heading">Revision history ({history.versions.length})</h3>
+                  </div>
+                </div>
+                <ol>
+                  {history.versions.map((version) => (
+                    <li key={version.id}>
+                      <div className="memory-history__heading">
+                        <StatusBadge tone={version.state === "current" ? "positive" : "neutral"}>
+                          {version.state === "current" ? "Current" : "Superseded"}
+                        </StatusBadge>
+                        <small>
+                          Recorded <bdi>{formatDateTime(version.recorded_at)}</bdi>
+                          {version.superseded_at
+                            ? <> · Superseded <bdi>{formatDateTime(version.superseded_at)}</bdi></>
+                            : null}
+                        </small>
+                      </div>
+                      <UntrustedText as="pre" className="proposal-text">
+                        {version.content}
+                      </UntrustedText>
+                      <dl className="definition-grid">
+                        <dt>Valid time</dt>
+                        <dd>
+                          {version.valid_from || version.valid_to
+                            ? `${version.valid_from || "Open start"} → ${version.valid_to || "Open end"}`
+                            : "Open-ended"}
+                        </dd>
+                        <dt>Direct sources</dt>
+                        <dd>{version.source_count}</dd>
+                      </dl>
+                      <button
+                        className="button button--ghost"
+                        onClick={() =>
+                          onOpenSource({
+                            kind: "memory_entry",
+                            id: version.id,
+                            path: version.path,
+                            label: "Memory version sources",
+                          })
+                        }
+                        type="button"
+                      >
+                        View version sources
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            ) : null}
+            {historyError ? <p className="error-banner" role="alert">{historyError}</p> : null}
             <details className="danger-zone" open={forgetPreview !== null}>
               <summary>Permanent local deletion</summary>
               <p>

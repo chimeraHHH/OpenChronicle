@@ -9,6 +9,7 @@ import {
   desktopApi,
   normalizeEvidence,
   normalizeForgetPreview,
+  normalizeMemoryHistory,
   normalizeProvenance,
   normalizeSnapshot,
 } from "../api";
@@ -29,6 +30,7 @@ import {
   forgetPreview,
   jsonResumeExport,
   maliciousText,
+  memoryHistory,
   memoryForgetPreview,
   memorySummary,
   openedJsonResumeReview,
@@ -54,8 +56,36 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks explicit resume cues as bridge protocol v22", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(22);
+  it("tracks on-demand Published Memory history as bridge protocol v23", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(23);
+  });
+
+  it("loads one revision-bound Published Memory lineage", async () => {
+    const memory = memorySummary();
+    tauri.invoke.mockResolvedValue(memoryHistory());
+
+    const history = await desktopApi.getPublishedMemoryHistory(memory);
+
+    expect(history.versions.map((version) => version.state)).toEqual([
+      "current",
+      "superseded",
+    ]);
+    expect(tauri.invoke).toHaveBeenCalledWith("get_published_memory_history", {
+      request: {
+        path: memory.path,
+        entry_id: memory.id,
+        expected_revision: memory.revision,
+      },
+    });
+  });
+
+  it("rejects an open or broken Published Memory history projection", () => {
+    expect(() => normalizeMemoryHistory({ ...memoryHistory(), unexpected: true })).toThrow(
+      DesktopApiError,
+    );
+    const broken = memoryHistory();
+    broken.versions[1]!.superseded_by = "not-the-current-version";
+    expect(() => normalizeMemoryHistory(broken)).toThrow(DesktopApiError);
   });
 
   it("previews and commits revision-bound Published Memory forget", async () => {
