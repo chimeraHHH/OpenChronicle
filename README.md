@@ -215,6 +215,7 @@ openchronicle timeline tick
 openchronicle timeline list
 openchronicle writer run
 openchronicle memory adoptions
+openchronicle memory usefulness --json
 openchronicle memory screen-adoption <adoption-id>
 openchronicle memory candidates
 openchronicle memory show <candidate-id>
@@ -235,6 +236,12 @@ configured classifier provider before sending the exact adopted Prompt/Reply
 Rescue text. A qualifying reusable workflow, checklist, or template is only
 staged in the ordinary review inbox; it is never approved, published, or
 executed automatically.
+
+`memory usefulness` is the read-only outcome view for local long-term memory.
+It joins an exact reviewed memory revision to Prompt Rescue outputs and their
+immutable adoption records without emitting prompt, memory, or artifact text.
+Unedited adoption is reported as a descriptive positive association; edited
+adoption remains ambiguous, and neither signal changes ranking automatically.
 
 ---
 
@@ -293,6 +300,7 @@ Documentation
 * [docs/writer.md](docs/writer.md) - reducer, classifier, and retry model
 * [docs/mcp.md](docs/mcp.md) - current tool surface and integrations
 * [docs/memory-format.md](docs/memory-format.md) - file layout and supersede semantics
+* [docs/memory-usefulness-v1.md](docs/memory-usefulness-v1.md) - exact memory revision to Prompt Rescue adoption outcome report
 * [docs/stage1-memory-daily-wrap.md](docs/stage1-memory-daily-wrap.md) - provenance, review inbox, Daily Wrap, privacy, and failure semantics
 * [docs/desktop-shell.md](docs/desktop-shell.md) - Tauri trust boundary, fixed bridge protocol, dangerous-action semantics, and release gates
 * [docs/vida-public-product-research.md](docs/vida-public-product-research.md) - dated official-source Vida capability and privacy research

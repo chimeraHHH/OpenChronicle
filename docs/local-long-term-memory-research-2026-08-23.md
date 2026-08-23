@@ -365,6 +365,17 @@ qualifying outputs enter the ordinary review inbox. Source deletion or mutation
 blocks staging/approval, and nothing is approved, published, or executed
 automatically.
 
+A read-only usefulness report now closes the first observable outcome loop:
+`openchronicle memory usefulness --json` verifies each complete memory-entry
+revision against Prompt Rescue provenance, then associates it with immutable
+adoption digests. It preserves contribution history for superseded and expired
+revisions, quarantines provenance mismatches, excludes all memory/prompt/output
+text, and separates unedited adoption from edited ambiguity. These are
+descriptive associations, not causal credit and not ranking weights. No table,
+LLM call, background worker, decay rule, or automatic consolidation was added.
+The contract and limitations are documented in
+[memory-usefulness-v1.md](memory-usefulness-v1.md).
+
 ### P1: transparent ranking signals
 
 Add current-state, explicit-temporary TTL, recency, and recall-use signals after

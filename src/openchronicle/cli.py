@@ -1043,6 +1043,43 @@ def memory_adoptions(
     console.print(table)
 
 
+@memory_app.command("usefulness")
+@privacy_egress_fenced
+def memory_usefulness(
+    json_output: bool = typer.Option(False, "--json", help="Emit deterministic JSON."),
+) -> None:
+    """Report exact memory revisions and Prompt Rescue adoption outcomes."""
+    cfg = _init()
+    from .services.memory_usefulness import memory_usefulness_report
+
+    with fts.cursor() as conn:
+        report = memory_usefulness_report(conn, cfg)
+    if json_output:
+        typer.echo(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return
+
+    summary = report["summary"]
+    table = Table("Memory revision", "Status", "Outputs", "Unedited", "Edited")
+    for row in report["memory_revisions"]:
+        revision = row["memory_revision"]
+        table.add_row(
+            f"{revision['path']}#{revision['id']}",
+            str(row["current_status"]),
+            str(row["conditioned_output_count"]),
+            str(row["unedited_adoption_count"]),
+            str(row["edited_adoption_count"]),
+        )
+    console.print(table)
+    console.print(
+        "Tracked exact revisions: "
+        f"{summary['tracked_exact_revision_binding_count']}/"
+        f"{summary['exact_revision_binding_count']}; "
+        "conditioned output adoption rate: "
+        f"{summary['conditioned_output_unedited_adoption_rate']:.3f} "
+        "(descriptive, unedited artifacts only)."
+    )
+
+
 @memory_app.command("screen-adoption")
 def memory_screen_adoption(adoption_id: str) -> None:
     """Use the configured classifier to stage, never approve, a procedure candidate."""

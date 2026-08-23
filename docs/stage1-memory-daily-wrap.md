@@ -148,6 +148,7 @@ Trusted local commands:
 ```bash
 openchronicle memory candidates
 openchronicle memory adoptions
+openchronicle memory usefulness --json
 openchronicle memory screen-adoption <adoption-id>
 openchronicle memory show <candidate-id>
 openchronicle memory edit <candidate-id> --content "..." --tags tag1,tag2
@@ -161,6 +162,14 @@ digest-bound Prompt/Reply Rescue output. It reuses the production procedure
 validator and can only stage a pending candidate. The command discloses the
 configured provider first; source deletion invalidates the candidate, and a
 separate `memory approve` remains required to publish local Markdown.
+
+The usefulness report is local and read-only. It verifies the complete
+memory-entry revision tuple against both `memory_context_json` and provenance
+edges, then joins Prompt Rescue jobs to immutable adoption digests. It reports
+current/superseded/expired/missing revision state and emits no prompt, memory,
+or artifact body. Adoption rows represent distinct adopted artifact digests,
+not repeated use events; edited adoptions are listed separately and never count
+as strong positives. See [memory-usefulness-v1.md](memory-usefulness-v1.md).
 
 Pending proposal plaintext and mutation commands are intentionally not exposed
 over MCP. MCP remains read-only.
