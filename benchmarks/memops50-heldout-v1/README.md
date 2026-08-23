@@ -33,3 +33,10 @@ The evaluator indexes dialogue text only, maps Stage 2 evidence coordinates to
 the exact Stage 4 carriers, and calls OpenChronicle's production SQLite
 FTS5/BM25 search. This remains a dataset-native conversation-segment proxy,
 not an end-to-end answer-quality measurement.
+
+The first clean, pre-registered baseline is described in
+[`analysis/retrieval-c2de032-bm25-top10.md`](analysis/retrieval-c2de032-bm25-top10.md),
+with its
+[`machine-readable report`](results/retrieval-c2de032-bm25-top10.json). The
+unseen tier reproduces the development-tier finding: evidence recall is high,
+but injected-distractor contamination fails the frozen context-purity gate.
