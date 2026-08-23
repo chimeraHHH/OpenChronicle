@@ -23,3 +23,6 @@ The runner never stages a candidate or changes memory. Its result can justify
 designing a review-only production adapter, but cannot by itself authorize
 single-adoption promotion. This is a small first-party development regression,
 not a public benchmark or evidence of actual external use.
+
+The first clean configured-model result and its limitations are recorded in
+[analysis/gpt-5.6-sol-2026-08-24.md](analysis/gpt-5.6-sol-2026-08-24.md).

@@ -101,9 +101,14 @@ supersession, and permanent-forget lifecycle. They do not introduce a second
 store or an autonomous executor. The first slice accepts explicit authored
 procedures and two-session observed/inferred patterns; positive adoption of a
 generated Prompt/Reply Rescue artifact is now a separate immutable local
-signal. It remains outside classifier context pending a frozen evaluation of
-whether one explicit user-confirmed adoption can replace two-session evidence;
-copy and suggestion acknowledgement do not qualify.
+signal. It remains outside classifier context; copy and suggestion
+acknowledgement do not qualify.
+
+The first frozen evaluation rejects unconditional promotion: the
+`any_adoption` baseline reached only 0.300 precision. A clean no-tool
+`gpt-5.6-sol` screen passed the small native gate, so the next permitted slice
+is review-only staging through this module's existing procedure validator.
+Production classifier context and approval behavior are unchanged.
 
 ### Durable delivery state machine
 

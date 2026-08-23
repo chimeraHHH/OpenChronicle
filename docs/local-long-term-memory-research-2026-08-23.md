@@ -284,6 +284,17 @@ are deliberately not adoption. This is a user-confirmed positive-use signal,
 not independently observed external use, and it is not yet classifier evidence
 or permission to auto-promote a procedure.
 
+A frozen ten-case evaluation now answers the first policy question. The naive
+`any_adoption` baseline achieved 1.000 recall but only 0.300 precision because
+it promoted seven one-off or unsafe artifacts. On one clean
+`codex_cli:gpt-5.6-sol` run, a no-tool content screen reached 1.000
+qualification precision/recall, procedure-type accuracy, anchor support, and
+action-boundary rate. This small first-party result supports building a
+review-only adapter: the screen may propose text for the existing validator and
+review inbox, but cannot publish a procedure automatically. The report and
+limitations live in
+[`benchmarks/vida-procedure-adoption-v1`](../benchmarks/vida-procedure-adoption-v1/README.md).
+
 ### P1: transparent ranking signals
 
 Add current-state, explicit-temporary TTL, recency, and recall-use signals after
@@ -336,10 +347,10 @@ MemOps adjacent smoke, repeated layered stability gate, deterministic
 event/adjacency projection, same-case retrieval-unit comparison, and first
 reviewed procedural-memory slice are now implemented. The next evaluation
 slices are a fixed LongMemEval-V2 tier and held-out/real retrieval-unit traces;
-the next product slice is desktop `as_of` inspection. The next procedural-memory
-question is whether the new explicit adoption record is sufficient evidence to
-stage a review candidate without two-session repetition. None requires a graph
-store or another autonomous memory agent.
+the next product slice is desktop `as_of` inspection. For procedural memory,
+the evaluation rejects single-adoption auto-promotion and permits only a
+screened, review-inbox pilot that reuses the existing validator. None requires
+a graph store or another autonomous memory agent.
 
 ## Success criteria
 

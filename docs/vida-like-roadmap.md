@@ -254,8 +254,14 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   exact digest/version, edited state, and first-use time. Copy and suggestion
   acknowledgement remain separate; deleting the source artifact deletes this
   local signal, and recording it never executes or learns a workflow.
-- [ ] Evaluate whether an explicitly adopted generated artifact should qualify
-  as reviewable procedural-memory evidence without two-session repetition.
+- [x] Frozen single-adoption procedural-memory evaluation. On the ten-case
+  native development split, treating every adoption as qualifying produced
+  0.300 precision; a no-tool `codex_cli:gpt-5.6-sol` screen reached 1.000
+  precision/recall, anchor support, and action-boundary rate on one clean run.
+  The result permits design of a review-only pilot, not automatic promotion.
+- [ ] Add a review-only adapter that lets the screened proposal pass the
+  existing procedure validator and enter the ordinary review inbox. Keep
+  source deletion, CAS, provenance, and explicit approval intact.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1
