@@ -1,0 +1,38 @@
+{
+  "evaluation_id": "longmemeval-v2-real-trajectory-retrieval-smoke",
+  "fixture": {
+    "download_latency_ms": 2591.184959,
+    "line_bytes": 1344890,
+    "line_sha256": "8474b9bc796d52e53575886e26094973aa289147d8cc03535e383ef5e2277b13",
+    "state_count": 101,
+    "trajectory_id": "00332982"
+  },
+  "repository": {
+    "commit": "872397a089a9a26245e5cac5aca0d1f9cd9215d0",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "schema_version": 1,
+  "upstream": {
+    "commit": "2cc8c540bdb87fe6761629b585e727e1c4704520",
+    "dataset_repository": "xiaowu0162/longmemeval-v2",
+    "dataset_revision": "f152293e235517d504809563c833d7190b8c713b",
+    "repository": "https://github.com/xiaowu0162/LongMemEval-V2",
+    "source_file": "trajectories.jsonl"
+  },
+  "variant": {
+    "backend": "openchronicle_hybrid_rrf",
+    "dataset_revision": "f152293e235517d504809563c833d7190b8c713b",
+    "embedding_model": "fastembed:sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "entry_count": 101,
+    "image_memory": false,
+    "insert_latency_ms": 1442.343542,
+    "query": "How do I assign incidents to the relevant agents?",
+    "query_latency_ms": 9.607291,
+    "returned_context_items": 3,
+    "source_identity_present": true,
+    "text_only": true,
+    "trajectory_count": 1,
+    "upstream_commit": "2cc8c540bdb87fe6761629b585e727e1c4704520"
+  }
+}

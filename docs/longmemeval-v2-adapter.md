@@ -104,6 +104,12 @@ small-tier score is still pending the 1.20 GB dataset and fixed reader/evaluator
 runtime. Until that clean run exists, the passing native v1 fixture remains the
 only quantitative OpenChronicle memory claim.
 
+The clean bounded smoke artifact is
+`reports/longmemeval-v2-real-trajectory-smoke-2026-08-23.json`: commit
+`872397a089a9a26245e5cac5aca0d1f9cd9215d0`, `dirty=false`, 101 real states,
+1.442 s local incremental indexing, 9.607 ms retrieval, three text contexts,
+and preserved source identity. Network download time is recorded separately.
+
 The current vector stage performs exact local cosine scoring. Do not add ANN
 infrastructure on intuition: use the official small-tier query latency and
 memory-size evidence to decide whether exact scan is actually the next
