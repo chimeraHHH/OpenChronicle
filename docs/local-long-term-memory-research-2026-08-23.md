@@ -173,7 +173,10 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
     remember/update/forget/reflect detection, target binding, frozen value
     anchors, exact evidence support, abstention, and first failure stage. It
     never stages, approves, edits, or deletes memory; `forget` is only an inert
-    benchmark label.
+    benchmark label. The first clean `codex_cli:gpt-5.6-sol` native development
+    run passed all eight cases and six operations with 1.00 operation F1,
+    binding, value, provenance, and no-operation accuracy. This is not an
+    official MemOps score.
 
 ## Remaining optimization sequence
 

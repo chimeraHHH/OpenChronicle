@@ -23,6 +23,9 @@ JSON shape, pinned during design at
 `312af65e2c7b6d1b70f062ffa8b4cde32aaf6f35`. No upstream code or generated
 sample is copied into this repository.
 
-This split is intentionally small and exact-match based. Passing it is a local
-regression result, not a claim about public MemOps performance or real-user
-quality.
+This split is intentionally small and deterministically scored. Passing it is
+a local regression result, not a claim about public MemOps performance or
+real-user quality.
+
+The first clean configured-model result is recorded in
+[analysis/gpt-5.6-sol-2026-08-23.md](analysis/gpt-5.6-sol-2026-08-23.md).
