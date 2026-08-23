@@ -15,6 +15,8 @@ import type {
   JsonResumeSelection,
   JsonResumeUpstreamSchema,
   MemorySummary,
+  MemoryExportFormat,
+  MemoryExportResult,
   OpenedJsonResumeReview,
   OpenedResumeDocumentReview,
   PrivacySnapshot,
@@ -2814,6 +2816,38 @@ export function normalizeCandidateMutation(value: unknown): Candidate {
   return candidatePayload(raw.candidate);
 }
 
+export function normalizeMemoryExport(value: unknown): MemoryExportResult {
+  const raw = objectValue(value, "memory export result");
+  if (numberValue(raw.schema_version, "memory export schema") !== 1) {
+    return protocolError("memory export schema");
+  }
+  const format = allowedString(
+    raw.format,
+    new Set([
+      "openchronicle_current_memory_json_v1",
+      "openchronicle_current_memory_markdown_v1",
+    ] as const),
+    "memory export format",
+  );
+  const contentDigest = stringValue(raw.content_digest, "memory export digest");
+  if (!/^[0-9a-f]{64}$/.test(contentDigest)) return protocolError("memory export digest");
+  if (booleanValue(raw.created, "memory export created") !== true) {
+    return protocolError("memory export created");
+  }
+  if (stringValue(raw.action_capability, "memory export capability") !== "none") {
+    return protocolError("memory export capability");
+  }
+  return {
+    format,
+    content_digest: contentDigest,
+    file_name: stringValue(raw.file_name, "memory export file name"),
+    byte_count: numberValue(raw.byte_count, "memory export byte count"),
+    fact_count: numberValue(raw.fact_count, "memory export fact count"),
+    created: true,
+    action_capability: "none",
+  };
+}
+
 export function normalizeDailyWrap(value: unknown): DailyWrap {
   const raw = objectValue(value, "Daily Wrap response");
   return wrapPayload(raw.wrap);
@@ -3114,6 +3148,13 @@ export const desktopApi = {
       const candidate = normalizeCandidateGet(value);
       if (candidate.id !== candidateId) return protocolError("candidate response identity");
       return candidate;
+    }),
+  exportPublishedMemory: (format: MemoryExportFormat) =>
+    request("export_published_memory", { format }, (value) => {
+      const result = normalizeMemoryExport(value);
+      const expected = `openchronicle_current_memory_${format === "json" ? "json" : "markdown"}_v1`;
+      if (result.format !== expected) return protocolError("memory export format identity");
+      return result;
     }),
   editCandidate: (input: {
     candidateId: string;

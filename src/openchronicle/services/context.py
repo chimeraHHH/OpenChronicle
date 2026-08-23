@@ -248,6 +248,16 @@ class ContextService:
         if not entry.provenance_present:
             return bool(entry.origin_valid and entry.origin == files_store.MANUAL_ENTRY_ORIGIN)
         if (
+            entry.provenance_valid
+            and entry.fact_metadata is not None
+            and not entry.evidence_refs
+            and entry.origin_valid
+            and entry.origin == files_store.MANUAL_ENTRY_ORIGIN
+        ):
+            # A typed manual root needs the reserved frame to carry fact
+            # semantics even though it has no derived-data sources.
+            return True
+        if (
             not entry.provenance_valid
             or not entry.evidence_refs
             or not entries_store.dependency_sources_are_live(self.conn, entry.evidence_refs)

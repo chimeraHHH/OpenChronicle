@@ -87,6 +87,12 @@ scheduled and expired facts. A typed supersede must preserve the subject slot,
 and another active proposal with that slot conflicts even if it targets a
 different Markdown file.
 
+Published Memory can export the authorized current projection as JSON or
+human-readable Markdown. Python assembles and digest-binds the content without a
+model call; the native shell validates the closed payload and writes a new
+private local file only after the user chooses a save path. Export never uploads
+or changes the canonical memory store.
+
 Proposal creation revalidates every cited source while holding an immediate
 SQLite write transaction. The candidate row, conflict decision, and provenance
 edges commit atomically; a matching replay can repair a missing edge left by a

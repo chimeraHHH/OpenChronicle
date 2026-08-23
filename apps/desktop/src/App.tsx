@@ -224,7 +224,7 @@ export function App({ api = desktopApi }: AppProps) {
             />
           ) : null}
           {snapshot && page === "memory" ? (
-            <MemoryPage memories={snapshot.memories} onOpenSource={setSourceSubject} />
+            <MemoryPage api={api} memories={snapshot.memories} onOpenSource={setSourceSubject} />
           ) : null}
           {snapshot && page === "daily-wrap" ? (
             <DailyWrapPage

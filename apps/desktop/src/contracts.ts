@@ -11,9 +11,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 17 adds typed fact-slot, assertion-basis,
-// and valid-time metadata to review and published-memory snapshots.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 17 as const;
+// WebView result projection. Version 18 adds explicit local JSON/Markdown
+// export of the authorized current-memory projection.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 18 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -733,6 +733,20 @@ export interface MemorySummary {
   valid_from?: string;
   valid_to?: string;
   state: "current";
+}
+
+export type MemoryExportFormat = "json" | "markdown";
+
+export interface MemoryExportResult {
+  format:
+    | "openchronicle_current_memory_json_v1"
+    | "openchronicle_current_memory_markdown_v1";
+  content_digest: string;
+  file_name: string;
+  byte_count: number;
+  fact_count: number;
+  created: true;
+  action_capability: "none";
 }
 
 export interface ForgetPreview {

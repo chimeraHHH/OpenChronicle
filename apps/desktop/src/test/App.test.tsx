@@ -54,6 +54,18 @@ import {
 function commandResult(command: string) {
   if (command === "get_snapshot") return bridgeSnapshot();
   if (command === "get_candidate") return bridgeCandidateGet();
+  if (command === "export_published_memory") {
+    return {
+      schema_version: 1,
+      format: "openchronicle_current_memory_json_v1",
+      content_digest: "d".repeat(64),
+      file_name: "openchronicle-memory-2026-08-23.json",
+      byte_count: 1_024,
+      fact_count: 1,
+      created: true,
+      action_capability: "none",
+    };
+  }
   if (command === "get_daily_wrap") return bridgeWrapGet();
   if (command === "trace_provenance") return provenanceTrace;
   if (command === "resolve_evidence") return bridgeResolvedEvidence();
@@ -206,6 +218,12 @@ describe("trusted console", () => {
     expect(screen.getByText("user.communication.report-style")).toBeInTheDocument();
     expect(screen.getByText("User Asserted")).toBeInTheDocument();
     expect(screen.getByText(/2026-08-08T08:00:00\+08:00.*Open end/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Export JSON…" }));
+    expect(await screen.findByText(/Saved 1 current fact.*openchronicle-memory/i)).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenCalledWith("export_published_memory", {
+      request: { format: "json" },
+    });
 
     const search = screen.getByRole("searchbox", { name: "Search remembered facts" });
     await user.type(search, "unmatched phrase");

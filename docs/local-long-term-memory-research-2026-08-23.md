@@ -115,10 +115,10 @@ been claimed.
 
 ### P0: published-memory product surface
 
-Add an inspectable Memory/About Me page over accepted current entries. It must
-support search, current/history switching, source opening, edit-as-supersede,
-export, and explicit forget. This converts the implemented memory backend into
-a visible user contract.
+The inspectable Memory/About Me page now supports search, source opening, typed
+current-state metadata, and explicit local JSON/Markdown export through the
+native save dialog. Remaining work is current/history switching,
+edit-as-supersede, and entry-root forget.
 
 ### P0: typed fact history and state transitions
 

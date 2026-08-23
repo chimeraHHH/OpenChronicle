@@ -24,8 +24,10 @@ const MAX_CONTENT_CHARS: usize = 20_000;
 const MAX_TAGS: usize = 100;
 const MAX_TAG_CHARS: usize = 100;
 const MAX_REASON_CHARS: usize = 1_000;
+const MAX_MEMORY_EXPORT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_TIMELINE_ITEMS: usize = 24;
 const MAX_CANDIDATE_ITEMS: usize = 100;
+const MAX_MEMORY_ITEMS: usize = 250;
 const MAX_WRAP_ITEMS: usize = 30;
 const MAX_SUGGESTION_ITEMS: usize = 50;
 const MAX_PROMPT_RESCUE_ITEMS: usize = 50;
@@ -208,6 +210,8 @@ pub(crate) struct SnapshotRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidate_limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_limit: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub wrap_limit: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion_limit: Option<usize>,
@@ -221,6 +225,33 @@ pub(crate) struct SnapshotRequest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct CandidateRequest {
     pub candidate_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct MemoryExportRequest {
+    pub format: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryExportResponse {
+    export: MemoryExportPayload,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MemoryExportPayload {
+    schema_version: u64,
+    format: String,
+    media_type: String,
+    extension: String,
+    file_name: String,
+    byte_count: u64,
+    content_digest: String,
+    fact_count: u64,
+    content: String,
+    action_capability: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -864,6 +895,22 @@ pub async fn get_snapshot(request: SnapshotRequest) -> Result<Value, DesktopErro
 pub async fn get_candidate(request: CandidateRequest) -> Result<Value, DesktopError> {
     validate_candidate_id(&request.candidate_id)?;
     invoke(Operation::CandidateGet, &request).await
+}
+
+#[tauri::command]
+pub async fn export_published_memory(
+    app: AppHandle,
+    request: MemoryExportRequest,
+) -> Result<Value, DesktopError> {
+    validate_memory_export_format(&request.format)?;
+    tauri::async_runtime::spawn_blocking(move || export_memory_blocking(&app, request))
+        .await
+        .map_err(|_| {
+            DesktopError::new(
+                "BRIDGE_UNAVAILABLE",
+                "The memory export worker stopped unexpectedly.",
+            )
+        })?
 }
 
 #[tauri::command]
@@ -1660,6 +1707,53 @@ fn export_resume_html_blocking(
     }))
 }
 
+fn export_memory_blocking(
+    app: &AppHandle,
+    request: MemoryExportRequest,
+) -> Result<Value, DesktopError> {
+    let params = checked_value(&request)?;
+    let value = bridge::call_blocking(Operation::MemoryExport, params)?;
+    let response: MemoryExportResponse = serde_json::from_value(value).map_err(|_| {
+        DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid memory export.",
+        )
+    })?;
+    validate_memory_export_payload(&response.export, &request)?;
+    let label = if request.format == "json" {
+        "JSON document"
+    } else {
+        "Markdown document"
+    };
+    let mut dialog = FileDialog::new()
+        .add_filter(label, &[response.export.extension.as_str()])
+        .set_can_create_directories(true)
+        .set_file_name(&response.export.file_name)
+        .set_title("Export a local copy of current memory");
+    if let Some(window) = app.get_webview_window("main") {
+        dialog = dialog.set_parent(&window);
+    }
+    let path = dialog
+        .save_file()
+        .ok_or_else(|| DesktopError::new("USER_CANCELLED", "Memory export was cancelled."))?;
+    validate_memory_export_path(&path, &response.export.extension)?;
+    write_new_memory_export(&path, response.export.content.as_bytes())?;
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(&response.export.file_name);
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "format": response.export.format,
+        "content_digest": response.export.content_digest,
+        "file_name": file_name,
+        "byte_count": response.export.byte_count,
+        "fact_count": response.export.fact_count,
+        "created": true,
+        "action_capability": "none",
+    }))
+}
+
 fn open_resume_json_blocking(app: &AppHandle) -> Result<Value, DesktopError> {
     let mut dialog = FileDialog::new()
         .add_filter("JSON Resume", &["json"])
@@ -2017,6 +2111,112 @@ fn validate_resume_export_path(path: &Path) -> Result<(), DesktopError> {
         return Err(DesktopError::new(
             "INVALID_EXPORT_PATH",
             "Résumé Rescue exports require a .html file name.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_memory_export_format(value: &str) -> Result<(), DesktopError> {
+    if !matches!(value, "json" | "markdown") {
+        return Err(DesktopError::invalid_request(
+            "Memory export format must be JSON or Markdown.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_memory_export_payload(
+    export: &MemoryExportPayload,
+    request: &MemoryExportRequest,
+) -> Result<(), DesktopError> {
+    let (expected_format, expected_media, expected_extension) = match request.format.as_str() {
+        "json" => (
+            "openchronicle_current_memory_json_v1",
+            "application/json",
+            "json",
+        ),
+        "markdown" => (
+            "openchronicle_current_memory_markdown_v1",
+            "text/markdown",
+            "md",
+        ),
+        _ => {
+            return Err(DesktopError::invalid_request(
+                "Memory export format is invalid.",
+            ))
+        }
+    };
+    let bytes = export.content.as_bytes();
+    let default_name_is_safe = Path::new(&export.file_name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value == export.file_name);
+    if export.schema_version != 1
+        || export.format != expected_format
+        || export.media_type != expected_media
+        || export.extension != expected_extension
+        || !default_name_is_safe
+        || !export
+            .file_name
+            .ends_with(&format!(".{expected_extension}"))
+        || export.byte_count as usize != bytes.len()
+        || bytes.len() > MAX_MEMORY_EXPORT_BYTES
+        || export.fact_count > 10_000
+        || export.action_capability != "save_local_copy"
+        || validate_resume_digest(&export.content_digest).is_err()
+        || !constant_time_equal(
+            export.content_digest.as_bytes(),
+            sha256_hex(bytes).as_bytes(),
+        )
+    {
+        return Err(DesktopError::new(
+            "BRIDGE_PROTOCOL_ERROR",
+            "The desktop bridge returned an invalid memory export.",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_memory_export_path(path: &Path, extension: &str) -> Result<(), DesktopError> {
+    if !path
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+    {
+        return Err(DesktopError::new(
+            "INVALID_EXPORT_PATH",
+            "The selected file name has the wrong memory export extension.",
+        ));
+    }
+    Ok(())
+}
+
+fn write_new_memory_export(path: &Path, content: &[u8]) -> Result<(), DesktopError> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(|error| {
+        if error.kind() == ErrorKind::AlreadyExists {
+            DesktopError::new(
+                "EXPORT_EXISTS",
+                "The selected export path already exists; choose a new file name.",
+            )
+        } else {
+            DesktopError::new("EXPORT_FAILED", "The memory export could not be created.")
+        }
+    })?;
+    if file
+        .write_all(content)
+        .and_then(|_| file.sync_all())
+        .is_err()
+    {
+        return Err(DesktopError::new(
+            "EXPORT_FAILED",
+            "The memory export could not be written.",
         ));
     }
     Ok(())
@@ -2912,6 +3112,9 @@ fn validate_snapshot(request: &SnapshotRequest) -> Result<(), DesktopError> {
             .candidate_limit
             .is_some_and(|limit| limit > MAX_CANDIDATE_ITEMS)
         || request
+            .memory_limit
+            .is_some_and(|limit| limit > MAX_MEMORY_ITEMS)
+        || request
             .wrap_limit
             .is_some_and(|limit| limit > MAX_WRAP_ITEMS)
         || request
@@ -3516,6 +3719,7 @@ mod tests {
         let valid = SnapshotRequest {
             timeline_limit: Some(MAX_TIMELINE_ITEMS),
             candidate_limit: Some(MAX_CANDIDATE_ITEMS),
+            memory_limit: Some(MAX_MEMORY_ITEMS),
             wrap_limit: Some(MAX_WRAP_ITEMS),
             suggestion_limit: Some(MAX_SUGGESTION_ITEMS),
             prompt_rescue_limit: Some(MAX_PROMPT_RESCUE_ITEMS),
@@ -3530,6 +3734,43 @@ mod tests {
         assert_eq!(
             validate_snapshot(&invalid).expect_err("must reject").code,
             "INVALID_REQUEST"
+        );
+    }
+
+    #[test]
+    fn memory_export_is_digest_bound_and_never_overwrites() {
+        let content = "# OpenChronicle Current Memory\n";
+        let request = MemoryExportRequest {
+            format: "markdown".to_owned(),
+        };
+        let mut payload = MemoryExportPayload {
+            schema_version: 1,
+            format: "openchronicle_current_memory_markdown_v1".to_owned(),
+            media_type: "text/markdown".to_owned(),
+            extension: "md".to_owned(),
+            file_name: "openchronicle-memory-2026-08-23.md".to_owned(),
+            byte_count: content.len() as u64,
+            content_digest: sha256_hex(content.as_bytes()),
+            fact_count: 1,
+            content: content.to_owned(),
+            action_capability: "save_local_copy".to_owned(),
+        };
+        assert!(validate_memory_export_payload(&payload, &request).is_ok());
+        payload.content_digest = "0".repeat(64);
+        assert!(validate_memory_export_payload(&payload, &request).is_err());
+
+        let directory = tempfile::tempdir().expect("temporary memory export directory");
+        let path = directory.path().join("memory.md");
+        write_new_memory_export(&path, content.as_bytes()).expect("new memory export");
+        assert_eq!(
+            std::fs::read(&path).expect("read export"),
+            content.as_bytes()
+        );
+        assert_eq!(
+            write_new_memory_export(&path, b"replacement")
+                .expect_err("memory export must not overwrite")
+                .code,
+            "EXPORT_EXISTS"
         );
     }
 

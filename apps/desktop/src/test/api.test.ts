@@ -49,8 +49,32 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks typed current-fact snapshots as bridge protocol v17", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(17);
+  it("tracks current-memory export as bridge protocol v18", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(18);
+  });
+
+  it("exports current memory through an explicit local save", async () => {
+    tauri.invoke.mockResolvedValue({
+      schema_version: 1,
+      format: "openchronicle_current_memory_markdown_v1",
+      content_digest: "c".repeat(64),
+      file_name: "openchronicle-memory-2026-08-23.md",
+      byte_count: 2_048,
+      fact_count: 3,
+      created: true,
+      action_capability: "none",
+    });
+
+    const result = await desktopApi.exportPublishedMemory("markdown");
+
+    expect(tauri.invoke).toHaveBeenCalledWith("export_published_memory", {
+      request: { format: "markdown" },
+    });
+    expect(result).toMatchObject({
+      format: "openchronicle_current_memory_markdown_v1",
+      fact_count: 3,
+      created: true,
+    });
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {

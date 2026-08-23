@@ -47,6 +47,7 @@ from openchronicle.services.memory import MemoryService
 from openchronicle.store import entries as entries_store
 from openchronicle.store import files as files_store
 from openchronicle.store import fts
+from openchronicle.store.facts import make_fact_metadata
 from openchronicle.suggestions.service import (
     WORK_RESUMPTION_NEXT_STEP,
     SuggestionKernel,
@@ -539,6 +540,65 @@ def test_snapshot_lists_only_current_non_event_published_memories(
     ]
     assert memories[0]["source_count"] == 1
     assert "SESSION_ONLY_SECRET" not in json.dumps(response, ensure_ascii=False)
+
+
+def test_memory_export_bridge_returns_local_save_payload(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        source_body = "Grounded bridge export source."
+        entries_store.create_file(
+            conn,
+            name="event-2026-08-22.md",
+            description="export evidence",
+            tags=["event"],
+        )
+        entries_store.append_entry_once(
+            conn,
+            name="event-2026-08-22.md",
+            content=source_body,
+            tags=["source"],
+            entry_id="bridge-export-source",
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+        )
+        entries_store.create_file(
+            conn,
+            name="user-export.md",
+            description="export source",
+            tags=["user"],
+        )
+        entries_store.append_entry_once(
+            conn,
+            name="user-export.md",
+            content="Export this current fact.",
+            tags=["export"],
+            entry_id="bridge-export-current",
+            evidence_refs=[
+                EvidenceRef(
+                    kind="memory_entry",
+                    id="bridge-export-source",
+                    path="event-2026-08-22.md",
+                    content_hash=content_digest(source_body),
+                )
+            ],
+            fact_metadata=make_fact_metadata(
+                subject_key="user.export.fact",
+                assertion_kind="user_asserted",
+            ),
+        )
+
+    response, exit_code = _request("memory.export", {"format": "json"})
+
+    assert exit_code == 0
+    exported = response["result"]["export"]
+    assert exported["format"] == "openchronicle_current_memory_json_v1"
+    assert exported["action_capability"] == "save_local_copy"
+    assert exported["fact_count"] == 1
+    assert exported["byte_count"] == len(exported["content"].encode())
+    assert hashlib.sha256(exported["content"].encode()).hexdigest() == exported[
+        "content_digest"
+    ]
+    assert json.loads(exported["content"])["facts"][0]["subject_key"] == (
+        "user.export.fact"
+    )
 
 
 def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(

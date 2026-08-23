@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 
+import type { DesktopApi } from "../api";
 import type { MemorySummary, SourceSubject } from "../contracts";
-import { formatDateTime, titleCase } from "../format";
+import { displayError, formatDateTime, titleCase } from "../format";
 import { StatusBadge } from "../components/StatusBadge";
 import { UntrustedText } from "../components/UntrustedText";
 
 interface MemoryPageProps {
+  api: DesktopApi;
   memories: MemorySummary[];
   onOpenSource: (subject: SourceSubject) => void;
 }
@@ -29,9 +31,12 @@ function memoryKey(memory: MemorySummary) {
   return `${memory.path}\u0000${memory.id}`;
 }
 
-export function MemoryPage({ memories, onOpenSource }: MemoryPageProps) {
+export function MemoryPage({ api, memories, onOpenSource }: MemoryPageProps) {
   const [scope, setScope] = useState<MemoryScope>("all");
   const [query, setQuery] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportNotice, setExportNotice] = useState("");
+  const [exportError, setExportError] = useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visible = useMemo(
     () =>
@@ -56,6 +61,20 @@ export function MemoryPage({ memories, onOpenSource }: MemoryPageProps) {
   }, [selectedKey, visible]);
 
   const selected = visible.find((memory) => memoryKey(memory) === selectedKey) ?? null;
+
+  async function exportMemory(format: "json" | "markdown") {
+    setExporting(true);
+    setExportNotice("");
+    setExportError("");
+    try {
+      const result = await api.exportPublishedMemory(format);
+      setExportNotice(`Saved ${result.fact_count} current fact(s) to ${result.file_name}.`);
+    } catch (reason) {
+      setExportError(displayError(reason));
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <main className="page page--split" id="main-content" tabIndex={-1}>
@@ -84,6 +103,26 @@ export function MemoryPage({ memories, onOpenSource }: MemoryPageProps) {
               </button>
             ))}
           </div>
+          <div className="button-row">
+            <button
+              className="button button--secondary"
+              disabled={exporting}
+              onClick={() => void exportMemory("json")}
+              type="button"
+            >
+              Export JSON…
+            </button>
+            <button
+              className="button button--secondary"
+              disabled={exporting}
+              onClick={() => void exportMemory("markdown")}
+              type="button"
+            >
+              Export Markdown…
+            </button>
+          </div>
+          {exportNotice ? <p className="success-banner" role="status">{exportNotice}</p> : null}
+          {exportError ? <p className="error-banner" role="alert">{exportError}</p> : null}
         </header>
         <ul className="collection-list">
           {visible.map((memory) => (

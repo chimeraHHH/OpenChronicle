@@ -38,13 +38,14 @@ from .services.capture_control import PauseStateConflict, set_paused
 from .services.context import ContextService
 from .services.evidence import EvidenceResolver
 from .services.memory import MemoryService, PurgeClosureUnverifiable, StalePurgePlan
+from .services.memory_export import build_current_memory_export
 from .services.snapshot import build_snapshot
 from .store import files as files_store
 from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 17
+PROTOCOL_VERSION = 18
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -174,6 +175,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "candidate.reject": _candidate_reject,
         "candidate.forget_preview": _candidate_forget_preview,
         "candidate.forget_commit": _candidate_forget_commit,
+        "memory.export": _memory_export,
         "wrap.get": _wrap_get,
         "suggestion.transition": _suggestion_transition,
         "prompt_rescue.get": _prompt_rescue_get,
@@ -956,6 +958,15 @@ def _candidate_get(params: dict[str, Any]) -> dict[str, Any]:
             for source in provenance_store.direct_sources(conn, ref)[:100]
         ]
         return {"candidate": _candidate_payload(candidate), "evidence": evidence}
+
+
+def _memory_export(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"format"})
+    export_format = _bounded_string(params["format"], 20, nonempty=True)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens).resume_pending_purges()
+        return {"export": build_current_memory_export(conn, cfg, format=export_format)}
 
 
 def _candidate_edit(params: dict[str, Any]) -> dict[str, Any]:
