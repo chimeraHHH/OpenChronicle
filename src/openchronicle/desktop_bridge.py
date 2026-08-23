@@ -39,13 +39,14 @@ from .services.context import ContextService
 from .services.evidence import EvidenceResolver
 from .services.memory import MemoryService, PurgeClosureUnverifiable, StalePurgePlan
 from .services.memory_export import build_current_memory_export
+from .services.published_memory import PublishedMemoryConflict, correct_current_fact
 from .services.snapshot import build_snapshot
 from .store import files as files_store
 from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 18
+PROTOCOL_VERSION = 19
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -122,6 +123,8 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         ), 2
     except PauseStateConflict:
         return _error("VERSION_CONFLICT", "The capture pause state changed."), 2
+    except PublishedMemoryConflict:
+        return _error("VERSION_CONFLICT", "The published memory changed."), 2
     except (ValueError, TypeError, ZoneInfoNotFoundError):
         return _error("INVALID_PARAMS", "The operation parameters are invalid."), 2
     except KeyError:
@@ -176,6 +179,7 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "candidate.forget_preview": _candidate_forget_preview,
         "candidate.forget_commit": _candidate_forget_commit,
         "memory.export": _memory_export,
+        "memory.correct": _memory_correct,
         "wrap.get": _wrap_get,
         "suggestion.transition": _suggestion_transition,
         "prompt_rescue.get": _prompt_rescue_get,
@@ -967,6 +971,41 @@ def _memory_export(params: dict[str, Any]) -> dict[str, Any]:
     with fts.cursor() as conn:
         MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens).resume_pending_purges()
         return {"export": build_current_memory_export(conn, cfg, format=export_format)}
+
+
+def _memory_correct(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(
+        params,
+        required={"path", "entry_id", "expected_revision", "content", "tags"},
+    )
+    path = _bounded_string(params["path"], 512, nonempty=True)
+    entry_id = _bounded_string(params["entry_id"], 128, nonempty=True)
+    expected_revision = _bounded_string(
+        params["expected_revision"],
+        64,
+        nonempty=True,
+    )
+    content = _bounded_string(params["content"], 20_000, nonempty=True)
+    tags = _string_list(params["tags"], max_items=100, max_length=100)
+    cfg = config_mod.load()
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens)
+        service.resume_pending_purges()
+        memory = correct_current_fact(
+            conn,
+            cfg,
+            path=path,
+            entry_id=entry_id,
+            expected_revision=expected_revision,
+            content=content,
+            tags=tags,
+        )
+        return {
+            "memory": {
+                **memory.to_dict(),
+                "timestamp": memory.recorded_at,
+            }
+        }
 
 
 def _candidate_edit(params: dict[str, Any]) -> dict[str, Any]:

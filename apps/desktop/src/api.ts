@@ -436,6 +436,8 @@ function memorySummary(value: unknown): MemorySummary {
   if (stringValue(raw.state, "published memory state") !== "current") {
     return protocolError("published memory state");
   }
+  const revision = stringValue(raw.revision, "published memory revision");
+  if (!/^[0-9a-f]{64}$/.test(revision)) return protocolError("published memory revision");
   return {
     id: stringValue(raw.id, "published memory id"),
     path: stringValue(raw.path, "published memory path"),
@@ -444,6 +446,7 @@ function memorySummary(value: unknown): MemorySummary {
     tags: stringArray(raw.tags, "published memory tags"),
     origin: stringValue(raw.origin, "published memory origin"),
     source_count: numberValue(raw.source_count, "published memory source count"),
+    revision,
     ...(subjectKey ? { subject_key: subjectKey } : {}),
     ...(assertionKind ? { assertion_kind: assertionKind } : {}),
     ...(validFrom ? { valid_from: validFrom } : {}),
@@ -3156,6 +3159,29 @@ export const desktopApi = {
       if (result.format !== expected) return protocolError("memory export format identity");
       return result;
     }),
+  correctPublishedMemory: (input: {
+    path: string;
+    entryId: string;
+    expectedRevision: string;
+    content: string;
+    tags: string[];
+  }) =>
+    request(
+      "correct_published_memory",
+      {
+        path: input.path,
+        entry_id: input.entryId,
+        expected_revision: input.expectedRevision,
+        content: input.content,
+        tags: input.tags,
+      },
+      (value) => {
+        const raw = objectValue(value, "published memory correction");
+        const memory = memorySummary(raw.memory);
+        if (memory.path !== input.path) return protocolError("memory correction path identity");
+        return memory;
+      },
+    ),
   editCandidate: (input: {
     candidateId: string;
     expectedVersion: number;

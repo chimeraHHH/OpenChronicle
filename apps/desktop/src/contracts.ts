@@ -11,9 +11,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 18 adds explicit local JSON/Markdown
-// export of the authorized current-memory projection.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 18 as const;
+// WebView result projection. Version 19 adds revision-bound direct correction
+// for canonical current memory while retaining the superseded entry history.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 19 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -728,6 +728,7 @@ export interface MemorySummary {
   tags: string[];
   origin: string;
   source_count: number;
+  revision: string;
   subject_key?: string;
   assertion_kind?: AssertionKind;
   valid_from?: string;

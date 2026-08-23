@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import json
 import os
 import re
 import sqlite3
@@ -642,6 +643,7 @@ def supersede_entry(
     new_entry_id: str | None = None,
     additional_evidence_refs: list[EvidenceRef] | None = None,
     fact_metadata: FactMetadata | None = None,
+    expected_old_revision: str | None = None,
 ) -> str:
     """Mark old entry superseded and append a provenance-linked replacement."""
     if new_entry_id is not None and not re.fullmatch(r"[a-zA-Z0-9-]+", new_entry_id):
@@ -658,6 +660,7 @@ def supersede_entry(
             new_entry_id=new_entry_id,
             additional_evidence_refs=additional_evidence_refs,
             fact_metadata=fact_metadata,
+            expected_old_revision=expected_old_revision,
         )
 
 
@@ -672,6 +675,7 @@ def _supersede_entry_locked(
     new_entry_id: str | None,
     additional_evidence_refs: list[EvidenceRef] | None,
     fact_metadata: FactMetadata | None,
+    expected_old_revision: str | None,
 ) -> str:
     require_autocommit(conn)
     path = files_mod.memory_path(name)
@@ -702,6 +706,11 @@ def _supersede_entry_locked(
             raise ValueError(f"entry {old_entry_id} not found in {path.name}")
         if not target.provenance_valid:
             raise ValueError(f"entry {old_entry_id} has an invalid provenance frame")
+        if (
+            expected_old_revision is not None
+            and memory_fact_revision(path=path.name, entry=target) != expected_old_revision
+        ):
+            raise ValueError(f"entry {old_entry_id} revision changed")
         existing_replacement = (
             next((entry for entry in parsed.entries if entry.id == new_entry_id), None)
             if new_entry_id is not None
@@ -1155,6 +1164,31 @@ def entry_index_content(entry: files_mod.ParsedEntry) -> str:
 def entry_index_superseded(entry: files_mod.ParsedEntry) -> int:
     """Return the canonical integer projection for FTS supersession state."""
     return 1 if (entry.superseded_by or _body_is_striked(entry.body)) else 0
+
+
+def memory_fact_revision(*, path: str, entry: files_mod.ParsedEntry) -> str:
+    """Stable CAS digest for the user-meaningful entry revision.
+
+    Supersede control markup is excluded so an idempotent correction retry can
+    still bind the original revision after the old body has been struck.
+    """
+    payload = {
+        "path": path,
+        "id": entry.id,
+        "timestamp": entry.timestamp,
+        "content": entry_index_content(entry),
+        "tags": [tag for tag in entry.tags if not tag.startswith("superseded-by:")],
+        "origin": entry.origin,
+        "fact": entry.fact_metadata.to_dict() if entry.fact_metadata else None,
+        "sources": [source.to_dict() for source in entry.evidence_refs],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def write_preset_files(conn: sqlite3.Connection) -> None:

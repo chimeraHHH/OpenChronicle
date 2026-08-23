@@ -49,8 +49,48 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks current-memory export as bridge protocol v18", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(18);
+  it("tracks revision-bound memory correction as bridge protocol v19", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(19);
+  });
+
+  it("corrects one published memory with a revision precondition", async () => {
+    tauri.invoke.mockResolvedValue({
+      memory: {
+        id: "me-corrected",
+        path: "user-preferences.md",
+        timestamp: "2026-08-23T12:00:00+08:00",
+        content: "User prefers encrypted local-first tools.",
+        tags: ["preference", "encrypted"],
+        origin: "derived-v1",
+        source_count: 1,
+        revision: "f".repeat(64),
+        subject_key: "user.tools.storage",
+        assertion_kind: "user_asserted",
+        valid_from: "2026-08-01",
+        valid_to: "",
+        state: "current",
+      },
+    });
+
+    const result = await desktopApi.correctPublishedMemory({
+      path: "user-preferences.md",
+      entryId: "published-current",
+      expectedRevision: "e".repeat(64),
+      content: "User prefers encrypted local-first tools.",
+      tags: ["preference", "encrypted"],
+    });
+
+    expect(tauri.invoke).toHaveBeenCalledWith("correct_published_memory", {
+      request: {
+        path: "user-preferences.md",
+        entry_id: "published-current",
+        expected_revision: "e".repeat(64),
+        content: "User prefers encrypted local-first tools.",
+        tags: ["preference", "encrypted"],
+      },
+    });
+    expect(result.id).toBe("me-corrected");
+    expect(result.revision).toBe("f".repeat(64));
   });
 
   it("exports current memory through an explicit local save", async () => {

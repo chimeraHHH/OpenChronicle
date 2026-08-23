@@ -34,11 +34,12 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v18** cumulatively
+The bridge protocol is versioned and allowlisted. Protocol **v19** cumulatively
 includes immutable Daily Wrap reads, side-effect-free suggestions, Prompt and
 Reply Rescue review, exact-selection receipts, reviewed résumé source/import
 flows, deterministic preview/export, supervised résumé proposal review, a
-bounded typed current-fact snapshot, and explicit local current-memory export.
+bounded typed current-fact snapshot, explicit local current-memory export, and
+revision-bound direct correction with retained history.
 Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:
@@ -48,6 +49,8 @@ only:
   Wrap summaries;
 - user-triggered JSON or Markdown export of the authorized current-memory view
   to a newly created local file; no model or network call is involved;
+- direct user-authored correction of one current memory, guarded by its stable
+  revision digest and published as a provenance-linked superseding entry;
 - one candidate read/edit/approve/reject operation with optimistic version
   checking;
 - two-phase permanent forget with a version- and closure-bound plan digest;
@@ -143,12 +146,14 @@ navigate, invoke Tauri, or create a link.
 
 ## Published Memory / About Me
 
-The Memory page is an inspect-only projection of current, authorized entries
-from active non-`event-*` Markdown files. It supports local text filtering and
-About Me/project scopes, and opens the exact entry's source lineage in the
-existing drawer. Superseded entries and reducer-owned session logs are excluded
-from the current view; the canonical Markdown history remains intact. New facts
-and corrections continue through the Review Inbox.
+The Memory page projects current, authorized entries from active non-`event-*`
+Markdown files. It supports local text filtering and About Me/project scopes,
+opens exact source lineage, exports the current view, and lets the user directly
+correct content or tags. A correction uses an optimistic revision precondition,
+creates a deterministic provenance-linked replacement, and retains the old
+value as superseded canonical history; it does not call a model or network.
+Reducer-owned session logs are excluded. Model-generated new facts continue
+through the Review Inbox.
 
 ## Tauri security profile
 

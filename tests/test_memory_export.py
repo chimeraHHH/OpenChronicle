@@ -89,6 +89,7 @@ def test_json_current_memory_export_is_complete_and_digest_bound(ac_root: Path) 
             "origin": "derived-v1",
             "path": "user-preferences.md",
             "recorded_at": payload["facts"][0]["recorded_at"],
+            "revision": payload["facts"][0]["revision"],
             "source_count": 1,
             "state": "current",
             "subject_key": "user.tools.storage",
@@ -97,6 +98,7 @@ def test_json_current_memory_export_is_complete_and_digest_bound(ac_root: Path) 
             "valid_to": "",
         }
     ]
+    assert len(payload["facts"][0]["revision"]) == 64
     encoded = content.encode()
     assert exported["byte_count"] == len(encoded)
     assert exported["content_digest"] == hashlib.sha256(encoded).hexdigest()

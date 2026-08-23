@@ -2,6 +2,7 @@ const COMMANDS: &[&str] = &[
     "get_snapshot",
     "get_candidate",
     "export_published_memory",
+    "correct_published_memory",
     "edit_candidate",
     "approve_candidate",
     "reject_candidate",

@@ -25,6 +25,7 @@ description = "Explicit, candidate-scoped review and capture-pause mutations."
 permissions = [
   "allow-edit-candidate",
   "allow-export-published-memory",
+  "allow-correct-published-memory",
   "allow-approve-candidate",
   "allow-reject-candidate",
   "allow-forget-candidate",

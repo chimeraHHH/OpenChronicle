@@ -93,6 +93,14 @@ model call; the native shell validates the closed payload and writes a new
 private local file only after the user chooses a save path. Export never uploads
 or changes the canonical memory store.
 
+Published Memory also supports a direct user correction path. The form submits
+the selected entry's stable revision digest with edited content and tags. A
+matching request deterministically supersedes the old canonical entry, retains
+that entry as provenance-linked history, and preserves typed subject, assertion,
+and valid-time metadata. A concurrent Markdown change produces a version
+conflict instead of an overwrite. This path is entirely local and does not use
+a model.
+
 Proposal creation revalidates every cited source while holding an immediate
 SQLite write transaction. The candidate row, conflict decision, and provenance
 edges commit atomically; a matching replay can repair a missing edge left by a

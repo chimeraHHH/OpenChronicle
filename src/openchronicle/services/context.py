@@ -810,9 +810,7 @@ class ContextService:
                     memo[cache_key] = (False, False)
                     return False, False
                 if not embedded:
-                    manual_allowed = (
-                        not entry.provenance_present and self._manual_memory_ref_allowed(source)
-                    )
+                    manual_allowed = self._manual_memory_ref_allowed(source)
                     result = (manual_allowed, manual_allowed)
                     memo[cache_key] = result
                     return result
@@ -943,10 +941,13 @@ class ContextService:
         entry = next((item for item in parsed.entries if item.id == source.id), None)
         return bool(
             entry is not None
-            and not entry.provenance_present
             and entry.provenance_valid
             and entry.origin_valid
             and entry.origin == files_store.MANUAL_ENTRY_ORIGIN
+            and (
+                not entry.provenance_present
+                or (entry.fact_metadata is not None and not entry.evidence_refs)
+            )
             and source.content_hash
             and content_digest(entry.body) == source.content_hash
         )

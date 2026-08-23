@@ -28,6 +28,7 @@ class CurrentFact:
     assertion_kind: str
     valid_from: str
     valid_to: str
+    revision: str
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -42,6 +43,7 @@ class CurrentFact:
             "assertion_kind": self.assertion_kind,
             "valid_from": self.valid_from,
             "valid_to": self.valid_to,
+            "revision": self.revision,
             "state": "current",
         }
 
@@ -106,6 +108,10 @@ def list_current_facts(
                     assertion_kind=metadata.assertion_kind if metadata else "",
                     valid_from=metadata.valid_from if metadata else "",
                     valid_to=metadata.valid_to if metadata else "",
+                    revision=entries_store.memory_fact_revision(
+                        path=parsed.path.name,
+                        entry=entry,
+                    ),
                 )
             )
     result.sort(key=lambda fact: (fact.recorded_at, fact.path, fact.id), reverse=True)

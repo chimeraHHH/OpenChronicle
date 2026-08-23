@@ -9,6 +9,7 @@ import { UntrustedText } from "../components/UntrustedText";
 interface MemoryPageProps {
   api: DesktopApi;
   memories: MemorySummary[];
+  onChanged: () => Promise<void>;
   onOpenSource: (subject: SourceSubject) => void;
 }
 
@@ -31,12 +32,18 @@ function memoryKey(memory: MemorySummary) {
   return `${memory.path}\u0000${memory.id}`;
 }
 
-export function MemoryPage({ api, memories, onOpenSource }: MemoryPageProps) {
+export function MemoryPage({ api, memories, onChanged, onOpenSource }: MemoryPageProps) {
   const [scope, setScope] = useState<MemoryScope>("all");
   const [query, setQuery] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportNotice, setExportNotice] = useState("");
   const [exportError, setExportError] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [editContent, setEditContent] = useState("");
+  const [editTags, setEditTags] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [editNotice, setEditNotice] = useState("");
+  const [editError, setEditError] = useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase();
   const visible = useMemo(
     () =>
@@ -62,6 +69,13 @@ export function MemoryPage({ api, memories, onOpenSource }: MemoryPageProps) {
 
   const selected = visible.find((memory) => memoryKey(memory) === selectedKey) ?? null;
 
+  useEffect(() => {
+    setEditing(false);
+    setEditContent(selected?.content ?? "");
+    setEditTags(selected?.tags.join(", ") ?? "");
+    setEditError("");
+  }, [selected?.id, selected?.path, selected?.revision]);
+
   async function exportMemory(format: "json" | "markdown") {
     setExporting(true);
     setExportNotice("");
@@ -73,6 +87,38 @@ export function MemoryPage({ api, memories, onOpenSource }: MemoryPageProps) {
       setExportError(displayError(reason));
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function saveCorrection() {
+    if (!selected) return;
+    setSaving(true);
+    setEditNotice("");
+    setEditError("");
+    try {
+      await api.correctPublishedMemory({
+        path: selected.path,
+        entryId: selected.id,
+        expectedRevision: selected.revision,
+        content: editContent,
+        tags: editTags
+          .split(",")
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+      });
+      setEditing(false);
+      try {
+        await onChanged();
+        setEditNotice("Correction published locally. The prior value remains in history.");
+      } catch {
+        setEditNotice(
+          "Correction published locally, but the current-memory view could not be refreshed.",
+        );
+      }
+    } catch (reason) {
+      setEditError(displayError(reason));
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -130,7 +176,10 @@ export function MemoryPage({ api, memories, onOpenSource }: MemoryPageProps) {
               <button
                 aria-current={selectedKey === memoryKey(memory) ? "true" : undefined}
                 className="collection-list__button"
-                onClick={() => setSelectedKey(memoryKey(memory))}
+                onClick={() => {
+                  setEditNotice("");
+                  setSelectedKey(memoryKey(memory));
+                }}
                 type="button"
               >
                 <span className="collection-list__topline">
@@ -171,10 +220,56 @@ export function MemoryPage({ api, memories, onOpenSource }: MemoryPageProps) {
 
             <section aria-labelledby="remembered-content-heading">
               <h3 id="remembered-content-heading">Remembered fact</h3>
-              <UntrustedText as="pre" className="proposal-text">
-                {selected.content}
-              </UntrustedText>
+              {editing ? (
+                <div className="edit-form">
+                  <label>
+                    Corrected fact
+                    <textarea
+                      maxLength={20_000}
+                      onChange={(event) => setEditContent(event.currentTarget.value)}
+                      rows={7}
+                      value={editContent}
+                    />
+                  </label>
+                  <label>
+                    Tags (comma separated)
+                    <input
+                      onChange={(event) => setEditTags(event.currentTarget.value)}
+                      value={editTags}
+                    />
+                  </label>
+                  <p className="trust-note">
+                    Saving creates a new current version and keeps this version in local history.
+                    No model or network is used.
+                  </p>
+                  <div className="button-row">
+                    <button
+                      className="button button--primary"
+                      disabled={saving || editContent.trim().length === 0}
+                      onClick={() => void saveCorrection()}
+                      type="button"
+                    >
+                      {saving ? "Saving…" : "Save correction"}
+                    </button>
+                    <button
+                      className="button button--ghost"
+                      disabled={saving}
+                      onClick={() => setEditing(false)}
+                      type="button"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <UntrustedText as="pre" className="proposal-text">
+                  {selected.content}
+                </UntrustedText>
+              )}
             </section>
+
+            {editNotice ? <p className="success-banner" role="status">{editNotice}</p> : null}
+            {editError ? <p className="error-banner" role="alert">{editError}</p> : null}
 
             <dl className="definition-grid">
               <dt>File</dt>
@@ -213,6 +308,20 @@ export function MemoryPage({ api, memories, onOpenSource }: MemoryPageProps) {
 
             <div className="button-row">
               <button
+                className="button button--primary"
+                disabled={editing}
+                onClick={() => {
+                  setEditNotice("");
+                  setEditError("");
+                  setEditContent(selected.content);
+                  setEditTags(selected.tags.join(", "));
+                  setEditing(true);
+                }}
+                type="button"
+              >
+                Correct memory
+              </button>
+              <button
                 className="button button--secondary"
                 onClick={() =>
                   onOpenSource({
@@ -228,8 +337,8 @@ export function MemoryPage({ api, memories, onOpenSource }: MemoryPageProps) {
               </button>
             </div>
             <p className="boundary-note">
-              This page is inspect-only. New facts and corrections still go through the Review
-              Inbox; no external application is changed.
+              Corrections are direct user-authored local revisions. Model-generated new facts still
+              go through the Review Inbox; no external application is changed.
             </p>
           </>
         ) : (

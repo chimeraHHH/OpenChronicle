@@ -30,6 +30,7 @@ import {
   forgetPreview,
   jsonResumeExport,
   maliciousText,
+  memorySummary,
   openedJsonResumeReview,
   openedResumeDocumentReview,
   provenanceTrace,
@@ -64,6 +65,16 @@ function commandResult(command: string) {
       fact_count: 1,
       created: true,
       action_capability: "none",
+    };
+  }
+  if (command === "correct_published_memory") {
+    return {
+      memory: memorySummary({
+        id: "me-corrected",
+        content: "User prefers encrypted local-first tools.",
+        tags: ["preference", "encrypted"],
+        revision: "f".repeat(64),
+      }),
     };
   }
   if (command === "get_daily_wrap") return bridgeWrapGet();
@@ -218,6 +229,26 @@ describe("trusted console", () => {
     expect(screen.getByText("user.communication.report-style")).toBeInTheDocument();
     expect(screen.getByText("User Asserted")).toBeInTheDocument();
     expect(screen.getByText(/2026-08-08T08:00:00\+08:00.*Open end/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Correct memory" }));
+    const correction = screen.getByRole("textbox", { name: "Corrected fact" });
+    await user.clear(correction);
+    await user.type(correction, "User prefers encrypted local-first tools.");
+    const tags = screen.getByRole("textbox", { name: "Tags (comma separated)" });
+    await user.clear(tags);
+    await user.type(tags, "preference, encrypted");
+    expect(screen.getByText(/No model or network is used/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Save correction" }));
+    expect(await screen.findByText(/prior value remains in history/i)).toBeInTheDocument();
+    expect(tauri.invoke).toHaveBeenCalledWith("correct_published_memory", {
+      request: {
+        path: "user-preferences.md",
+        entry_id: "memory-entry-1",
+        expected_revision: "e".repeat(64),
+        content: "User prefers encrypted local-first tools.",
+        tags: ["preference", "encrypted"],
+      },
+    });
 
     await user.click(screen.getByRole("button", { name: "Export JSON…" }));
     expect(await screen.findByText(/Saved 1 current fact.*openchronicle-memory/i)).toBeInTheDocument();

@@ -233,6 +233,16 @@ pub(crate) struct MemoryExportRequest {
     pub format: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CorrectMemoryRequest {
+    pub path: String,
+    pub entry_id: String,
+    pub expected_revision: String,
+    pub content: String,
+    pub tags: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MemoryExportResponse {
@@ -911,6 +921,14 @@ pub async fn export_published_memory(
                 "The memory export worker stopped unexpectedly.",
             )
         })?
+}
+
+#[tauri::command]
+pub async fn correct_published_memory(
+    request: CorrectMemoryRequest,
+) -> Result<Value, DesktopError> {
+    validate_correct_memory(&request)?;
+    invoke(Operation::MemoryCorrect, &request).await
 }
 
 #[tauri::command]
@@ -2121,6 +2139,49 @@ fn validate_memory_export_format(value: &str) -> Result<(), DesktopError> {
         return Err(DesktopError::invalid_request(
             "Memory export format must be JSON or Markdown.",
         ));
+    }
+    Ok(())
+}
+
+fn validate_correct_memory(request: &CorrectMemoryRequest) -> Result<(), DesktopError> {
+    validate_bounded_text(&request.path, 512, false)?;
+    if !request.path.ends_with(".md")
+        || request.path.starts_with("event-")
+        || request.path.contains('/')
+        || request.path.contains('\\')
+    {
+        return Err(DesktopError::invalid_request(
+            "The published memory path is invalid.",
+        ));
+    }
+    if request.entry_id.is_empty()
+        || request.entry_id.len() > MAX_CANDIDATE_ID_CHARS
+        || !request
+            .entry_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(DesktopError::invalid_request(
+            "The published memory entry ID is invalid.",
+        ));
+    }
+    validate_digest(&request.expected_revision)?;
+    validate_multiline_text(&request.content, MAX_CONTENT_CHARS, false)?;
+    if request.tags.len() > MAX_TAGS {
+        return Err(DesktopError::invalid_request(
+            "The published memory has too many tags.",
+        ));
+    }
+    for tag in &request.tags {
+        validate_bounded_text(tag, MAX_TAG_CHARS, false)?;
+        if tag.chars().any(char::is_whitespace)
+            || tag.starts_with("superseded-by:")
+            || tag.starts_with("oc-origin:")
+        {
+            return Err(DesktopError::invalid_request(
+                "A published memory tag is invalid.",
+            ));
+        }
     }
     Ok(())
 }
@@ -4689,6 +4750,44 @@ mod tests {
             ..request
         };
         assert!(validate_edit_candidate(&too_many_tags).is_err());
+    }
+
+    #[test]
+    fn published_memory_correction_is_revision_bound_and_closed() {
+        let request = CorrectMemoryRequest {
+            path: "user-preferences.md".to_owned(),
+            entry_id: "published-current".to_owned(),
+            expected_revision: "e".repeat(64),
+            content: "User prefers concise status reports.".to_owned(),
+            tags: vec!["preference".to_owned(), "concise".to_owned()],
+        };
+        assert!(validate_correct_memory(&request).is_ok());
+
+        let stale_shape = CorrectMemoryRequest {
+            expected_revision: "not-a-digest".to_owned(),
+            ..request
+        };
+        assert!(validate_correct_memory(&stale_shape).is_err());
+
+        let reserved_tag = CorrectMemoryRequest {
+            path: "user-preferences.md".to_owned(),
+            entry_id: "published-current".to_owned(),
+            expected_revision: "e".repeat(64),
+            content: "Changed.".to_owned(),
+            tags: vec!["superseded-by:forged".to_owned()],
+        };
+        assert!(validate_correct_memory(&reserved_tag).is_err());
+        assert!(
+            serde_json::from_value::<CorrectMemoryRequest>(serde_json::json!({
+                "path": "user-preferences.md",
+                "entry_id": "published-current",
+                "expected_revision": "e".repeat(64),
+                "content": "Changed.",
+                "tags": [],
+                "unexpected": true
+            }))
+            .is_err()
+        );
     }
 
     #[test]

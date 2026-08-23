@@ -102,6 +102,7 @@ export function memorySummary(overrides: Partial<MemorySummary> = {}): MemorySum
     tags: ["preference", "local-first"],
     origin: "derived-v1",
     source_count: 2,
+    revision: "e".repeat(64),
     subject_key: "user.communication.report-style",
     assertion_kind: "user_asserted",
     valid_from: "2026-08-08T08:00:00+08:00",

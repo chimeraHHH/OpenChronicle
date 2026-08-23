@@ -601,6 +601,67 @@ def test_memory_export_bridge_returns_local_save_payload(ac_root: Path) -> None:
     )
 
 
+def test_memory_correction_bridge_preserves_history_and_is_revision_bound(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        entries_store.create_file(
+            conn,
+            name="user-correction.md",
+            description="direct correction",
+            tags=["user"],
+        )
+        entries_store.append_entry_once(
+            conn,
+            name="user-correction.md",
+            content="User prefers short status reports.",
+            tags=["preference"],
+            entry_id="bridge-correction-original",
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+            fact_metadata=make_fact_metadata(
+                subject_key="user.reporting.length",
+                assertion_kind="user_asserted",
+            ),
+        )
+        revision = entries_store.memory_fact_revision(
+            path="user-correction.md",
+            entry=files_store.read_file(
+                files_store.memory_path("user-correction.md")
+            ).entries[0],
+        )
+
+    response, exit_code = _request(
+        "memory.correct",
+        {
+            "path": "user-correction.md",
+            "entry_id": "bridge-correction-original",
+            "expected_revision": revision,
+            "content": "User prefers concise status reports.",
+            "tags": ["preference", "concise"],
+        },
+    )
+
+    assert exit_code == 0
+    memory = response["result"]["memory"]
+    assert memory["id"].startswith("me-")
+    assert memory["content"] == "User prefers concise status reports."
+    assert memory["subject_key"] == "user.reporting.length"
+    assert len(memory["revision"]) == 64
+
+    stale, stale_code = _request(
+        "memory.correct",
+        {
+            "path": "user-correction.md",
+            "entry_id": "bridge-correction-original",
+            "expected_revision": "0" * 64,
+            "content": "A stale edit.",
+            "tags": ["stale"],
+        },
+    )
+    assert stale_code == 2
+    assert stale["error"]["code"] == "VERSION_CONFLICT"
+
+
 def test_prompt_rescue_bridge_is_manual_review_only_and_cas_bound(
     ac_root: Path,
     monkeypatch: pytest.MonkeyPatch,
