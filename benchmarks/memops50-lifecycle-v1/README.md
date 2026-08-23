@@ -107,3 +107,8 @@ tentative branch are also treated as evidence-only confirmations rather than
 fake state changes. This normalization is specific to OpenChronicle's
 state-changing decision contract and is not presented as the official MemOps
 operation score.
+
+The first clean Sol run and its scorer audit are recorded in
+[analysis/decisions-c941895-gpt-5.6-sol-v1.md](analysis/decisions-c941895-gpt-5.6-sol-v1.md).
+The raw report is
+[`results/decisions-c941895-gpt-5.6-sol.json`](results/decisions-c941895-gpt-5.6-sol.json).
