@@ -83,6 +83,29 @@ def test_duplicate_current_slots_are_counted_instead_of_hidden(
     assert report["ingest"]["unique_current_slot_count"] == 2
     assert report["ingest"]["duplicate_current_slot_count"] == 1
     assert report["ingest"]["current_slot_consistency"] < 1.0
+    repository = Path(__file__).resolve().parents[1]
+    gates = json.loads(
+        (
+            repository
+            / "benchmarks"
+            / "memoryagentbench-factconsolidation-v1"
+            / "json"
+            / "metric_contract.json"
+        ).read_text(encoding="utf-8")
+    )["gates"]
+    gates.update(
+        accepted_count=4,
+        current_fact_count=3,
+        unique_current_slot_count=2,
+        history_entry_count=4,
+    )
+    verdict = mab._gate_verdict(  # noqa: SLF001 - gate regression test
+        report,
+        gates,
+        repository_clean=True,
+    )
+    assert verdict["checks"]["duplicate_current_slot_count"] is False
+    assert verdict["passed"] is False
 
 
 def test_prediction_with_current_and_historical_values_is_stale() -> None:
@@ -106,6 +129,45 @@ def test_prediction_with_current_and_historical_values_is_stale() -> None:
     assert result["stale_value_rate"] == 0.5
     assert result["contradiction_rate"] == 0.5
     assert result["contradiction_free_accuracy"] == 0.5
+
+
+def test_exact_old_value_is_stale_when_current_value_contains_it() -> None:
+    sample = mab.SourceSample(
+        context="\n".join(
+            [
+                "Here is a list of facts:",
+                "0. The capital of Example is York.",
+                "1. The capital of Example is New York.",
+            ]
+        ),
+        questions=("What is the capital of Example?",),
+        answers=(("New York",),),
+        qa_pair_ids=("synthetic-substring",),
+        source="synthetic",
+    )
+    questions = tuple(mab.parse_question(question) for question in sample.questions)
+    facts = mab.parse_context(sample.context)
+    histories: dict[tuple[str, str], list[str]] = {}
+    for fact in facts:
+        histories.setdefault(fact.slot, []).append(fact.value)
+
+    stale = mab._evaluate_variant(  # noqa: SLF001 - metric regression test
+        sample,
+        questions,
+        histories,
+        answer=lambda _question: "York",
+    )
+    current = mab._evaluate_variant(  # noqa: SLF001 - metric regression test
+        sample,
+        questions,
+        histories,
+        answer=lambda _question: "New York",
+    )
+
+    assert stale["accuracy"] == 0.0
+    assert stale["stale_value_rate"] == 1.0
+    assert current["accuracy"] == 1.0
+    assert current["stale_value_rate"] == 0.0
 
 
 def test_bm25_top1_does_not_use_the_slot_oracle(

@@ -596,12 +596,16 @@ def _evaluate_variant(
         correct = any(substring_exact_match(prediction, gold) for gold in golds)
         stale_values = histories[question.slot][:-1]
         normalized_golds = {normalize_answer(gold) for gold in golds}
+        normalized_prediction = normalize_answer(prediction)
         stale = any(
-            not any(
-                f" {normalized_value} " in f" {normalized_gold} "
-                for normalized_gold in normalized_golds
+            normalized_prediction == normalized_value
+            or (
+                not any(
+                    f" {normalized_value} " in f" {normalized_gold} "
+                    for normalized_gold in normalized_golds
+                )
+                and _normalized_phrase_in_prediction(prediction, normalized_value)
             )
-            and _normalized_phrase_in_prediction(prediction, normalized_value)
             for value in stale_values
             if (normalized_value := normalize_answer(value))
         )
