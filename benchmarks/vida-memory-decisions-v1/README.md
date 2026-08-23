@@ -50,3 +50,19 @@ update chains, but is not the full MemOps question/judge pipeline.
 
 The first clean official-data smoke result is recorded in
 [analysis/official-memops-smoke-2026-08-23.md](analysis/official-memops-smoke-2026-08-23.md).
+
+## Repeated-run stability
+
+`official_memops_stability_contract.json` freezes a three-or-more-run gate for
+the same clean repository commit, dataset/contract digests, provider/model, and
+inert action capability. After producing repeated decision reports outside the
+worktree, aggregate them with:
+
+```bash
+uv run python scripts/run_vida_memory_decision_stability.py \
+  /tmp/memops-run-1.json /tmp/memops-run-2.json /tmp/memops-run-3.json
+```
+
+The aggregate records metric min/max/mean/stdev, provider/parse failures,
+per-case exact decision signatures, and whole-run signature diversity. It does
+not rerun or judge the model and cannot execute predicted operations.
