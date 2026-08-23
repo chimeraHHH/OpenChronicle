@@ -275,6 +275,9 @@ def _parse_payload(
         operation_type = raw_operation.get("type")
         target = raw_operation.get("target")
         spans = raw_operation.get("evidence_spans")
+        trigger_span = raw_operation.get("trigger_span")
+        if operation_type != "reflect" and isinstance(trigger_span, dict):
+            spans = [trigger_span]
         if (
             not isinstance(operation_id, str)
             or not operation_id

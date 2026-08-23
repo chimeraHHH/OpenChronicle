@@ -199,6 +199,69 @@ def test_memops_adapter_treats_post_tentative_reaffirmation_as_state_neutral() -
     assert case.gold_operations[0].new_value == "Zed"
 
 
+def test_memops_adapter_uses_trigger_only_for_update_and_full_support_for_reflect() -> None:
+    sample = {
+        "conversations": [
+            {
+                "segment_index": 1,
+                "dialogue": [
+                    {"role": "user", "content": "My editor is Zed."},
+                    {"role": "user", "content": "I changed it to Nova."},
+                ],
+            },
+            {
+                "segment_index": 2,
+                "dialogue": [
+                    {"role": "user", "content": "I consistently prefer minimal editors."},
+                ],
+            },
+        ],
+        "operations": [
+            {
+                "type": "remember",
+                "validity": "confirmed",
+                "target": {"target_id": "editor", "target_name": "editor"},
+                "old_value": None,
+                "new_value": "Zed",
+                "trigger_span": {"segment_index": 1, "turn_index": 1},
+                "evidence_spans": [{"segment_index": 1, "turn_index": 1}],
+            },
+            {
+                "type": "update",
+                "validity": "confirmed",
+                "target": {"target_id": "editor", "target_name": "editor"},
+                "old_value": "Zed",
+                "new_value": "Nova",
+                "trigger_span": {"segment_index": 1, "turn_index": 2},
+                "evidence_spans": [
+                    {"segment_index": 1, "turn_index": 1},
+                    {"segment_index": 1, "turn_index": 2},
+                ],
+            },
+            {
+                "type": "reflect",
+                "validity": "confirmed",
+                "target": {"target_id": "editor_pattern", "target_name": "editor pattern"},
+                "old_value": None,
+                "new_value": "prefers minimal editors",
+                "trigger_span": {"segment_index": 2, "turn_index": 1},
+                "evidence_spans": [
+                    {"segment_index": 1, "turn_index": 1},
+                    {"segment_index": 2, "turn_index": 1},
+                ],
+            },
+        ],
+    }
+
+    case = vida_memory_decisions.adapt_memops_sample(sample, case_id="trigger-support")
+
+    assert case.gold_operations[1].evidence_ids == ("segment-1-turn-2",)
+    assert case.gold_operations[2].evidence_ids == (
+        "segment-1-turn-1",
+        "segment-2-turn-1",
+    )
+
+
 def test_memops_manifest_pins_external_clone_and_preserves_update_chain(tmp_path: Path) -> None:
     repository, _, _ = _paths()
     clone = tmp_path / "MemOps"

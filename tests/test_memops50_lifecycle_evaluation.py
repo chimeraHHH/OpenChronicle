@@ -120,7 +120,11 @@ def test_memops50_parser_excludes_tentative_state_but_keeps_confirmation() -> No
                 "validity": "confirmed",
                 "target": {"target_id": "setting", "target_name": "setting"},
                 "new_value": "alpha",
-                "evidence_spans": [{"segment_index": 1, "turn_index": 3}],
+                "trigger_span": {"segment_index": 1, "turn_index": 3},
+                "evidence_spans": [
+                    {"segment_index": 1, "turn_index": 1},
+                    {"segment_index": 1, "turn_index": 3},
+                ],
             },
         ],
     }
@@ -130,3 +134,4 @@ def test_memops50_parser_excludes_tentative_state_but_keeps_confirmation() -> No
     assert len(evidence) == 3
     assert [operation.id for operation in operations] == ["op1", "op3"]
     assert [operation.new_value for operation in operations] == ["alpha", "alpha"]
+    assert operations[1].evidence_ids == ("segment-1-turn-3",)

@@ -169,6 +169,9 @@ def adapt_memops_sample(payload: object, *, case_id: str) -> DecisionCase:
         old_value = _optional_text(raw_operation.get("old_value"), 5_000)
         new_value = _optional_text(raw_operation.get("new_value"), 5_000)
         spans = raw_operation.get("evidence_spans")
+        trigger_span = raw_operation.get("trigger_span")
+        if operation_type != "reflect" and isinstance(trigger_span, dict):
+            spans = [trigger_span]
         if not isinstance(spans, list) or not spans:
             raise ValueError("MemOps operation evidence is missing")
         operation_evidence: list[str] = []
