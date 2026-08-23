@@ -57,7 +57,7 @@ def load_cases(
     *,
     manifest_path: Path,
     memops_root: Path,
-    exclusion_path: Path | None = None,
+    exclusion_paths: tuple[Path, ...] = (),
 ) -> tuple[RetrievalCase, ...]:
     """Load 50 digest-verified adjacent/longitudinal retrieval pairs."""
     manifest = memops50._load_json(
@@ -70,7 +70,7 @@ def load_cases(
         manifest=manifest,
         manifest_path=manifest_path,
         memops_root=memops_root,
-        exclusion_path=exclusion_path,
+        exclusion_paths=exclusion_paths,
     )
     root = memops_root.resolve()
     stage2_root = root / memops50.STAGE2_ROOT
@@ -111,12 +111,12 @@ def run_evaluation(
     memops_root: Path,
     metric_contract_path: Path,
     repository_root: Path,
-    exclusion_path: Path | None = None,
+    exclusion_paths: tuple[Path, ...] = (),
 ) -> dict[str, Any]:
     cases = load_cases(
         manifest_path=manifest_path,
         memops_root=memops_root,
-        exclusion_path=exclusion_path,
+        exclusion_paths=exclusion_paths,
     )
     manifest = memops50._load_json(manifest_path.read_bytes(), label="MemOps-50 manifest")
     if not isinstance(manifest, dict) or not isinstance(manifest.get("tier_id"), str):
@@ -211,7 +211,7 @@ def _verify_tier_manifest(
     manifest: dict[str, Any],
     manifest_path: Path,
     memops_root: Path,
-    exclusion_path: Path | None,
+    exclusion_paths: tuple[Path, ...],
 ) -> tuple[str, dict[str, int]]:
     tier_id = manifest.get("tier_id")
     if tier_id == "memops50-adjacent-longitudinal-v1":
@@ -226,19 +226,34 @@ def _verify_tier_manifest(
             "gold_segment_count": 110,
         }
     if tier_id == "memops50-heldout-adjacent-longitudinal-v1":
-        if exclusion_path is None:
-            raise ValueError("held-out MemOps-50 verification requires --exclusion")
+        if len(exclusion_paths) != 1:
+            raise ValueError("held-out MemOps-50 verification requires one --exclusion")
         from . import memops50_heldout
 
         memops50_heldout.verify_manifest(
             manifest_path=manifest_path,
-            exclusion_path=exclusion_path,
+            exclusion_path=exclusion_paths[0],
             memops_root=memops_root,
         )
         expected = manifest.get("retrieval_expected")
         if expected != memops50_heldout.RETRIEVAL_EXPECTED:
             raise ValueError("held-out MemOps-50 retrieval expectations changed")
         return tier_id, dict(memops50_heldout.RETRIEVAL_EXPECTED)
+    if tier_id == "memops50-validation-adjacent-longitudinal-v1":
+        if len(exclusion_paths) != 2:
+            raise ValueError("validation MemOps-50 verification requires two --exclusion values")
+        from . import memops50_validation
+
+        memops50_validation.verify_manifest(
+            manifest_path=manifest_path,
+            development_exclusion_path=exclusion_paths[0],
+            heldout_exclusion_path=exclusion_paths[1],
+            memops_root=memops_root,
+        )
+        expected = manifest.get("retrieval_expected")
+        if expected != memops50_validation.RETRIEVAL_EXPECTED:
+            raise ValueError("validation MemOps-50 retrieval expectations changed")
+        return tier_id, dict(memops50_validation.RETRIEVAL_EXPECTED)
     raise ValueError(f"unsupported MemOps-50 retrieval tier: {tier_id!r}")
 
 
@@ -858,7 +873,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--exclusion",
         type=Path,
-        help="development selection excluded by a held-out manifest",
+        action="append",
+        default=[],
+        help="selection excluded by the manifest; repeat for validation tiers",
     )
     parser.add_argument(
         "--contract",
@@ -873,7 +890,7 @@ def main(argv: list[str] | None = None) -> int:
         memops_root=args.memops_root.expanduser().resolve(),
         metric_contract_path=args.contract.resolve(),
         repository_root=repository_root,
-        exclusion_path=args.exclusion.resolve() if args.exclusion else None,
+        exclusion_paths=tuple(path.resolve() for path in args.exclusion),
     )
     print(write_report(report, args.output))
     return 0 if report["gate_verdict"]["passed"] else 1
