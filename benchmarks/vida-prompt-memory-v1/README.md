@@ -35,3 +35,6 @@ The first configured `gpt-5.6-sol` run improved applicable-memory coverage but
 failed the unchanged current-constraint anchor gate. The retained report and
 diagnosis are in
 [analysis/gpt-5.6-sol-v1-failed-2026-08-24.md](analysis/gpt-5.6-sol-v1-failed-2026-08-24.md).
+After a general production constraint-fidelity improvement, the same unchanged
+gate passed; that run is recorded in
+[analysis/gpt-5.6-sol-pass-2026-08-24.md](analysis/gpt-5.6-sol-pass-2026-08-24.md).

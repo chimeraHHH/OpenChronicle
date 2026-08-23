@@ -200,6 +200,12 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
     assigned a new stable job identity for the new memory snapshot instead of
     mutating an adopted output. A semantic-backend failure produces explicit
     empty context and never silently switches to a different retriever.
+    On the frozen six-case `vida-prompt-memory-v1` A/B fixture, one retained
+    first run improved procedure coverage but failed exact current-constraint
+    retention. After a general constraint-fidelity prompt change, the unchanged
+    `gpt-5.6-sol` gate passed: current anchors 1.000, applicable memory anchors
+    0.889 versus 0.111 without memory, forbidden-hit rate 0, and action boundary
+    1.000. This is a native development result, not a public parity claim.
 15. **Cross-file semantic recall repair.** A lexical BM25 hit is now a hard
     vector scope only when the query explicitly names a distinctive token from
     that memory path. Generic lexical text can no longer suppress a correct

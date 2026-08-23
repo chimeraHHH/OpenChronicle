@@ -26,7 +26,7 @@ from .memory_context import (
 )
 from .selection import SelectionReceipt
 
-TEMPLATE_VERSION = 2
+TEMPLATE_VERSION = 3
 _OUTPUT_FIELDS = {
     "schema_version",
     "workflow",

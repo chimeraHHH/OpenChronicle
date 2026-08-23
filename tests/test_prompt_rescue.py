@@ -152,6 +152,9 @@ def test_prompt_rescue_queues_idempotently_and_prepares_no_action_artifact(
         assert calls[0]["stage"] == "prompt_rescue"
         assert calls[0]["json_mode"] is True
         assert "tools" not in calls[0]
+        assert "Preserve its key\nwording verbatim where safe" in calls[0]["messages"][0][
+            "content"
+        ]
         payload = json.loads(calls[0]["messages"][1]["content"])
         assert payload["rough_prompt"] == rough
         assert payload["constraints"] == ["Use only supplied facts"]
