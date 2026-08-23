@@ -219,6 +219,8 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   development regression rather than a public benchmark claim. The fresh
   external survey selects MemOps as the closest public contract; see
   [local-long-term-memory-research-2026-08-23.md](local-long-term-memory-research-2026-08-23.md).
+  A digest-pinned external runner now covers a fixed four-file official
+  adjacent smoke without vendoring upstream generated conversations.
 - [x] Explicit MCP `search(as_of=...)` historical snapshot over recorded and
   typed valid time, kept separate from ordinary current-only recall.
 - [x] On-demand Published Memory revision-history inspection, bound to the

@@ -29,3 +29,21 @@ real-user quality.
 
 The first clean configured-model result is recorded in
 [analysis/gpt-5.6-sol-2026-08-23.md](analysis/gpt-5.6-sol-2026-08-23.md).
+
+## Fixed official MemOps smoke
+
+The external-data adapter also supports a frozen adjacent four-file smoke with
+27 confirmed operations (23 remember, two update, one forget, one reflect):
+
+```bash
+git clone https://github.com/MemTensor/MemOps.git /path/to/MemOps
+git -C /path/to/MemOps checkout 312af65e2c7b6d1b70f062ffa8b4cde32aaf6f35
+uv run python scripts/run_vida_memory_decisions.py \
+  --memops-root /path/to/MemOps \
+  --output reports/vida-memory-decisions-memops.json
+```
+
+The runner verifies the clone commit plus every selected file's SHA-256 before
+model egress. The repository stores only the manifest, not the upstream
+generated conversations. This smoke exercises the official evidence shape and
+update chains, but is not the full MemOps question/judge pipeline.

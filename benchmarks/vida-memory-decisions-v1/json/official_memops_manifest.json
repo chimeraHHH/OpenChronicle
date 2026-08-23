@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "dataset_id": "MemOps-Official-Adjacent-Smoke-v1",
+  "split": "official-adjacent-fixed-4",
+  "repository": "https://github.com/MemTensor/MemOps.git",
+  "commit": "312af65e2c7b6d1b70f062ffa8b4cde32aaf6f35",
+  "data_root": "generated_result/2-evidence_conversation",
+  "samples": [
+    {"id": "B02-remember", "file": "B02_remember.json", "sha256": "71b10a3d9cf57fc43520a234a3244e54744e71d279d72115bb6c8e0bd09aa15f"},
+    {"id": "C26-update-chain", "file": "C26_update.json", "sha256": "490097629cee90daa883df4b1e74a5632e4ba0e5df055d3c54a600d6d2324da6"},
+    {"id": "C29-forget", "file": "C29_forget.json", "sha256": "c058892375d2e233fd7e7bda92dd46131487df51d94fbc5c0815a19fc9a12296"},
+    {"id": "E12-reflect", "file": "E12_reflect.json", "sha256": "e91a20977f5dace17c0ec33876b403725dfa45c9848158a3f955977113406185"}
+  ]
+}

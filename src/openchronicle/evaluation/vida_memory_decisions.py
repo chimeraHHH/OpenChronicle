@@ -84,6 +84,8 @@ class Dataset:
     cases: tuple[DecisionCase, ...]
     digest: str
     source: str = "openchronicle_native"
+    source_revision: str = ""
+    source_files: tuple[tuple[str, str], ...] = ()
 
 
 def load_dataset(path: Path) -> Dataset:
@@ -149,7 +151,8 @@ def adapt_memops_sample(payload: object, *, case_id: str) -> DecisionCase:
             )
 
     targets: dict[str, Target] = {}
-    current: dict[str, CurrentMemory] = {}
+    initial_current: dict[str, CurrentMemory] = {}
+    evolving_state: dict[str, str] = {}
     operations: list[Operation] = []
     for raw_operation in raw_operations:
         if not isinstance(raw_operation, dict) or raw_operation.get("validity") != "confirmed":
@@ -187,18 +190,88 @@ def adapt_memops_sample(payload: object, *, case_id: str) -> DecisionCase:
         )
         _validate_operation_shape(operation)
         operations.append(operation)
-        if operation_type in {"update", "forget"} and target_id not in current:
-            current[target_id] = CurrentMemory(target_id=target_id, value=old_value)
+        if operation_type in {"update", "forget"} and target_id not in evolving_state:
+            initial_current[target_id] = CurrentMemory(target_id=target_id, value=old_value)
+            evolving_state[target_id] = old_value
+        if operation_type in {"remember", "reflect", "update"}:
+            evolving_state[target_id] = new_value
+        else:
+            evolving_state.pop(target_id, None)
 
     case = DecisionCase(
         id=_strict_text(case_id, 200),
         targets=tuple(targets.values()),
-        current_memory=tuple(current.values()),
+        current_memory=tuple(initial_current.values()),
         evidence=tuple(evidence),
         gold_operations=tuple(operations),
     )
     _validate_case(case)
     return case
+
+
+def load_memops_manifest(manifest_path: Path, *, memops_root: Path) -> Dataset:
+    """Load a digest-pinned fixed tier from an external official MemOps clone."""
+    manifest_bytes = manifest_path.read_bytes()
+    try:
+        manifest = json.loads(manifest_bytes)
+    except json.JSONDecodeError as exc:
+        raise ValueError("MemOps manifest is not valid JSON") from exc
+    if not isinstance(manifest, dict) or set(manifest) != {
+        "schema_version",
+        "dataset_id",
+        "split",
+        "repository",
+        "commit",
+        "data_root",
+        "samples",
+    }:
+        raise ValueError("MemOps manifest envelope is invalid")
+    if manifest["schema_version"] != 1:
+        raise ValueError("unsupported MemOps manifest schema")
+    expected_commit = _strict_commit(manifest["commit"])
+    resolved_root = memops_root.resolve()
+    if _git(resolved_root, "rev-parse", "HEAD") != expected_commit:
+        raise ValueError("MemOps clone does not match the pinned commit")
+    data_root_value = _strict_relative_path(manifest["data_root"])
+    data_root = (resolved_root / data_root_value).resolve()
+    if data_root != resolved_root and resolved_root not in data_root.parents:
+        raise ValueError("MemOps data root escapes the clone")
+    raw_samples = manifest["samples"]
+    if not isinstance(raw_samples, list) or not raw_samples or len(raw_samples) > 100:
+        raise ValueError("MemOps manifest samples are invalid")
+
+    cases: list[DecisionCase] = []
+    source_files: list[tuple[str, str]] = []
+    digest = hashlib.sha256(manifest_bytes)
+    for sample in raw_samples:
+        if not isinstance(sample, dict) or set(sample) != {"id", "file", "sha256"}:
+            raise ValueError("MemOps manifest sample is invalid")
+        case_id = _strict_text(sample["id"], 200)
+        file_name = _strict_file_name(sample["file"])
+        expected_sha = _strict_digest(sample["sha256"])
+        sample_path = data_root / file_name
+        sample_bytes = sample_path.read_bytes()
+        actual_sha = hashlib.sha256(sample_bytes).hexdigest()
+        if actual_sha != expected_sha:
+            raise ValueError("MemOps sample digest does not match the manifest")
+        try:
+            payload = json.loads(sample_bytes)
+        except json.JSONDecodeError as exc:
+            raise ValueError("MemOps sample is not valid JSON") from exc
+        cases.append(adapt_memops_sample(payload, case_id=case_id))
+        source_files.append((file_name, actual_sha))
+        digest.update(sample_bytes)
+    if len({case.id for case in cases}) != len(cases):
+        raise ValueError("MemOps manifest case ids must be unique")
+    return Dataset(
+        id=_strict_text(manifest["dataset_id"], 200),
+        split=_strict_text(manifest["split"], 200),
+        cases=tuple(cases),
+        digest=digest.hexdigest(),
+        source="official_memops_external",
+        source_revision=expected_commit,
+        source_files=tuple(source_files),
+    )
 
 
 def run_evaluation(
@@ -210,6 +283,45 @@ def run_evaluation(
     provider_identity: dict[str, str],
 ) -> dict[str, Any]:
     dataset = load_dataset(dataset_path)
+    return _run_loaded_evaluation(
+        dataset=dataset,
+        dataset_path=dataset_path,
+        metric_contract_path=metric_contract_path,
+        repository_root=repository_root,
+        provider=provider,
+        provider_identity=provider_identity,
+    )
+
+
+def run_memops_evaluation(
+    *,
+    manifest_path: Path,
+    memops_root: Path,
+    metric_contract_path: Path,
+    repository_root: Path,
+    provider: Provider,
+    provider_identity: dict[str, str],
+) -> dict[str, Any]:
+    dataset = load_memops_manifest(manifest_path, memops_root=memops_root)
+    return _run_loaded_evaluation(
+        dataset=dataset,
+        dataset_path=manifest_path,
+        metric_contract_path=metric_contract_path,
+        repository_root=repository_root,
+        provider=provider,
+        provider_identity=provider_identity,
+    )
+
+
+def _run_loaded_evaluation(
+    *,
+    dataset: Dataset,
+    dataset_path: Path,
+    metric_contract_path: Path,
+    repository_root: Path,
+    provider: Provider,
+    provider_identity: dict[str, str],
+) -> dict[str, Any]:
     contract_bytes = metric_contract_path.read_bytes()
     try:
         contract = json.loads(contract_bytes)
@@ -236,6 +348,10 @@ def run_evaluation(
             "sha256": dataset.digest,
             "path": str(dataset_path.relative_to(repository_root)),
             "source": dataset.source,
+            "source_revision": dataset.source_revision,
+            "source_files": [
+                {"file": file_name, "sha256": digest} for file_name, digest in dataset.source_files
+            ],
         },
         "metric_contract": {
             "sha256": hashlib.sha256(contract_bytes).hexdigest(),
@@ -332,11 +448,26 @@ def _evaluate_case(case: DecisionCase, provider: Provider) -> dict[str, Any]:
             response_bytes=response_bytes,
         )
 
-    gold_by_key = {operation.key: operation for operation in case.gold_operations}
-    predicted_by_key = {operation.key: operation for operation in predicted}
-    true_keys = set(gold_by_key) & set(predicted_by_key)
-    false_positive = sorted(set(predicted_by_key) - set(gold_by_key))
-    false_negative = sorted(set(gold_by_key) - set(predicted_by_key))
+    unmatched_gold = set(range(len(case.gold_operations)))
+    matched_pairs: list[tuple[Operation, Operation]] = []
+    false_positive_operations: list[Operation] = []
+    for predicted_operation in predicted:
+        gold_index = next(
+            (
+                index
+                for index in sorted(unmatched_gold)
+                if case.gold_operations[index].key == predicted_operation.key
+            ),
+            None,
+        )
+        if gold_index is None:
+            false_positive_operations.append(predicted_operation)
+            continue
+        unmatched_gold.remove(gold_index)
+        matched_pairs.append((case.gold_operations[gold_index], predicted_operation))
+    false_negative_operations = [case.gold_operations[index] for index in sorted(unmatched_gold)]
+    false_positive = sorted(operation.key for operation in false_positive_operations)
+    false_negative = sorted(operation.key for operation in false_negative_operations)
     binding_errors = sum(
         min(
             sum(key[0] == operation_type for key in false_positive),
@@ -345,18 +476,18 @@ def _evaluate_case(case: DecisionCase, provider: Provider) -> dict[str, Any]:
         for operation_type in _OPERATION_TYPES
     )
     value_errors = sorted(
-        key
-        for key in true_keys
-        if not _same_value(gold_by_key[key].old_value, predicted_by_key[key].old_value)
-        or not _new_value_matches(gold_by_key[key], predicted_by_key[key].new_value)
+        gold.key
+        for gold, prediction in matched_pairs
+        if not _same_value(gold.old_value, prediction.old_value)
+        or not _new_value_matches(gold, prediction.new_value)
     )
     provenance_errors = sorted(
-        key
-        for key in true_keys
-        if set(gold_by_key[key].evidence_ids) != set(predicted_by_key[key].evidence_ids)
+        gold.key
+        for gold, prediction in matched_pairs
+        if set(gold.evidence_ids) != set(prediction.evidence_ids)
         or any(
             next(item for item in case.evidence if item.id == evidence_id).role != "user"
-            for evidence_id in predicted_by_key[key].evidence_ids
+            for evidence_id in prediction.evidence_ids
         )
     )
     failure_stage = ""
@@ -372,10 +503,11 @@ def _evaluate_case(case: DecisionCase, provider: Provider) -> dict[str, Any]:
         "case_id": case.id,
         "gold_operations": [operation.to_gold_dict() for operation in case.gold_operations],
         "predicted_operations": [operation.to_dict() for operation in predicted],
-        "tp": len(true_keys),
+        "tp": len(matched_pairs),
         "fp": len(false_positive),
         "fn": len(false_negative),
         "binding_errors": binding_errors,
+        "matched_keys": [list(gold.key) for gold, _ in matched_pairs],
         "false_positive_keys": [list(key) for key in false_positive],
         "false_negative_keys": [list(key) for key in false_negative],
         "value_error_keys": [list(key) for key in value_errors],
@@ -404,6 +536,7 @@ def _failed_outcome(
         "fp": 0,
         "fn": len(case.gold_operations),
         "binding_errors": 0,
+        "matched_keys": [],
         "false_positive_keys": [],
         "false_negative_keys": [list(operation.key) for operation in case.gold_operations],
         "value_error_keys": [],
@@ -435,8 +568,6 @@ def _parse_prediction(value: object, case: DecisionCase) -> tuple[Operation, ...
     targets = {target.id for target in case.targets}
     evidence_ids = {item.id for item in case.evidence}
     operations = tuple(_parse_operation(item) for item in raw_operations)
-    if len({operation.key for operation in operations}) != len(operations):
-        raise ValueError("memory decision operations contain duplicates")
     if any(operation.target_id not in targets for operation in operations):
         raise ValueError("memory decision target is unknown")
     if any(set(operation.evidence_ids) - evidence_ids for operation in operations):
@@ -490,8 +621,6 @@ def _validate_case(case: DecisionCase) -> None:
         raise ValueError("memory decision current state is invalid")
     if len(set(evidence_ids)) != len(evidence_ids):
         raise ValueError("memory decision evidence ids must be unique")
-    if len({operation.key for operation in case.gold_operations}) != len(case.gold_operations):
-        raise ValueError("memory decision gold operations must be unique")
     current = {item.target_id: item.value for item in case.current_memory}
     evidence = {item.id: item for item in case.evidence}
     for operation in case.gold_operations:
@@ -510,6 +639,10 @@ def _validate_case(case: DecisionCase) -> None:
             sessions = {evidence[evidence_id].session_id for evidence_id in operation.evidence_ids}
             if len(sessions) < 2:
                 raise ValueError("memory decision reflection needs independent sessions")
+        if operation.type in {"remember", "reflect", "update"}:
+            current[operation.target_id] = operation.new_value
+        else:
+            current.pop(operation.target_id, None)
 
 
 def _parse_target(value: object) -> Target:
@@ -633,16 +766,7 @@ def _metrics(outcomes: list[dict[str, Any]]) -> dict[str, Any]:
     noops = [item for item in outcomes if not item["gold_operations"]]
     by_type: dict[str, dict[str, float | int]] = {}
     for operation_type in sorted(_OPERATION_TYPES):
-        type_tp = sum(
-            1
-            for item in outcomes
-            for operation in item["predicted_operations"]
-            if operation["type"] == operation_type
-            and any(
-                gold["type"] == operation_type and gold["target_id"] == operation["target_id"]
-                for gold in item["gold_operations"]
-            )
-        )
+        type_tp = sum(key[0] == operation_type for item in outcomes for key in item["matched_keys"])
         type_predicted = sum(
             operation["type"] == operation_type
             for item in outcomes
@@ -774,6 +898,35 @@ def _identifier(value: object) -> str:
     return text
 
 
+def _strict_digest(value: object) -> str:
+    text = _strict_text(value, 64).lower()
+    if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
+        raise ValueError("memory decision digest is invalid")
+    return text
+
+
+def _strict_commit(value: object) -> str:
+    text = _strict_text(value, 64).lower()
+    if len(text) not in {40, 64} or any(char not in "0123456789abcdef" for char in text):
+        raise ValueError("memory decision commit is invalid")
+    return text
+
+
+def _strict_file_name(value: object) -> str:
+    text = _strict_text(value, 200)
+    if Path(text).name != text or not text.endswith(".json"):
+        raise ValueError("MemOps manifest file name is invalid")
+    return text
+
+
+def _strict_relative_path(value: object) -> Path:
+    text = _strict_text(value, 500)
+    path = Path(text)
+    if path.is_absolute() or ".." in path.parts or not path.parts:
+        raise ValueError("MemOps manifest data root is invalid")
+    return path
+
+
 def _strict_text(value: object, limit: int) -> str:
     if not isinstance(value, str) or not value.strip() or "\x00" in value or len(value) > limit:
         raise ValueError("memory decision text is invalid")
@@ -823,30 +976,46 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--dataset", type=Path)
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--config", type=Path)
+    parser.add_argument("--memops-root", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
     repository_root = Path(__file__).resolve().parents[3]
     baseline_root = repository_root / "benchmarks" / "vida-memory-decisions-v1"
-    dataset_path = args.dataset or baseline_root / "fixtures" / "cases.json"
-    contract_path = args.contract or baseline_root / "json" / "metric_contract.json"
+    if args.memops_root:
+        dataset_path = args.dataset or baseline_root / "json" / "official_memops_manifest.json"
+        contract_path = (
+            args.contract or baseline_root / "json" / "official_memops_metric_contract.json"
+        )
+    else:
+        dataset_path = args.dataset or baseline_root / "fixtures" / "cases.json"
+        contract_path = args.contract or baseline_root / "json" / "metric_contract.json"
     if not dataset_path.is_absolute():
         dataset_path = repository_root / dataset_path
     if not contract_path.is_absolute():
         contract_path = repository_root / contract_path
     cfg = config_mod.load(args.config) if args.config else config_mod.load()
     model_cfg = cfg.model_for("classifier")
-    report = run_evaluation(
-        dataset_path=dataset_path,
-        metric_contract_path=contract_path,
-        repository_root=repository_root,
-        provider=configured_provider(cfg),
-        provider_identity={
-            "stage": "classifier",
-            "provider": model_cfg.provider,
-            "model": model_cfg.model,
-            "reasoning_effort": model_cfg.reasoning_effort,
-        },
+    provider_identity = {
+        "stage": "classifier",
+        "provider": model_cfg.provider,
+        "model": model_cfg.model,
+        "reasoning_effort": model_cfg.reasoning_effort,
+    }
+    common = {
+        "metric_contract_path": contract_path,
+        "repository_root": repository_root,
+        "provider": configured_provider(cfg),
+        "provider_identity": provider_identity,
+    }
+    report = (
+        run_memops_evaluation(
+            manifest_path=dataset_path,
+            memops_root=args.memops_root,
+            **common,
+        )
+        if args.memops_root
+        else run_evaluation(dataset_path=dataset_path, **common)
     )
     encoded = write_report(report, args.output)
     if not args.quiet:

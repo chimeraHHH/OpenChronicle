@@ -195,7 +195,10 @@ over-forget, provenance support, and trajectory order separately. The new
 model-decision adapter adds operation precision/recall/F1 and explicit
 provider/parse/detection/value/provenance failures without a second judge
 model. Its native development split must now be followed by a fixed official
-MemOps tier; neither result should be hidden behind one aggregate score.
+MemOps tier; neither result should be hidden behind one aggregate score. The
+external-data runner now pins the official clone commit and four adjacent
+sample digests, supports repeated update operations on one target, and keeps
+all upstream generated conversations outside this repository.
 
 In parallel, finish a fixed official LongMemEval-V2 small-tier run and preserve
 the adapter version, dataset revision, model, latency, and retrieved evidence.
