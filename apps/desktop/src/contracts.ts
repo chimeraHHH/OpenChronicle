@@ -11,9 +11,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 20 adds two-phase full-lineage forget for
-// one revision-bound Published Memory fact.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 20 as const;
+// WebView result projection. Version 21 adds structured suggestion feedback
+// and a content-free local outcome summary.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 21 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -658,6 +658,32 @@ export interface Suggestion {
   feedback_reason?: string;
 }
 
+export type SuggestionDismissalReason =
+  | "not_relevant"
+  | "wrong_timing"
+  | "already_resolved"
+  | "too_vague"
+  | "other"
+  | "legacy_or_unspecified";
+
+export interface SuggestionFeedbackSummary {
+  schema_version: 1;
+  sample_limit: number;
+  sample_size: number;
+  total_available: number;
+  truncated: boolean;
+  accepted: number;
+  dismissed: number;
+  acceptance_rate: number;
+  window_start: string;
+  window_end: string;
+  dismissal_reasons: Array<{
+    reason: SuggestionDismissalReason;
+    count: number;
+  }>;
+  action_capability: "none";
+}
+
 export type CandidateStatus =
   | "pending"
   | "conflict"
@@ -899,6 +925,7 @@ export interface DesktopSnapshot {
   daily_wraps: DailyWrapSummary[];
   suggestions_enabled: boolean;
   suggestions: Suggestion[];
+  suggestion_feedback: SuggestionFeedbackSummary;
   prompt_rescue: PromptRescueSnapshot;
   reply_rescue: ReplyRescueSnapshot;
   timeline: TimelineItem[];

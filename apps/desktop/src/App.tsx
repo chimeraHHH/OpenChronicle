@@ -192,6 +192,7 @@ export function App({ api = desktopApi }: AppProps) {
             <SuggestionsPage
               api={api}
               enabled={snapshot.suggestions_enabled}
+              feedback={snapshot.suggestion_feedback}
               onChanged={refresh}
               onOpenSource={setSourceSubject}
               suggestions={snapshot.suggestions}

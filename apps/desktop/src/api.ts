@@ -69,6 +69,8 @@ import type {
   ProvenanceTrace,
   ResolvedEvidence,
   Suggestion,
+  SuggestionDismissalReason,
+  SuggestionFeedbackSummary,
   SuggestionStatus,
   TimelineItem,
   WrapCategory,
@@ -517,6 +519,65 @@ function workResumptionSuggestion(value: unknown): Suggestion {
     expires_at: stringValue(raw.expires_at, "suggestion expiry"),
     ...(feedbackReason === undefined ? {} : { feedback_reason: feedbackReason }),
   };
+}
+
+const suggestionDismissalReasons = new Set<SuggestionDismissalReason>([
+  "not_relevant",
+  "wrong_timing",
+  "already_resolved",
+  "too_vague",
+  "other",
+  "legacy_or_unspecified",
+]);
+
+function suggestionFeedbackSummary(value: unknown): SuggestionFeedbackSummary {
+  const raw = objectValue(value, "suggestion feedback summary");
+  if (
+    numberValue(raw.schema_version, "suggestion feedback schema") !== 1 ||
+    stringValue(raw.action_capability, "suggestion feedback capability") !== "none"
+  ) {
+    return protocolError("suggestion feedback contract");
+  }
+  const summary: SuggestionFeedbackSummary = {
+    schema_version: 1,
+    sample_limit: numberValue(raw.sample_limit, "suggestion feedback sample limit"),
+    sample_size: numberValue(raw.sample_size, "suggestion feedback sample size"),
+    total_available: numberValue(raw.total_available, "suggestion feedback total"),
+    truncated: booleanValue(raw.truncated, "suggestion feedback truncation"),
+    accepted: numberValue(raw.accepted, "suggestion feedback accepted"),
+    dismissed: numberValue(raw.dismissed, "suggestion feedback dismissed"),
+    acceptance_rate: numberValue(raw.acceptance_rate, "suggestion feedback acceptance rate"),
+    window_start: stringValue(raw.window_start, "suggestion feedback window start"),
+    window_end: stringValue(raw.window_end, "suggestion feedback window end"),
+    dismissal_reasons: arrayValue(
+      raw.dismissal_reasons,
+      "suggestion feedback reasons",
+    ).map((value) => {
+      const item = objectValue(value, "suggestion feedback reason");
+      return {
+        reason: allowedString(
+          item.reason,
+          suggestionDismissalReasons,
+          "suggestion feedback reason code",
+        ),
+        count: numberValue(item.count, "suggestion feedback reason count"),
+      };
+    }),
+    action_capability: "none",
+  };
+  if (
+    summary.sample_size !== summary.accepted + summary.dismissed ||
+    summary.total_available < summary.sample_size ||
+    summary.acceptance_rate < 0 ||
+    summary.acceptance_rate > 1 ||
+    summary.sample_size > summary.sample_limit ||
+    summary.truncated !== (summary.total_available > summary.sample_size) ||
+    summary.dismissal_reasons.reduce((total, item) => total + item.count, 0) !==
+      summary.dismissed
+  ) {
+    return protocolError("suggestion feedback consistency");
+  }
+  return summary;
 }
 
 function promptRescueStatus(value: unknown): PromptRescueStatus {
@@ -2699,6 +2760,7 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
   const suggestions = arrayValue(raw.suggestions, "suggestion summaries").map(
     workResumptionSuggestion,
   );
+  const suggestionFeedback = suggestionFeedbackSummary(raw.suggestion_feedback);
   const running = booleanValue(daemon.running, "daemon running state");
   const paused = booleanValue(capture.paused, "capture paused state");
   const health = stringValue(daemon.health, "daemon health");
@@ -2784,6 +2846,7 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
       "suggestions enabled state",
     ),
     suggestions,
+    suggestion_feedback: suggestionFeedback,
     prompt_rescue: {
       enabled: booleanValue(promptRescue.enabled, "Prompt Rescue enabled state"),
       provider: {
@@ -3389,7 +3452,11 @@ export const desktopApi = {
       },
       (value) => {
         const suggestion = normalizeSuggestionMutation(value);
-        if (suggestion.id !== suggestionId) {
+        if (
+          suggestion.id !== suggestionId ||
+          suggestion.status !== status ||
+          suggestion.version !== expectedVersion + 1
+        ) {
           return protocolError("suggestion mutation identity");
         }
         return suggestion;

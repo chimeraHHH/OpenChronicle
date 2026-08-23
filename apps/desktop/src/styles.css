@@ -592,6 +592,18 @@ textarea {
   font-weight: 750;
 }
 
+.edit-form .feedback-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--text);
+}
+
+.feedback-choice input {
+  width: auto;
+  margin: 0;
+}
+
 input,
 textarea {
   width: 100%;

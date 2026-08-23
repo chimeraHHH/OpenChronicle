@@ -51,8 +51,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks full-lineage Published Memory forget as bridge protocol v20", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(20);
+  it("tracks structured suggestion feedback as bridge protocol v21", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(21);
   });
 
   it("previews and commits revision-bound Published Memory forget", async () => {
@@ -179,6 +179,13 @@ describe("desktop bridge adapters", () => {
       state: "current",
     });
     expect(result.review_counts).toEqual({ pending: 1, conflict: 0, applying: 0, accepted: 0, rejected: 0 });
+    expect(result.suggestion_feedback).toMatchObject({
+      sample_size: 4,
+      accepted: 1,
+      dismissed: 3,
+      acceptance_rate: 0.25,
+      action_capability: "none",
+    });
     expect(result.timeline[0]).toMatchObject({
       id: "block-1",
       timezone: "Asia/Shanghai",
@@ -1004,7 +1011,7 @@ describe("desktop bridge adapters", () => {
       "sg-1",
       1,
       "accepted",
-      "acknowledged_from_desktop",
+      "helpful",
     );
 
     expect(tauri.invoke).toHaveBeenCalledWith("transition_suggestion", {
@@ -1012,7 +1019,7 @@ describe("desktop bridge adapters", () => {
         suggestion_id: "sg-1",
         expected_version: 1,
         status: "accepted",
-        reason: "acknowledged_from_desktop",
+        reason: "helpful",
       },
     });
     expect(result).toMatchObject({ status: "accepted", version: 2 });

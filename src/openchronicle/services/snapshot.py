@@ -26,6 +26,7 @@ from ..services.evidence import EvidenceResolver
 from ..services.memory import MemoryService
 from ..store import files as files_store
 from ..store import fts
+from ..suggestions.feedback import summarize_feedback
 from ..suggestions.service import SuggestionKernel
 from ..timeline import store as timeline_store
 
@@ -295,6 +296,7 @@ def build_snapshot(
             for item in suggestions
         ],
         "suggestions_enabled": cfg.suggestions.enabled,
+        "suggestion_feedback": summarize_feedback(conn),
         "prompt_rescue": {
             "enabled": cfg.prompt_rescue.enabled,
             "provider": {

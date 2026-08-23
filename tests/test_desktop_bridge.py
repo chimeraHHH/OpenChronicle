@@ -1956,7 +1956,7 @@ def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(
             "suggestion_id": suggestion.id,
             "expected_version": 1,
             "status": "accepted",
-            "reason": "acknowledged_from_test",
+            "reason": "helpful",
         },
     )
     assert accepted_code == 0
@@ -1964,7 +1964,34 @@ def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(
         **snapshot["result"]["suggestions"][0],
         "status": "accepted",
         "version": 2,
-        "feedback_reason": "acknowledged_from_test",
+        "feedback_reason": "helpful",
+    }
+    feedback_snapshot, feedback_code = _request(
+        "snapshot",
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "memory_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 0,
+            "prompt_rescue_limit": 0,
+            "reply_rescue_limit": 0,
+        },
+    )
+    assert feedback_code == 0
+    assert feedback_snapshot["result"]["suggestion_feedback"] == {
+        "schema_version": 1,
+        "sample_limit": 1_000,
+        "sample_size": 1,
+        "total_available": 1,
+        "truncated": False,
+        "accepted": 1,
+        "dismissed": 0,
+        "acceptance_rate": 1.0,
+        "window_start": suggestion.detected_at,
+        "window_end": suggestion.detected_at,
+        "dismissal_reasons": [],
+        "action_capability": "none",
     }
 
     conflict, conflict_code = _request(
@@ -1973,6 +2000,7 @@ def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(
             "suggestion_id": suggestion.id,
             "expected_version": 1,
             "status": "dismissed",
+            "reason": "not_relevant",
         },
     )
     assert conflict_code == 2
@@ -2015,6 +2043,7 @@ def test_suggestion_endpoints_fail_closed_when_authority_is_revoked(
             "suggestion_id": suggestion.id,
             "expected_version": suggestion.version,
             "status": "accepted",
+            "reason": "helpful",
         },
     )
     assert transition_code == 2

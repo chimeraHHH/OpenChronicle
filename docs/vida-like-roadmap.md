@@ -337,7 +337,13 @@ privacy UX is validated on a signed macOS build.
   not copied into the profile store. The reviewed PDF/DOCX ingress slice now
   applies the same initially-unselected review and profile-CAS boundary with
   page/bounding-box or OOXML part/block provenance.
-- [ ] Feedback aggregation and longitudinal proactive-quality evaluation.
+- [ ] Feedback aggregation and longitudinal proactive-quality evaluation. The
+  first local slice now records a structured helpful outcome or one of five
+  dismissal reasons, aggregates the latest 1,000 projection-valid terminal
+  outcomes without suggestion content, and shows counts plus the acceptance
+  rate in the desktop. This is instrumentation, not evidence that suggestion
+  quality improved; representative longitudinal data and the frozen quality
+  report remain open.
 
 The current kernel is a local preparation plane, not an Action Plane. Its only
 implemented proactive workflow is Work Resumption; Prompt Rescue and Reply

@@ -890,7 +890,7 @@ describe("trusted console", () => {
           suggestion_id: "sg-1",
           expected_version: 1,
           status: "accepted",
-          reason: "acknowledged_from_desktop",
+          reason: "helpful",
         },
       }),
     );
@@ -899,6 +899,38 @@ describe("trusted console", () => {
         ["approve_candidate", "set_capture_paused"].includes(command),
       ),
     ).toBe(false);
+  });
+
+  it("records a structured dismissal reason and shows local feedback totals", async () => {
+    const user = userEvent.setup();
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "transition_suggestion") {
+        return bridgeSuggestionMutation(
+          suggestion({ status: "dismissed", version: 2, feedback_reason: "wrong_timing" }),
+        );
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Suggestions" }));
+    expect(screen.getByRole("heading", { name: "Suggestion feedback" })).toBeInTheDocument();
+    expect(screen.getByText(/1 helpful · 3 dismissed · 25% acknowledged/i)).toBeInTheDocument();
+    expect(screen.getByText("Wrong timing: 2")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    await user.click(screen.getByRole("radio", { name: "Wrong timing" }));
+    await user.click(screen.getByRole("button", { name: "Confirm dismiss" }));
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("transition_suggestion", {
+        request: {
+          suggestion_id: "sg-1",
+          expected_version: 1,
+          status: "dismissed",
+          reason: "wrong_timing",
+        },
+      }),
+    );
   });
 
   it("keeps programmatically focused page landmarks free of a full-page outline", async () => {

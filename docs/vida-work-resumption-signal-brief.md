@@ -172,3 +172,11 @@ Next stage: an explicit park/resume cue, plus broader external scouting for a
 separately evaluated continuity/resolution signal. The remaining canonical
 active-conversation and already-resolved false positives stay visible and are
 not claimed solved.
+
+Feedback instrumentation update: the desktop now asks for one structured
+dismissal reason (`not_relevant`, `wrong_timing`, `already_resolved`,
+`too_vague`, or `other`) and records `helpful` on acknowledgement. A local,
+content-free summary groups the latest 1,000 valid terminal outcomes. This
+implements the measurement prerequisite highlighted by the related work, but
+does not use acceptance as a quality label or close the need for an
+independently labeled field set.

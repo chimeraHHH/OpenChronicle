@@ -44,9 +44,10 @@ from .services.snapshot import build_snapshot
 from .store import files as files_store
 from .store import fts
 from .suggestions import store as suggestion_store
+from .suggestions.feedback import valid_feedback_reason
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 20
+PROTOCOL_VERSION = 21
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -936,6 +937,11 @@ def _suggestion_transition(params: dict[str, Any]) -> dict[str, Any]:
     expected_version = _bounded_int(params["expected_version"], 1, 2_147_483_647)
     status = _bounded_string(params["status"], 50, nonempty=True)
     reason = _bounded_string(params.get("reason", ""), 1_000, nonempty=False)
+    if status in {"accepted", "dismissed"} and not valid_feedback_reason(
+        status=status,
+        reason=reason,
+    ):
+        raise ValueError("invalid structured suggestion feedback")
     cfg = config_mod.load()
     with fts.cursor() as conn:
         updated = SuggestionKernel(conn, cfg).transition(
