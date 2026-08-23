@@ -92,7 +92,7 @@ def test_event_projection_splits_subtasks_and_materializes_neighbors(ac_root: Pa
     assert rows[2]["previous_event_id"] == rows[1]["id"]
     assert rows[2]["next_event_id"] is None
 
-    assert result["retrieval_mode"] == "event_bm25_with_adjacency"
+    assert result["retrieval_mode"] == "event_bm25_strict_then_or_with_adjacency"
     assert result["adjacency_radius"] == 1
     assert result["results"][0]["app_name"] == "Google Chrome"
     assert result["results"][0]["source"] == {
@@ -136,6 +136,48 @@ def test_event_projection_preserves_multiline_content_and_midnight_window(
     assert event["end_time"].startswith("2026-08-24T00:05")
     assert "connection reset by peer" in event["content"]
     assert event["summary"] == "Continued a late deployment."
+
+
+def test_activity_search_relaxes_only_after_zero_hit_across_event_boundary(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        path = _create_event_file(conn)
+        _append_session(
+            conn,
+            path=path,
+            entry_id="session-lumen",
+            session_id="sess_lumen",
+            start="11:00",
+            end="11:20",
+            summary="Completed the review.",
+            tasks=[
+                ("11:00", "11:10", "Cursor", "drafted Lumen schema LUMEN_SCHEMA_12"),
+                ("11:10", "11:20", "Slack", "recorded Mira's approval"),
+            ],
+        )
+
+        relaxed = mcp_server._search_activity(
+            conn,
+            cfg=config_mod.Config(),
+            query="Lumen schema approval",
+            top_k=1,
+            adjacent=1,
+        )
+        strict = mcp_server._search_activity(
+            conn,
+            cfg=config_mod.Config(),
+            query="Lumen schema",
+            top_k=1,
+            adjacent=0,
+        )
+
+    assert relaxed["results"][0]["app_name"] == "Cursor"
+    assert relaxed["results"][0]["query_mode"] == "relaxed_or_after_zero_hits"
+    assert relaxed["results"][0]["neighbors"][0]["app_name"] == "Slack"
+    assert strict["results"][0]["app_name"] == "Cursor"
+    assert strict["results"][0]["query_mode"] == "strict_and"
+    assert strict["results"][0]["neighbors"] == []
 
 
 def test_classifier_activity_search_exposes_match_and_neighbor_sources(

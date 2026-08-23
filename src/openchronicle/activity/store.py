@@ -17,7 +17,7 @@ from datetime import date, datetime, time, timedelta
 from ..local_time import local_timezone
 from ..provenance.models import content_digest
 from ..store import files as files_store
-from ..store.fts import _safe_fts_query
+from ..store.fts import _safe_fts_or_query, _safe_fts_query
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS activity_events (
@@ -88,6 +88,7 @@ class ActivityEvent:
 @dataclass(frozen=True, slots=True)
 class ActivityEventHit(ActivityEvent):
     rank: float = 0.0
+    query_mode: str = "strict_and"
 
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -299,7 +300,20 @@ def search(
          LIMIT ? OFFSET ?
     """.format(where=" AND ".join(clauses))
     args.extend((top_k, offset))
-    return [_row_to_hit(row) for row in conn.execute(sql, args)]
+    rows = conn.execute(sql, args).fetchall()
+    if rows or offset > 0:
+        return [_row_to_hit(row, query_mode="strict_and") for row in rows]
+
+    # Event units are intentionally narrower than whole sessions. A strict
+    # query can therefore split its terms across the matching event and an
+    # adjacent event. Relax only after a zero-hit AND query; BM25 still ranks
+    # the local OR candidates and canonical authorization remains unchanged.
+    relaxed_args = list(args)
+    relaxed_args[0] = _safe_fts_or_query(query)
+    return [
+        _row_to_hit(row, query_mode="relaxed_or_after_zero_hits")
+        for row in conn.execute(sql, relaxed_args)
+    ]
 
 
 def get(conn: sqlite3.Connection, event_id: str) -> ActivityEvent | None:
@@ -429,9 +443,10 @@ def _row_to_event(row: sqlite3.Row) -> ActivityEvent:
     )
 
 
-def _row_to_hit(row: sqlite3.Row) -> ActivityEventHit:
+def _row_to_hit(row: sqlite3.Row, *, query_mode: str) -> ActivityEventHit:
     event = _row_to_event(row)
     return ActivityEventHit(
         **{field: getattr(event, field) for field in event.__dataclass_fields__},
         rank=float(row["rank"]),
+        query_mode=query_mode,
     )

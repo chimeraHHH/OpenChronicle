@@ -158,10 +158,18 @@ source entry, and BM25 rank. This tool is for episodic questions such as “what
 happened around the release failure?”; `search` remains the tool for durable
 facts and current preferences.
 
+Event recall first uses the ordinary implicit-AND FTS query. Because a narrow
+event boundary can place query terms on two neighboring events, a zero-hit
+strict query is retried once as a local OR/BM25 query; it does not relax a
+non-empty strict result or fall back to a model.
+Each matched event reports `query_mode=strict_and` or
+`relaxed_or_after_zero_hits`; neighbors have no query rank/mode because they
+were reached through the explicit temporal link.
+
 ```json
 {
   "query": "release failure",
-  "retrieval_mode": "event_bm25_with_adjacency",
+  "retrieval_mode": "event_bm25_strict_then_or_with_adjacency",
   "adjacency_radius": 1,
   "results": [{
     "event_id": "activity-…",

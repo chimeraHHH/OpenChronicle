@@ -31,6 +31,7 @@ class CanonicalActivityEvent:
     previous_event_id: str | None
     next_event_id: str | None
     rank: float | None = None
+    query_mode: str | None = None
 
 
 def canonical_activity_events_locked(
@@ -111,6 +112,9 @@ def canonical_activity_events_locked(
                 previous_event_id=event.previous_event_id,
                 next_event_id=event.next_event_id,
                 rank=float(event.rank) if isinstance(event, activity_store.ActivityEventHit) else None,
+                query_mode=(
+                    event.query_mode if isinstance(event, activity_store.ActivityEventHit) else None
+                ),
             )
         )
         emitted.add(event.id)
@@ -140,6 +144,7 @@ def _safe_event(event: activity_store.ActivityEvent | activity_store.ActivityEve
             isinstance(event.rank, (int, float))
             and not isinstance(event.rank, bool)
             and math.isfinite(float(event.rank))
+            and event.query_mode in {"strict_and", "relaxed_or_after_zero_hits"}
         )
     return True
 

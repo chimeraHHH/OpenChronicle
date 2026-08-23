@@ -348,6 +348,8 @@ def _classifier_activity_payload(
     }
     if event.rank is not None:
         payload["rank"] = event.rank
+    if event.query_mode is not None:
+        payload["query_mode"] = event.query_mode
     return payload
 
 

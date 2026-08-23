@@ -407,7 +407,7 @@ def _search_activity(
                 break
     return {
         "query": query,
-        "retrieval_mode": "event_bm25_with_adjacency",
+        "retrieval_mode": "event_bm25_strict_then_or_with_adjacency",
         "adjacency_radius": adjacent,
         "results": results,
     }
@@ -431,6 +431,8 @@ def _public_activity_payload(event: CanonicalActivityEvent) -> dict[str, Any]:
     }
     if event.rank is not None:
         payload["rank"] = event.rank
+    if event.query_mode is not None:
+        payload["query_mode"] = event.query_mode
     return payload
 
 

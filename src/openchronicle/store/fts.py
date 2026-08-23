@@ -393,6 +393,12 @@ def _safe_fts_query(query: str) -> str:
     return " ".join(tokens) if tokens else '""'
 
 
+def _safe_fts_or_query(query: str) -> str:
+    """Build the bounded OR form used only after an exact AND recall miss."""
+    strict = _safe_fts_query(query)
+    return " OR ".join(strict.split()) if strict != '""' else strict
+
+
 def search(
     conn: sqlite3.Connection,
     *,
