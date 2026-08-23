@@ -214,6 +214,8 @@ openchronicle capture-once
 openchronicle timeline tick
 openchronicle timeline list
 openchronicle writer run
+openchronicle memory adoptions
+openchronicle memory screen-adoption <adoption-id>
 openchronicle memory candidates
 openchronicle memory show <candidate-id>
 openchronicle memory approve <candidate-id>
@@ -227,6 +229,12 @@ Scheduled Daily Wrap is opt-in because it may invoke the configured model with
 a hard byte-bounded evidence payload. Set `[daily_wrap] enabled = true` only after
 choosing an acceptable local or cloud model; one-off `daily-wrap run` remains
 explicit.
+
+`memory screen-adoption` is also explicit model egress: it displays the
+configured classifier provider before sending the exact adopted Prompt/Reply
+Rescue text. A qualifying reusable workflow, checklist, or template is only
+staged in the ordinary review inbox; it is never approved, published, or
+executed automatically.
 
 ---
 

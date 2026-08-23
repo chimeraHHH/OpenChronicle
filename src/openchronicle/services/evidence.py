@@ -23,7 +23,13 @@ from ..store import files as files_store
 from ..timeline import store as timeline_store
 from .context import ContextService
 
-_HASHED_KINDS = {"observation", "timeline_block", "memory_entry", "resume_cue"}
+_HASHED_KINDS = {
+    "observation",
+    "timeline_block",
+    "memory_entry",
+    "resume_cue",
+    "artifact_adoption",
+}
 _WRAP_CATEGORIES = ("completed", "progressed", "open", "blocked", "needs_review")
 _PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN [^-\r\n]{0,80}PRIVATE KEY-----.*?"
@@ -63,6 +69,8 @@ class EvidenceResolver:
                 return self._resolve_memory_entry(ref)
             if ref.kind == "memory_candidate":
                 return self._resolve_candidate(ref)
+            if ref.kind == "artifact_adoption":
+                return self._resolve_artifact_adoption(ref)
             if ref.kind == "daily_wrap":
                 return self._resolve_wrap(ref)
             if ref.kind == "daily_wrap_item":
@@ -294,6 +302,38 @@ class EvidenceResolver:
                 "tags": [_bounded_text(value, 100) for value in candidate.tags[:100]],
                 "status": str(candidate.status)[:50],
                 "version": int(candidate.version),
+            },
+        )
+
+    def _resolve_artifact_adoption(self, ref: EvidenceRef) -> dict[str, Any]:
+        from ..artifact_adoptions import store as adoption_store
+        from ..artifact_adoptions.service import ArtifactAdoptionService
+
+        adoption = adoption_store.get(self.conn, ref.id)
+        if adoption is None:
+            return _resolution(ref, "missing")
+        status = self._hash_status(ref)
+        if (
+            status != "current"
+            or not ArtifactAdoptionService(self.conn, self.cfg).is_current(adoption)
+        ):
+            return _resolution(ref, "changed" if status == "current" else status)
+        return _resolution(
+            ref,
+            "current",
+            {
+                "type": "artifact_adoption",
+                "id": adoption.id,
+                "artifact_kind": adoption.artifact_kind,
+                "artifact_id": adoption.artifact_id,
+                "artifact_version": adoption.artifact_version,
+                "output_edited": adoption.output_edited,
+                "adopted_at": adoption.adopted_at,
+                "artifact_text": _bounded_text(
+                    json.dumps(adoption.artifact, ensure_ascii=False, sort_keys=True),
+                    20_000,
+                ),
+                "action_capability": "none",
             },
         )
 

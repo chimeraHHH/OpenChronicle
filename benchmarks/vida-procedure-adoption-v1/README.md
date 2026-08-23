@@ -19,9 +19,12 @@ uv run python scripts/run_vida_procedure_adoption.py \
   --output reports/vida-procedure-adoption.json
 ```
 
-The runner never stages a candidate or changes memory. Its result can justify
-designing a review-only production adapter, but cannot by itself authorize
-single-adoption promotion. This is a small first-party development regression,
+The runner never stages a candidate or changes memory. Production now reuses
+this prompt/parser only when the user explicitly runs
+`openchronicle memory screen-adoption <adoption-id>`; a qualifying output goes
+through the ordinary validator into the pending review inbox. The benchmark
+cannot authorize automatic promotion, and production never approves or
+publishes the candidate. This is a small first-party development regression,
 not a public benchmark or evidence of actual external use.
 
 The first clean configured-model result and its limitations are recorded in

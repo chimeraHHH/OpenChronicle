@@ -52,6 +52,16 @@ class ArtifactAdoptionService:
                 adopted_at=adopted_at,
             )
 
+    def is_current(self, adoption: store.ArtifactAdoption) -> bool:
+        job = self._current_job(adoption.artifact_kind, adoption.artifact_id)
+        return bool(
+            job is not None
+            and job.status == "ready"
+            and job.output is not None
+            and job.output_digest == adoption.artifact_digest
+            and job.output == adoption.artifact
+        )
+
     def _current_job(self, artifact_kind: str, artifact_id: str):
         if artifact_kind == "prompt_rescue":
             from ..prompt_rescue.service import PromptRescueService

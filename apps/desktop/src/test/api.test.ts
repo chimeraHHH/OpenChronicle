@@ -1267,6 +1267,32 @@ describe("desktop bridge adapters", () => {
     expect(resolved.availability).toBe("current");
   });
 
+  it("maps an exact artifact adoption into inert review text", () => {
+    const normalized = normalizeEvidence({
+      reference: {
+        kind: "artifact_adoption",
+        id: "aa-123",
+        content_hash: "a".repeat(64),
+      },
+      status: "current",
+      content: {
+        type: "artifact_adoption",
+        id: "aa-123",
+        artifact_kind: "prompt_rescue",
+        artifact_id: "prompt-rescue-1",
+        artifact_version: 3,
+        output_edited: true,
+        adopted_at: "2026-08-24T10:00:00+08:00",
+        artifact_text: '{"improved_prompt":"Draft a release note"}',
+        action_capability: "none",
+      },
+    });
+
+    expect(normalized.availability).toBe("current");
+    expect(normalized.excerpt).toContain("Draft a release note");
+    expect(normalized.start_time).toBe("2026-08-24T10:00:00+08:00");
+  });
+
   it("treats changed integrity as changed even when the source row still exists", () => {
     const normalized = normalizeProvenance({
       ...provenanceTrace,

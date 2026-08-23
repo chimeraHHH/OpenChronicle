@@ -147,12 +147,20 @@ Trusted local commands:
 
 ```bash
 openchronicle memory candidates
+openchronicle memory adoptions
+openchronicle memory screen-adoption <adoption-id>
 openchronicle memory show <candidate-id>
 openchronicle memory edit <candidate-id> --content "..." --tags tag1,tag2
 openchronicle memory approve <candidate-id>
 openchronicle memory reject <candidate-id> --reason "..."
 openchronicle memory forget <candidate-id> --yes
 ```
+
+The adoption screen is an explicit, no-tool classifier call over one exact
+digest-bound Prompt/Reply Rescue output. It reuses the production procedure
+validator and can only stage a pending candidate. The command discloses the
+configured provider first; source deletion invalidates the candidate, and a
+separate `memory approve` remains required to publish local Markdown.
 
 Pending proposal plaintext and mutation commands are intentionally not exposed
 over MCP. MCP remains read-only.

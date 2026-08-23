@@ -101,14 +101,20 @@ supersession, and permanent-forget lifecycle. They do not introduce a second
 store or an autonomous executor. The first slice accepts explicit authored
 procedures and two-session observed/inferred patterns; positive adoption of a
 generated Prompt/Reply Rescue artifact is now a separate immutable local
-signal. It remains outside classifier context; copy and suggestion
-acknowledgement do not qualify.
+signal. It remains outside automatic classifier context; copy and suggestion
+acknowledgement do not qualify. The user may explicitly run
+`openchronicle memory screen-adoption <id>`, which discloses the configured
+classifier provider and submits only that exact adopted text to a no-tool
+screen. A qualifying result passes through the same procedure validator and
+enters the ordinary review inbox as an inferred, text-only candidate. It never
+approves, publishes, executes, or runs in the background.
 
 The first frozen evaluation rejects unconditional promotion: the
 `any_adoption` baseline reached only 0.300 precision. A clean no-tool
-`gpt-5.6-sol` screen passed the small native gate, so the next permitted slice
-is review-only staging through this module's existing procedure validator.
-Production classifier context and approval behavior are unchanged.
+`gpt-5.6-sol` screen passed the small native gate. The resulting production
+adapter is now review-only staging through this module's existing procedure
+validator. Automatic classifier context and explicit approval behavior remain
+unchanged.
 
 ### Durable delivery state machine
 

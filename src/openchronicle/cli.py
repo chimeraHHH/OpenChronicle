@@ -1019,6 +1019,58 @@ memory_app = typer.Typer(help="Review and manage proposed durable memories.")
 app.add_typer(memory_app, name="memory")
 
 
+@memory_app.command("adoptions")
+@privacy_egress_fenced
+def memory_adoptions(
+    limit: int = typer.Option(50, "--limit", "-n", min=1, max=1_000),
+) -> None:
+    """List exact Prompt/Reply Rescue outputs the user marked as used."""
+    _init()
+    from .artifact_adoptions import store as adoption_store
+
+    with fts.cursor() as conn:
+        adoptions = adoption_store.list_recent(conn, limit=limit)
+    table = Table("ID", "Artifact", "Source", "Version", "Edited", "Adopted")
+    for adoption in adoptions:
+        table.add_row(
+            adoption.id,
+            adoption.artifact_kind,
+            adoption.artifact_id,
+            str(adoption.artifact_version),
+            "yes" if adoption.output_edited else "no",
+            adoption.adopted_at,
+        )
+    console.print(table)
+
+
+@memory_app.command("screen-adoption")
+def memory_screen_adoption(adoption_id: str) -> None:
+    """Use the configured classifier to stage, never approve, a procedure candidate."""
+    cfg = _init()
+    from .artifact_adoptions.procedure_screen import stage_adoption
+
+    model = cfg.model_for("classifier")
+    console.print(
+        "Screening the exact adopted text with "
+        f"[bold]{model.provider}:{model.model}[/bold]. "
+        "This explicit command may send that text to the configured provider."
+    )
+    with fts.cursor() as conn:
+        try:
+            result = stage_adoption(conn, cfg, adoption_id)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    if result.candidate is None:
+        console.print(f"[yellow]Not staged:[/yellow] {result.decision.rationale}")
+        return
+    candidate = result.candidate
+    console.print(
+        f"[green]Staged review-only candidate {candidate.id} "
+        f"({candidate.status}).[/green] Review it with "
+        f"`openchronicle memory show {candidate.id}`; approval remains explicit."
+    )
+
+
 @memory_app.command("candidates")
 @privacy_egress_fenced
 def memory_candidates(

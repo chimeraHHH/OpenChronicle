@@ -3236,6 +3236,9 @@ export function normalizeEvidence(value: unknown): ResolvedEvidence {
       startTime = optionalString(content.timestamp, "memory evidence timestamp");
     } else if (type === "memory_candidate") {
       excerpt = optionalString(content.content, "candidate evidence content") ?? "";
+    } else if (type === "artifact_adoption") {
+      excerpt = optionalString(content.artifact_text, "artifact adoption text") ?? "";
+      startTime = optionalString(content.adopted_at, "artifact adoption time");
     } else if (type === "daily_wrap_item") {
       const item = objectValue(content.item, "Daily Wrap evidence item");
       excerpt = optionalString(item.text, "Daily Wrap evidence text") ?? "";

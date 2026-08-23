@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from ..provenance.models import canonical_digest
+from ..provenance.models import EvidenceRef, canonical_digest
 
 ARTIFACT_KINDS = frozenset({"prompt_rescue", "reply_rescue"})
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -162,6 +162,30 @@ def list_for_artifact(
         (artifact_kind, artifact_id),
     ).fetchall()
     return [value for row in rows if (value := _to_adoption(row)) is not None]
+
+
+def list_recent(conn: sqlite3.Connection, *, limit: int = 50) -> list[ArtifactAdoption]:
+    ensure_schema(conn)
+    if type(limit) is not int or not 1 <= limit <= 1_000:
+        raise ValueError("artifact adoption limit must be between 1 and 1000")
+    rows = conn.execute(
+        """
+        SELECT * FROM artifact_adoptions
+         ORDER BY adopted_at DESC, id
+         LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [value for row in rows if (value := _to_adoption(row)) is not None]
+
+
+def evidence_ref(adoption: ArtifactAdoption) -> EvidenceRef:
+    return EvidenceRef(
+        kind="artifact_adoption",
+        id=adoption.id,
+        timestamp=adoption.adopted_at,
+        content_hash=adoption.projection_digest,
+    )
 
 
 def delete_for_artifact(

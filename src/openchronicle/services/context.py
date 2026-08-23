@@ -826,6 +826,21 @@ class ContextService:
                 memo[cache_key] = result
                 return result
 
+            if source.kind == "artifact_adoption":
+                from ..artifact_adoptions import store as adoption_store
+                from ..artifact_adoptions.service import ArtifactAdoptionService
+
+                adoption = adoption_store.get(self.conn, source.id)
+                allowed = bool(
+                    adoption is not None
+                    and source.content_hash == adoption.projection_digest
+                    and provenance_store.is_current(self.conn, source)
+                    and ArtifactAdoptionService(self.conn, self.cfg).is_current(adoption)
+                )
+                result = (allowed, allowed)
+                memo[cache_key] = result
+                return result
+
             recursive_kinds = {
                 "timeline_block",
                 "memory_candidate",

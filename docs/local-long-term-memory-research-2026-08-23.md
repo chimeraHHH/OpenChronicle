@@ -281,8 +281,8 @@ immutable artifact snapshot, digest, version, edited state, and first-use time;
 replays are idempotent and deleting the source artifact removes its adoption
 rows in the same local transaction. Clipboard copy and suggestion `accepted`
 are deliberately not adoption. This is a user-confirmed positive-use signal,
-not independently observed external use, and it is not yet classifier evidence
-or permission to auto-promote a procedure.
+not independently observed external use, and it is not permission to
+auto-promote a procedure.
 
 A frozen ten-case evaluation now answers the first policy question. The naive
 `any_adoption` baseline achieved 1.000 recall but only 0.300 precision because
@@ -294,6 +294,15 @@ review-only adapter: the screen may propose text for the existing validator and
 review inbox, but cannot publish a procedure automatically. The report and
 limitations live in
 [`benchmarks/vida-procedure-adoption-v1`](../benchmarks/vida-procedure-adoption-v1/README.md).
+
+That constrained adapter is now implemented behind the explicit
+`openchronicle memory screen-adoption <id>` command. It discloses the configured
+classifier provider before model egress, uses the same frozen prompt/parser and
+production procedure validator, binds the pending candidate to the immutable
+adoption digest, and revalidates it after the model call. Rejects stage nothing;
+qualifying outputs enter the ordinary review inbox. Source deletion or mutation
+blocks staging/approval, and nothing is approved, published, or executed
+automatically.
 
 ### P1: transparent ranking signals
 
@@ -348,9 +357,9 @@ event/adjacency projection, same-case retrieval-unit comparison, and first
 reviewed procedural-memory slice are now implemented. The next evaluation
 slices are a fixed LongMemEval-V2 tier and held-out/real retrieval-unit traces;
 the next product slice is desktop `as_of` inspection. For procedural memory,
-the evaluation rejects single-adoption auto-promotion and permits only a
-screened, review-inbox pilot that reuses the existing validator. None requires
-a graph store or another autonomous memory agent.
+the evaluation rejects single-adoption auto-promotion; the permitted explicit,
+screened review-inbox pilot is now implemented. None requires a graph store or
+another autonomous memory agent.
 
 ## Success criteria
 
