@@ -1,0 +1,31 @@
+\documentclass[UTF8,fontset=none]{ctexart}
+\usepackage[paperwidth=297mm,paperheight=210mm,margin=5mm]{geometry}
+\usepackage{fontspec}
+\IfFontExistsTF{PingFang SC}{
+  \setCJKsansfont{PingFang SC}
+}{
+  \setCJKsansfont{FandolHei-Regular}
+}
+\IfFontExistsTF{Songti SC}{
+  \setCJKmainfont{Songti SC}
+}{
+  \setCJKmainfont{FandolSong-Regular}
+}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{mindmap,backgrounds}
+
+\definecolor{OCNavy}{HTML}{14213D}
+\definecolor{OCBlue}{HTML}{2563EB}
+\definecolor{OCTeal}{HTML}{0F766E}
+\definecolor{OCGreen}{HTML}{2F855A}
+\definecolor{OCOrange}{HTML}{D97706}
+\definecolor{OCRed}{HTML}{C2413A}
+\definecolor{OCPurple}{HTML}{7C3AED}
+
+\begin{document}
+\pagestyle{empty}
+\noindent\makebox[\textwidth][c]{%
+  \resizebox{!}{0.88\textheight}{\input{figures/vida-mindmap.tikz}}%
+}
+\end{document}
