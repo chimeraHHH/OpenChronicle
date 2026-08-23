@@ -6,16 +6,20 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from openchronicle import config as config_mod
 from openchronicle import paths
 from openchronicle.memory_candidates import store as candidate_store
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef, content_digest
+from openchronicle.services.memory import MemoryService
 from openchronicle.store import entries as entries_mod
 from openchronicle.store import files as files_mod
 from openchronicle.store import fts
 from openchronicle.writer import classifier as classifier_mod
 from openchronicle.writer import llm as llm_mod
+from openchronicle.writer import procedures as procedures_mod
 from openchronicle.writer import tools as writer_tools
 
 _TZ = timezone(timedelta(hours=8))
@@ -104,6 +108,7 @@ def test_classifier_stages_grounded_preference_for_review(ac_root: Path, monkeyp
             "read_memory",
             "search_memory",
             "search_activity_evidence",
+            "propose_procedure_candidate",
             "propose_memory_candidate",
             "commit",
         }
@@ -529,6 +534,259 @@ def test_activity_search_returns_distinct_grounded_sessions_only(
             ("event-2026-04-20.md", "event-pattern-b", "sess_b"),
         }
         assert len(state.allowed_evidence) == 2
+
+
+def test_procedure_renderer_validates_types_and_fences_templates() -> None:
+    spec = procedures_mod.make_procedure_spec(
+        title="Release note",
+        procedure_type="template",
+        scope="project release notes",
+        trigger="When drafting a public release note.",
+        steps=["State the user-visible change.", "Close with migration guidance."],
+        template="Changed:\n```example```",
+    )
+
+    rendered = procedures_mod.render_procedure(spec)
+
+    assert "**Action capability:** text-generation context only" in rendered
+    assert "````text\nChanged:\n```example```\n````" in rendered
+
+    for invalid in (
+        {"procedure_type": "automation"},
+        {"steps": ["Only one step."]},
+        {"procedure_type": "template", "template": ""},
+        {"procedure_type": "workflow", "template": "unexpected"},
+    ):
+        values: dict[str, object] = {
+            "title": "Release note",
+            "procedure_type": "workflow",
+            "scope": "project release notes",
+            "trigger": "When drafting a public release note.",
+            "steps": ["State the change.", "Give migration guidance."],
+            "template": "",
+        }
+        values.update(invalid)
+        with pytest.raises(ValueError):
+            procedures_mod.make_procedure_spec(**values)
+
+
+def test_user_asserted_procedure_is_reviewed_and_searchable(ac_root: Path) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn,
+            name="event-2026-04-18.md",
+            description="session evidence",
+            tags=["event"],
+        )
+        entries_mod.append_entry_once(
+            conn,
+            name="event-2026-04-18.md",
+            content=(
+                "For every release note, first state the user-visible change, "
+                "then include migration guidance."
+            ),
+            tags=["session", "sid:sess_release"],
+            entry_id="event-release-procedure",
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
+        )
+        state = writer_tools.CommitState(producer_run_key="procedure-user-run")
+        activity = writer_tools.tool_search_activity_evidence(
+            conn,
+            cfg,
+            query="release note user visible change migration guidance",
+            state=state,
+        )
+        token = activity["results"][0]["evidence_token"]
+
+        proposed = writer_tools.dispatch_classifier(
+            "propose_procedure_candidate",
+            {
+                "path": "procedure-release-note.md",
+                "title": "Project release note",
+                "procedure_type": "checklist",
+                "scope": "project release notes",
+                "trigger": "When drafting a public release note.",
+                "steps": [
+                    "State the user-visible change.",
+                    "Include concise migration guidance.",
+                ],
+                "evidence_tokens": [token],
+                "subject_key": "procedure.release-note",
+                "assertion_kind": "user_asserted",
+                "confidence": 0.98,
+            },
+            conn=conn,
+            cfg=cfg,
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+
+        assert proposed["ok"] is True
+        assert proposed["review_required"] is True
+        assert proposed["action_capability"] == "text_generation_only"
+        assert not files_mod.memory_path("procedure-release-note.md").exists()
+        candidate = candidate_store.get(conn, proposed["candidate_id"])
+        assert candidate is not None
+        assert candidate.kind == "procedure"
+        assert candidate.tags == ["procedure", "checklist", "text-only"]
+
+        accepted = MemoryService(conn, cfg=cfg).approve_candidate(
+            candidate.id,
+            expected_version=candidate.version,
+        )
+        assert accepted.status == "accepted"
+        parsed = files_mod.read_file(files_mod.memory_path("procedure-release-note.md"))
+        assert len(parsed.entries) == 1
+        assert "never executes computer actions" in parsed.entries[0].body
+        found = writer_tools.tool_search_memory(
+            conn,
+            cfg,
+            query="migration guidance",
+            state=writer_tools.CommitState(),
+        )
+        assert [item["path"] for item in found["results"]] == [
+            "procedure-release-note.md"
+        ]
+
+
+def test_observed_procedure_requires_two_cited_sessions(ac_root: Path) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        for day, entry_id, session_id in (
+            ("2026-04-16", "event-review-a", "sess_review_a"),
+            ("2026-04-17", "event-review-b", "sess_review_b"),
+        ):
+            entries_mod.create_file(
+                conn,
+                name=f"event-{day}.md",
+                description="session evidence",
+                tags=["event"],
+            )
+            entries_mod.append_entry_once(
+                conn,
+                name=f"event-{day}.md",
+                content="Drafts the summary, checks cited evidence, then tightens wording.",
+                tags=["session", f"sid:{session_id}"],
+                entry_id=entry_id,
+                origin=files_mod.MANUAL_ENTRY_ORIGIN,
+            )
+        state = writer_tools.CommitState(producer_run_key="procedure-observed-run")
+        activity = writer_tools.tool_search_activity_evidence(
+            conn,
+            cfg,
+            query="drafts summary checks cited evidence tightens wording",
+            top_k=10,
+            state=state,
+        )
+        tokens = [item["evidence_token"] for item in activity["results"]]
+        assert len(tokens) == 2
+
+        one_session = writer_tools.tool_propose_procedure_candidate(
+            conn,
+            cfg,
+            path="procedure-evidence-summary.md",
+            title="Evidence-backed summary",
+            procedure_type="workflow",
+            scope="research summaries",
+            trigger="When drafting a grounded research summary.",
+            steps=["Draft the summary.", "Check citations.", "Tighten wording."],
+            template="",
+            evidence_tokens=tokens[:1],
+            subject_key="procedure.evidence-summary",
+            assertion_kind="observed",
+            confidence=0.8,
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+        assert "at least two independent sessions" in one_session["error"]
+
+        two_sessions = writer_tools.tool_propose_procedure_candidate(
+            conn,
+            cfg,
+            path="procedure-evidence-summary.md",
+            title="Evidence-backed summary",
+            procedure_type="workflow",
+            scope="research summaries",
+            trigger="When drafting a grounded research summary.",
+            steps=["Draft the summary.", "Check citations.", "Tighten wording."],
+            template="",
+            evidence_tokens=tokens,
+            subject_key="procedure.evidence-summary",
+            assertion_kind="observed",
+            confidence=0.8,
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+        assert two_sessions["ok"] is True
+        assert two_sessions["proposal_slot"] == 0
+
+
+def test_procedure_candidate_rejects_wrong_path_subject_and_template(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn,
+            name="event-2026-04-15.md",
+            description="session evidence",
+            tags=["event"],
+        )
+        entries_mod.append_entry_once(
+            conn,
+            name="event-2026-04-15.md",
+            content="Use a title and then a concise conclusion.",
+            tags=["session", "sid:sess_explicit"],
+            entry_id="event-explicit-procedure",
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
+        )
+        state = writer_tools.CommitState()
+        activity = writer_tools.tool_search_activity_evidence(
+            conn,
+            cfg,
+            query="title concise conclusion",
+            state=state,
+        )
+        token = activity["results"][0]["evidence_token"]
+        common: dict[str, Any] = {
+            "title": "Concise note",
+            "procedure_type": "workflow",
+            "scope": "short notes",
+            "trigger": "When drafting a short note.",
+            "steps": ["Write a title.", "Close with a concise conclusion."],
+            "template": "",
+            "evidence_tokens": [token],
+            "assertion_kind": "user_asserted",
+            "confidence": 0.9,
+            "soft_limit_tokens": 16_000,
+            "state": state,
+        }
+        wrong_path = writer_tools.tool_propose_procedure_candidate(
+            conn,
+            cfg,
+            path="user-notes.md",
+            subject_key="procedure.concise-note",
+            **common,
+        )
+        wrong_subject = writer_tools.tool_propose_procedure_candidate(
+            conn,
+            cfg,
+            path="procedure-concise-note.md",
+            subject_key="user.concise-note",
+            **common,
+        )
+        wrong_template = writer_tools.tool_propose_procedure_candidate(
+            conn,
+            cfg,
+            path="procedure-concise-note.md",
+            subject_key="procedure.concise-note",
+            **{**common, "procedure_type": "template"},
+        )
+
+    assert "procedure-*" in wrong_path["error"]
+    assert "procedure." in wrong_subject["error"]
+    assert "require template text" in wrong_template["error"]
 
 
 def test_candidate_separates_claim_support_from_full_input_closure(

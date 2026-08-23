@@ -21,9 +21,19 @@ time with `openchronicle rebuild-index`.
 | `topic-` | A knowledge domain or ongoing area of attention | `topic-rust-async.md` |
 | `person-` | Another person the user interacts with | `person-alice.md` |
 | `org-` | A company, team, or institution | `org-anthropic.md` |
+| `procedure-` | Reviewed text-only workflow, checklist, or template | `procedure-release-note.md` |
 | `event-` | Per-day session-level activity log (written by the S2 reducer) | `event-2026-04-22.md` |
 
 `user-profile.md` and `user-preferences.md` are preseeded on first install; everything else is created by the writer on demand. See `prompts/schema.md` for the full decision tree (also available via MCP `get_schema`).
+
+`procedure-*` entries are ordinary reviewed, provenance-bearing memories with a
+small canonical body: title, type (`workflow`, `checklist`, or `template`),
+scope, trigger, an explicit `text-generation context only` capability line,
+and 2–12 steps. Templates also carry inert fenced text. They may influence a
+draft, checklist, summary, or organization plan returned by a model, but they
+never authorize tool calls or execute computer actions. Explicit user-authored
+procedures may be proposed from one direct source; observed or inferred
+procedures require cited event evidence from two distinct sessions.
 
 ## File layout
 

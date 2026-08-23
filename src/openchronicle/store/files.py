@@ -75,7 +75,16 @@ def atomic_write_text(path: Path, content: str) -> None:
         raise
 
 
-VALID_PREFIXES = ("user-", "project-", "tool-", "topic-", "person-", "org-", "event-")
+VALID_PREFIXES = (
+    "user-",
+    "project-",
+    "tool-",
+    "topic-",
+    "person-",
+    "org-",
+    "event-",
+    "procedure-",
+)
 
 # Candidate approval may create a target Markdown file before it appends the
 # reviewed entry.  Persisting ownership in that same atomic Markdown write is

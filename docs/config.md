@@ -125,7 +125,7 @@ model = "ollama/qwen2.5:14b"            # match classifier or stronger
 
 Things to check before trusting a local setup:
 
-- **Tool-calling support is required for the classifier.** It can read/search and call `propose_memory_candidate`; approval is a separate trusted local operation. `qwen2.5`, `llama3.1`, `mistral-nemo` and `command-r` are typical tool-capable choices; small variants are often unreliable.
+- **Tool-calling support is required for the classifier.** It can read/search and call `propose_memory_candidate` or the constrained `propose_procedure_candidate`; approval is a separate trusted local operation. `qwen2.5`, `llama3.1`, `mistral-nemo` and `command-r` are typical tool-capable choices; small variants are often unreliable.
 - **JSON mode is required for `timeline` and `reducer`.** They pass `response_format={"type":"json_object"}`, which litellm forwards to Ollama as `format: "json"`. If the model ignores it and returns prose, both stages will log parse errors — pick a bigger model.
 - **Context window.** Timeline blocks are 1-min, reducer flushes consume ~5 blocks, a 2-hour session can stack ~24 blocks. Set Ollama's `num_ctx` to ≥ 16 k for `timeline`, ≥ 32 k for `reducer` / `classifier`. Tiny defaults (2–4 k) will silently truncate.
 - **Leave `api_key_env` empty.** If you keep the default `"OPENAI_API_KEY"` and don't have one exported, litellm complains even though Ollama wouldn't use it.

@@ -57,13 +57,18 @@ The classifier receives only these tools:
 - `read_memory`
 - `search_memory`
 - `search_activity_evidence`
+- `propose_procedure_candidate`
 - `propose_memory_candidate`
 - `commit`
 
 It has no direct append, create, compact, file, shell, browser, messaging, or
 other side-effect tool. `propose_memory_candidate` may stage a reviewed append
-or supersede operation, but never mutates Markdown. Screen-derived and
-retrieved strings are explicitly treated as untrusted quoted data.
+or supersede operation, but never mutates Markdown. The constrained procedure
+tool stages only a text workflow/checklist/template in `procedure-*`; explicit
+user-authored procedures need direct evidence and observed/inferred procedures
+need cited canonical event entries from at least two independent sessions. It
+does not execute or authorize computer actions. Screen-derived and retrieved
+strings are explicitly treated as untrusted quoted data.
 
 Each proposal must cite one or more evidence tokens that were present in the
 current context or returned by a read tool. Unknown tokens are rejected. A

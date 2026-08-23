@@ -17,6 +17,7 @@
 | `topic-` | A knowledge domain or ongoing area of attention | topic-rust-async.md |
 | `person-` | Another person the user mentions or interacts with | person-alice.md |
 | `org-` | A company, team, or institution | org-anthropic.md |
+| `procedure-` | A reviewed reusable workflow, checklist, or text template. Procedures guide generated text only and never authorize or execute computer actions. | procedure-release-note.md |
 | `event-` | **Session-level activity log.** One file per day: `event-YYYY-MM-DD.md`. Each entry is a time-ranged sub-task list written by the S2 reducer (the Classifier never writes here). Scheduled events / appointments / interviews belong in the non-event file for whichever entity anchors them (person-/org-/project-) when they represent a durable fact; transient occurrences stay in the event log only. | event-2026-04-22.md |
 
 `event-YYYY-MM-DD.md` is **owned by the S2 reducer, not the classifier.** You never write there. Transient one-off activity ("had a 1:1 with Alice on Tuesday") is already in that file — do not mirror it into a durable file just because it has a date. Only durable facts with lasting value belong in the non-event files.
@@ -35,14 +36,35 @@ Ask in this order:
 
 1. **Is it a durable property of the user themselves?** (new job title, relocation, "I prefer X over Y", always uses dark mode…) → `user-profile.md` or `user-preferences.md`.
 2. **Is it a durable property of a project/tool/topic/person/org?** (Project X uses DB Y; Tool Z's new v4 API; Alice joined Acme) → the corresponding entity file.
-3. **It has a specific date but nothing durable attached** (one-off meeting, routine appointment, a task you finished today) → **SKIP**. The event-daily log already has it.
-4. **It has a specific date *and* durable context** (interview XAI on 2026-04-24 → XAI is an org the user is actively engaging with) → append the *durable* part to `org-XAI.md` (that they are in an interview loop there), NOT a restated copy of the time-bounded event.
+3. **Is it an explicit reusable workflow/checklist/template, or a procedure repeated in at least two independent sessions?** → stage a `procedure-*` candidate. Keep only text-generation guidance; never encode a command to execute an app or computer action.
+4. **It has a specific date but nothing durable attached** (one-off meeting, routine appointment, a task you finished today) → **SKIP**. The event-daily log already has it.
+5. **It has a specific date *and* durable context** (interview XAI on 2026-04-24 → XAI is an org the user is actively engaging with) → append the *durable* part to `org-XAI.md` (that they are in an interview loop there), NOT a restated copy of the time-bounded event.
 
 ### Step 3: append / create / supersede?
 - Target file exists + new info conflicts with existing entry → `supersede`
 - Target file exists + new info complements → `append`
 - Target file exists + new info is redundant → skip
 - Target file does not exist → `create` (description is required)
+
+## Procedural memory
+
+Procedural memory is a reviewed, text-only recipe that helps a model generate a
+draft, checklist, summary, or organization plan in the user's established way.
+It is not executable automation and it grants no permission to click, type,
+send, schedule, edit files, or invoke tools.
+
+A procedure qualifies only through one of these routes:
+
+1. The user explicitly authored a reusable workflow, checklist, or template.
+   One directly supporting source is enough; use `assertion_kind=user_asserted`.
+2. The same concrete sequence is directly observed or safely synthesized from
+   cited event evidence in at least two distinct session IDs. Duplicate flushes
+   from one session count once; use `observed` or `inferred` as appropriate.
+
+Do not promote a single successful task, vague habit, raw click sequence,
+application-specific keystrokes, or a procedure invented by the model. Search
+durable memory before proposing so an existing reviewed procedure is not
+duplicated.
 
 ## What user-preferences.md is and isn't
 

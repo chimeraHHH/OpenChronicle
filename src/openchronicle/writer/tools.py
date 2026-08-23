@@ -23,6 +23,7 @@ from ..services.memory_projection import canonical_entry_hits_locked
 from ..store import entries as entries_mod
 from ..store import files as files_mod
 from ..store import fts, semantic
+from . import procedures as procedures_mod
 
 logger = get("openchronicle.writer")
 
@@ -353,6 +354,139 @@ def _classifier_activity_payload(
     return payload
 
 
+def tool_propose_procedure_candidate(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    path: str,
+    title: object,
+    procedure_type: object,
+    scope: object,
+    trigger: object,
+    steps: object,
+    template: object,
+    evidence_tokens: list[str],
+    subject_key: str,
+    assertion_kind: str,
+    confidence: float | None,
+    soft_limit_tokens: int,
+    state: CommitState,
+) -> dict[str, Any]:
+    """Stage one text-only reusable procedure through the normal review inbox."""
+    clean_path = path.strip()
+    if not clean_path.startswith("procedure-"):
+        return {"error": "procedural memories require a procedure-* target path"}
+    clean_subject = subject_key.strip().casefold()
+    if not clean_subject.startswith("procedure."):
+        return {"error": "procedural subject_key must start with procedure."}
+    clean_assertion = assertion_kind.strip().casefold().replace("-", "_")
+    if clean_assertion not in {"user_asserted", "observed", "inferred"}:
+        return {"error": "assertion_kind must be user_asserted, observed, or inferred"}
+    try:
+        spec = procedures_mod.make_procedure_spec(
+            title=title,
+            procedure_type=procedure_type,
+            scope=scope,
+            trigger=trigger,
+            steps=steps,
+            template=template,
+        )
+    except ValueError as exc:
+        return {"error": str(exc)}
+    if clean_assertion != "user_asserted":
+        for token in evidence_tokens:
+            if state.allowed_evidence.get(token) is None:
+                return {"error": f"unknown or unobserved evidence token: {token}"}
+        session_ids = _procedure_evidence_session_ids(
+            conn,
+            cfg,
+            evidence_tokens=evidence_tokens,
+            state=state,
+        )
+        if len(session_ids) < 2:
+            return {
+                "error": (
+                    "observed or inferred procedures require cited evidence from "
+                    "at least two independent sessions"
+                )
+            }
+    result = tool_propose_memory_candidate(
+        conn,
+        kind="procedure",
+        operation="append",
+        path=clean_path,
+        target_entry_id="",
+        content=procedures_mod.render_procedure(spec),
+        tags=["procedure", spec.procedure_type, "text-only"],
+        evidence_tokens=evidence_tokens,
+        confidence=confidence,
+        conflict_key=clean_subject,
+        subject_key=clean_subject,
+        assertion_kind=clean_assertion,
+        valid_from="",
+        valid_to="",
+        soft_limit_tokens=soft_limit_tokens,
+        state=state,
+    )
+    if result.get("ok"):
+        result.update(
+            {
+                "procedure_type": spec.procedure_type,
+                "action_capability": "text_generation_only",
+            }
+        )
+    return result
+
+
+def _procedure_evidence_session_ids(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    evidence_tokens: list[str],
+    state: CommitState,
+) -> set[str]:
+    refs = [state.allowed_evidence.get(token) for token in evidence_tokens]
+    sessions: set[str] = set()
+    context = ContextService(conn, cfg)
+    with files_mod.store_write_lock():
+        parsed_by_path: dict[str, files_mod.ParsedFile | None] = {}
+        for ref in refs:
+            if ref is None or ref.kind != "memory_entry" or not ref.path.startswith("event-"):
+                continue
+            if candidate_store.is_tombstoned(
+                conn, kind="memory_file", artifact_id=ref.path
+            ) or candidate_store.is_tombstoned(
+                conn,
+                kind="memory_entry",
+                artifact_id=ref.id,
+                path=ref.path,
+            ):
+                continue
+            if ref.path not in parsed_by_path:
+                try:
+                    parsed_by_path[ref.path] = files_mod.read_file(files_mod.memory_path(ref.path))
+                except (FileNotFoundError, OSError, TypeError, ValueError):
+                    parsed_by_path[ref.path] = None
+            parsed = parsed_by_path[ref.path]
+            if parsed is None:
+                continue
+            entry = next((candidate for candidate in parsed.entries if candidate.id == ref.id), None)
+            if (
+                entry is None
+                or entry.timestamp != ref.timestamp
+                or content_digest(entry.body) != ref.content_hash
+                or not context.memory_entry_allowed(path=ref.path, entry=entry)
+            ):
+                continue
+            session_id = next(
+                (tag.removeprefix("sid:") for tag in entry.tags if tag.startswith("sid:")),
+                "",
+            )
+            if session_id:
+                sessions.add(session_id)
+    return sessions
+
+
 def tool_propose_memory_candidate(
     conn: sqlite3.Connection,
     *,
@@ -632,7 +766,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
             "name": "create",
             "description": (
                 "Create a new memory file. Filename prefix must be one of: "
-                "user-, project-, tool-, topic-, person-, org-, event-."
+                "user-, project-, tool-, topic-, person-, org-, event-, procedure-."
             ),
             "parameters": {
                 "type": "object",
@@ -735,6 +869,74 @@ CLASSIFIER_TOOL_SCHEMAS: list[dict[str, Any]] = [
                     },
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "propose_procedure_candidate",
+            "description": (
+                "Stage a reusable text-only workflow, checklist, or template for human "
+                "review. It is generation context and never executes computer actions."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "A procedure-*.md target path.",
+                    },
+                    "title": {"type": "string"},
+                    "procedure_type": {
+                        "type": "string",
+                        "enum": ["workflow", "checklist", "template"],
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Where this procedure should influence generated text.",
+                    },
+                    "trigger": {
+                        "type": "string",
+                        "description": "The request or situation in which it is relevant.",
+                    },
+                    "steps": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 2,
+                        "maxItems": 12,
+                    },
+                    "template": {
+                        "type": "string",
+                        "description": "Required only for procedure_type=template.",
+                    },
+                    "evidence_tokens": {
+                        "type": "array",
+                        "items": {"type": "string", "pattern": "^ev-[a-f0-9]+$"},
+                        "minItems": 1,
+                        "maxItems": 20,
+                    },
+                    "subject_key": {
+                        "type": "string",
+                        "description": "Stable procedure.* identity for dedup and review.",
+                    },
+                    "assertion_kind": {
+                        "type": "string",
+                        "enum": ["user_asserted", "observed", "inferred"],
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": [
+                    "path",
+                    "title",
+                    "procedure_type",
+                    "scope",
+                    "trigger",
+                    "steps",
+                    "evidence_tokens",
+                    "subject_key",
+                    "assertion_kind",
+                ],
             },
         },
     },
@@ -851,6 +1053,24 @@ def dispatch_classifier(
             query=args["query"],
             top_k=args.get("top_k", 10),
             adjacent=args.get("adjacent", 1),
+            state=state,
+        )
+    if name == "propose_procedure_candidate":
+        return tool_propose_procedure_candidate(
+            conn,
+            cfg,
+            path=str(args.get("path") or ""),
+            title=args.get("title"),
+            procedure_type=args.get("procedure_type"),
+            scope=args.get("scope"),
+            trigger=args.get("trigger"),
+            steps=args.get("steps"),
+            template=args.get("template", ""),
+            evidence_tokens=[str(token) for token in args.get("evidence_tokens") or []],
+            subject_key=str(args.get("subject_key") or ""),
+            assertion_kind=str(args.get("assertion_kind") or ""),
+            confidence=args.get("confidence"),
+            soft_limit_tokens=soft_limit_tokens,
             state=state,
         )
     if name == "propose_memory_candidate":

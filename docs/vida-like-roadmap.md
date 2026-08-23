@@ -245,9 +245,12 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   0.738× the whole-session context and a 0.714 forbidden-anchor-rate reduction.
 - [ ] Repeat retrieval-unit comparison on held-out/public and real replay
   traces before adding model-driven topic-boundary inference.
-- [ ] Reviewed procedural memory derived only from repeated/adopted text
-  workflows, templates, or checklists. It remains generation context and never
-  executes computer actions.
+- [x] First reviewed procedural-memory slice for explicit user-authored or
+  two-session observed/inferred text workflows, templates, and checklists. It
+  reuses the existing review/provenance/forget lifecycle, remains generation
+  context, and never executes computer actions.
+- [ ] Add a separately grounded positive-adoption signal and evaluate whether
+  adopted generated artifacts should qualify without two-session repetition.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1

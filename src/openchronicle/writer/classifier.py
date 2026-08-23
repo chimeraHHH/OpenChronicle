@@ -1,10 +1,10 @@
-"""Classifier stage: event-daily → user-/project-/topic-/tool-/person-/org-.
+"""Classifier stage: event-daily → reviewed durable facts and procedures.
 
 Runs after the S2 reducer successfully appends a session summary to
 ``event-YYYY-MM-DD.md``. Reads that entry plus a small window of the
 preceding entries of the same day, calls the ``classifier`` LLM stage,
 and lets it retrieve context and stage grounded candidates in a local review
-inbox (read_memory / search_memory / propose_memory_candidate / commit).
+inbox (read/search/propose-memory/propose-procedure/commit).
 
 The classifier has no Markdown mutation tools. Event-daily remains reducer
 owned, and durable memories are materialized only after explicit review.

@@ -171,7 +171,7 @@ The core idea is simple:
 * **Session-aware memory writing** instead of noisy per-snapshot logs
 * **Human-readable Markdown memory**
 * **Local SQLite indexing**
-* **Structured memory files** like user-, project-, tool-, topic-, person-, org-, and daily event-
+* **Structured memory files** like user-, project-, tool-, topic-, person-, org-, reviewed text-only procedure-, and daily event- memory
 * **Supersede-not-delete history**
 * **Review-first durable memory candidates** with evidence, conflicts, and explicit approval
 * **Canonical Daily Wraps** with exact, explicitly untrusted activity quotes,

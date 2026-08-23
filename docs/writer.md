@@ -3,7 +3,7 @@
 The writer is two LLM stages wired behind session boundaries:
 
 1. **S2 reducer** (`writer/session_reducer.py`) — writes incremental `[flush]` entries during an active session and a final entry when it closes, both to `event-YYYY-MM-DD.md`.
-2. **Classifier** (`writer/classifier.py`) — consumes durable periodic and terminal delivery jobs, scans the referenced event-daily evidence for durable facts, and proposes reviewable memory candidates. Only an explicit local approval writes a candidate to `user-/project-/tool-/topic-/person-/org-*.md`.
+2. **Classifier** (`writer/classifier.py`) — consumes durable periodic and terminal delivery jobs, scans the referenced event-daily evidence for durable facts or reusable text procedures, and proposes reviewable memory candidates. Only an explicit local approval writes a candidate to `user-/project-/tool-/topic-/person-/org-/procedure-*.md`.
 
 Both the reducer and the classifier are periodic during long sessions. The reducer flushes every `session.flush_minutes` so event-daily surfaces activity in near-real-time; the classifier requests coverage every `classifier.interval_minutes` (default 30, min 5) so durable facts can reach the local review inbox without waiting for the session to close. `flush_end` proves reducer materialization, while `classified_end` advances only after a durable classifier commit receipt is finalized. Reducer entry materialization is lock-serialized and replay-idempotent. Classifier work is serialized per session in the SQLite `classifier_jobs` outbox; stable delivery/run keys and proposal slots make crash replay reuse persisted candidates instead of silently replacing content the user may already have reviewed. Session boundaries come from `session/manager.py` (see [session.md](session.md)).
 
@@ -88,12 +88,19 @@ Both paths then run a bounded, review-first tool-call loop over `writer/tools.py
 | `read_memory(path, tail_n?)` | Fetch a durable (non-`event-*`) memory file's frontmatter + last 1–20 entries (default 10). |
 | `search_memory(query, top_k?, include_superseded?)` | Local semantic + BM25 RRF when enabled, otherwise BM25, over durable current non-tombstoned memory; `top_k` is 1–20. Enabled backend failures are explicit. |
 | `search_activity_evidence(query, top_k?, adjacent?)` | Bounded BM25 recall over event-level reducer sub-tasks. Each match includes 0–3 authorized previous/next events (default one), session IDs, exact ranges/apps, and source-entry evidence tokens for cross-session pattern confirmation. Event entries remain outside the durable semantic index. |
+| `propose_procedure_candidate(path, title, procedure_type, scope, trigger, steps, template?, evidence_tokens, subject_key, assertion_kind, confidence?)` | Stage a reviewed text-only workflow, checklist, or template in `procedure-*`. Explicit user-authored procedures may use one direct source; observed/inferred procedures require cited event evidence from at least two sessions. The stored capability is generation-only and never executes computer actions. |
 | `propose_memory_candidate(kind, operation?, path, target_entry_id?, content, tags, evidence_tokens, subject_key, assertion_kind, valid_from?, valid_to?, confidence?, conflict_key?)` | Persist an append or supersede candidate whose evidence tokens must have been authorized by the current prompt or an actual read/search result. `subject_key` is the global fact slot; `assertion_kind` is user-asserted, observed, or inferred. Supersede preserves the slot and requires the exact reviewed target plus separate replacement evidence. It does not mutate Markdown. |
 | `commit(summary)` | End a model-driven round. Called exactly once; the proven-empty terminal path does not call the provider or this tool. |
 
 Iteration cap: `writer.max_tool_iterations = 12`.
 
 The prompt is biased toward **doing nothing**: default action is an empty `commit` if no durable signal is present. Raw activity ("used Cursor for 2h", "played Slay the Spire") is explicitly *not* classifiable — that's already captured in the event-daily entry. Pending candidates are listed, edited, approved, rejected, or purged through the explicit local CLI/service boundary; the read-only MCP surface cannot approve them.
+
+Procedural proposals reuse that same candidate, approval, provenance,
+supersession, and permanent-forget lifecycle. They do not introduce a second
+store or an autonomous executor. The first slice accepts explicit authored
+procedures and two-session observed/inferred patterns; positive adoption of a
+generated artifact is not yet a separate durable signal.
 
 ### Durable delivery state machine
 

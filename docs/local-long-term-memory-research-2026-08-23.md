@@ -266,6 +266,15 @@ Only promote a workflow, template, or checklist after repeated evidence and/or
 positive adoption. Procedural memories remain read-only context for generating
 text artifacts; they never execute computer actions.
 
+The first reviewed slice is now implemented: a dedicated `procedure-*` prefix
+and classifier proposal tool render a bounded workflow/checklist/template into
+the existing review inbox. Explicit user-authored reusable instructions may use
+one direct source; observed or inferred procedures are rejected unless their
+cited canonical event evidence resolves to at least two distinct sessions.
+Approval, provenance, current recall, supersession, and permanent forget reuse
+the ordinary memory lifecycle. A separate positive-adoption signal and its
+evaluation remain open; this milestone does not infer adoption from mere use.
+
 ### P1: transparent ranking signals
 
 Add current-state, explicit-temporary TTL, recency, and recall-use signals after
@@ -314,11 +323,12 @@ corruption, hallucination, latency, and cost.
 ## Immediate decision
 
 The native lifecycle harness, inert model-decision adapter, fixed official
-MemOps adjacent smoke, and deterministic event/adjacency projection are now
-implemented. The next evaluation slices are repeated MemOps stability, a fixed
-LongMemEval-V2 tier, and a same-case minute/session/event comparison; the next
-product slices are desktop `as_of` inspection and reviewed procedural memory.
-None requires a graph store or another autonomous memory agent.
+MemOps adjacent smoke, repeated layered stability gate, deterministic
+event/adjacency projection, same-case retrieval-unit comparison, and first
+reviewed procedural-memory slice are now implemented. The next evaluation
+slices are a fixed LongMemEval-V2 tier and held-out/real retrieval-unit traces;
+the next product slices are desktop `as_of` inspection and a grounded positive-
+adoption signal. None requires a graph store or another autonomous memory agent.
 
 ## Success criteria
 
