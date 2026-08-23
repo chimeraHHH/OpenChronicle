@@ -168,6 +168,14 @@ Every approved entry embeds exactly one final-line `oc-provenance` JSON comment 
 
 Proposal creation revalidates evidence and atomically commits the candidate, conflict classification, and source edges under an immediate SQLite transaction. Approval uses a deterministic entry ID, revision compare-and-swap, current-evidence hash checks, and exact replay validation. A re-entrant cross-process review-operation lock serializes proposal, edit, approval, rejection, purge, provenance-bearing append/supersede, and full provenance rebuild operations. Every dependent append rechecks its source inside that fence, so it either precedes a purge and enters the captured closure or follows it and fails closed. Supersede replacements cite the post-strike source entry, and rebuild resolves embedded memory dependencies to a fixed point rather than filename order. Purge combines SQLite edges with valid Markdown frames before atomically writing content-free tombstones; normal daemon startup always resumes an interrupted forget operation.
 
+Candidates preserve two evidence views without weakening privacy or deletion:
+the full input-flow closure contains every source exposed before the proposal,
+while `claim_evidence` contains only tokens the classifier explicitly cited for
+the fact. Both are revision-bound in the candidate projection/proposal digest;
+claim sources must be an exact subset of the full closure. Review UI source
+opening uses claim support, while policy re-evaluation and purge continue to use
+the complete provenance graph.
+
 Compaction accepts only non-empty files whose entries are currently authorized
 as explicit `oc-origin:manual-v1` roots or live provenance-bearing derivatives.
 Automation-origin roots, unmarked legacy entries, invalid origins/frames, stale

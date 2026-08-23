@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
     target_entry_hash TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL,
+    claim_evidence_json TEXT NOT NULL DEFAULT '[]',
     tags_json TEXT NOT NULL DEFAULT '[]',
     confidence REAL,
     conflict_key TEXT NOT NULL DEFAULT '',
@@ -80,6 +81,7 @@ class MemoryCandidate:
     target_entry_hash: str
     content: str
     content_hash: str
+    claim_evidence: list[EvidenceRef]
     tags: list[str]
     confidence: float | None
     conflict_key: str
@@ -105,6 +107,7 @@ class MemoryCandidate:
             "target_entry_hash": self.target_entry_hash,
             "content": self.content,
             "content_hash": self.content_hash,
+            "claim_evidence": [ref.to_dict() for ref in self.claim_evidence],
             "tags": self.tags,
             "confidence": self.confidence,
             "conflict_key": self.conflict_key,
@@ -135,6 +138,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             ("proposal_slot", "INTEGER NOT NULL DEFAULT 0"),
             ("target_entry_id", "TEXT NOT NULL DEFAULT ''"),
             ("target_entry_hash", "TEXT NOT NULL DEFAULT ''"),
+            ("claim_evidence_json", "TEXT NOT NULL DEFAULT '[]'"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE memory_candidates ADD COLUMN {name} {declaration}")
@@ -169,7 +173,7 @@ def _backfill_projection_migration(conn: sqlite3.Connection) -> None:
     rows = conn.execute(
         """
         SELECT id, kind, operation, target_path, target_entry_id,
-               target_entry_hash, content, content_hash,
+               target_entry_hash, content, content_hash, claim_evidence_json,
                tags_json, confidence, conflict_key
           FROM memory_candidates
          ORDER BY id
@@ -194,6 +198,7 @@ def _backfill_projection_migration(conn: sqlite3.Connection) -> None:
                 content_hash=values["content_hash"],
                 tags=values["tags"],
                 evidence=sources,
+                claim_evidence=values["claim_evidence"] or None,
             )
             if sources and all(source.content_hash for source in sources)
             else ""
@@ -218,6 +223,7 @@ def _legacy_projection_values(row: sqlite3.Row) -> dict[str, object] | None:
         "target_entry_hash",
         "content",
         "content_hash",
+        "claim_evidence_json",
         "tags_json",
         "conflict_key",
     )
@@ -232,6 +238,9 @@ def _legacy_projection_values(row: sqlite3.Row) -> dict[str, object] | None:
     except (TypeError, json.JSONDecodeError):
         return None
     if not isinstance(tags, list) or any(not isinstance(tag, str) for tag in tags):
+        return None
+    claim_evidence = _parse_evidence_refs(row["claim_evidence_json"])
+    if claim_evidence is None:
         return None
     confidence = row["confidence"]
     if confidence is not None:
@@ -248,6 +257,7 @@ def _legacy_projection_values(row: sqlite3.Row) -> dict[str, object] | None:
         "target_entry_hash": row["target_entry_hash"],
         "content": row["content"],
         "content_hash": row["content_hash"],
+        "claim_evidence": claim_evidence,
         "tags": tags,
         "confidence": confidence,
         "conflict_key": row["conflict_key"],
@@ -286,6 +296,32 @@ def _legacy_candidate_sources(
         return []
 
 
+def _parse_evidence_refs(raw: object) -> list[EvidenceRef] | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        values = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(values, list):
+        return None
+    try:
+        refs = [EvidenceRef.from_dict(value) for value in values]
+    except (TypeError, ValueError):
+        return None
+    identities = {(ref.kind, ref.path, ref.id) for ref in refs}
+    return refs if len(identities) == len(refs) else None
+
+
+def _evidence_refs_json(refs: list[EvidenceRef]) -> str:
+    return json.dumps(
+        [ref.to_dict() for ref in refs],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def projection_digest(
     *,
     kind: str,
@@ -298,6 +334,7 @@ def projection_digest(
     conflict_key: str,
     target_entry_id: str = "",
     target_entry_hash: str = "",
+    claim_evidence: list[EvidenceRef] | None = None,
 ) -> str:
     payload = {
         "kind": kind,
@@ -312,6 +349,20 @@ def projection_digest(
     if operation != "append" or target_entry_id or target_entry_hash:
         payload["target_entry_id"] = target_entry_id
         payload["target_entry_hash"] = target_entry_hash
+    if claim_evidence:
+        payload["claim_evidence"] = [
+            ref.to_dict()
+            for ref in sorted(
+                claim_evidence,
+                key=lambda ref: (
+                    ref.kind,
+                    ref.path,
+                    ref.id,
+                    ref.timestamp,
+                    ref.content_hash,
+                ),
+            )
+        ]
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -336,6 +387,7 @@ def projection_is_current(candidate: MemoryCandidate) -> bool:
             conflict_key=candidate.conflict_key,
             target_entry_id=candidate.target_entry_id,
             target_entry_hash=candidate.target_entry_hash,
+            claim_evidence=candidate.claim_evidence,
         )
     )
 
@@ -350,11 +402,36 @@ def proposal_digest(
     operation: str = "append",
     target_entry_id: str = "",
     target_entry_hash: str = "",
+    claim_evidence: list[EvidenceRef] | None = None,
 ) -> str:
     """Bind a candidate proposal to the exact source revisions it saw."""
     source_keys = sorted(
         f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}" for ref in evidence
     )
+    claim_keys = (
+        sorted(
+            f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}"
+            for ref in claim_evidence
+        )
+        if claim_evidence is not None
+        else source_keys
+    )
+    if claim_keys != source_keys:
+        fields = [
+            "memory-candidate-v3",
+            kind,
+            operation,
+            target_path,
+            target_entry_id,
+            target_entry_hash,
+            content_hash,
+            *sorted(tags),
+            "claim-sources",
+            *claim_keys,
+            "flow-sources",
+            *source_keys,
+        ]
+        return hashlib.sha256("\0".join(fields).encode()).hexdigest()
     if operation == "append" and not target_entry_id and not target_entry_hash:
         fields = ["memory-candidate-v1", kind, target_path, content_hash]
     else:
@@ -388,6 +465,7 @@ def proposal_is_current(
             content_hash=candidate.content_hash,
             tags=candidate.tags,
             evidence=evidence,
+            claim_evidence=candidate.claim_evidence or None,
         )
     )
 
@@ -407,6 +485,7 @@ def insert(
     target_entry_hash: str,
     content: str,
     content_hash: str,
+    claim_evidence: list[EvidenceRef],
     tags: list[str],
     confidence: float | None,
     conflict_key: str,
@@ -426,6 +505,7 @@ def insert(
         conflict_key=conflict_key,
         target_entry_id=target_entry_id,
         target_entry_hash=target_entry_hash,
+        claim_evidence=claim_evidence,
     )
     before = conn.total_changes
     conn.execute(
@@ -434,9 +514,9 @@ def insert(
             id, idempotency_key, proposal_digest, projection_digest, producer_run_key,
             proposal_slot, kind, operation, target_path,
             target_entry_id, target_entry_hash, content,
-            content_hash, tags_json, confidence, conflict_key, status,
+            content_hash, claim_evidence_json, tags_json, confidence, conflict_key, status,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             candidate_id,
@@ -452,6 +532,7 @@ def insert(
             target_entry_hash,
             content,
             content_hash,
+            _evidence_refs_json(claim_evidence),
             json.dumps(tags, ensure_ascii=False),
             confidence,
             conflict_key,
@@ -600,6 +681,7 @@ def update_content(
         conflict_key=conflict_key,
         target_entry_id=current.target_entry_id,
         target_entry_hash=current.target_entry_hash,
+        claim_evidence=current.claim_evidence,
     )
     result = conn.execute(
         """
@@ -803,6 +885,7 @@ def _to_candidate(row: sqlite3.Row) -> MemoryCandidate:
         tags = json.loads(row["tags_json"] or "[]")
     except json.JSONDecodeError:
         tags = []
+    claim_evidence = _parse_evidence_refs(row["claim_evidence_json"])
     return MemoryCandidate(
         id=row["id"],
         idempotency_key=row["idempotency_key"],
@@ -817,6 +900,7 @@ def _to_candidate(row: sqlite3.Row) -> MemoryCandidate:
         target_entry_hash=row["target_entry_hash"] or "",
         content=row["content"],
         content_hash=row["content_hash"],
+        claim_evidence=claim_evidence or [],
         tags=[str(tag) for tag in tags] if isinstance(tags, list) else [],
         confidence=float(row["confidence"]) if row["confidence"] is not None else None,
         conflict_key=row["conflict_key"] or "",

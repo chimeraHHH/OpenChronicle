@@ -74,6 +74,14 @@ export function candidateDetail(overrides: Partial<Candidate> = {}): Candidate {
         content_hash: "abc123",
       },
     ],
+    claim_evidence: [
+      {
+        kind: "timeline_block",
+        id: "block-1",
+        timestamp: "2026-08-08T08:00:00+08:00",
+        content_hash: "abc123",
+      },
+    ],
     ...overrides,
   };
 }

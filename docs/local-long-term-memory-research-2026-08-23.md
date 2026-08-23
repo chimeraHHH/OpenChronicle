@@ -99,6 +99,10 @@ been claimed.
 5. **Real cross-session confirmation.** The classifier now has a separate
    authorized `search_activity_evidence` path. Multiple flushes in one session
    do not count as multiple independent observations.
+6. **Claim support versus information flow.** Candidates separately bind the
+   model's explicitly cited fact support and every input exposed before the
+   proposal. Review stays focused without weakening privacy re-evaluation or
+   transitive forget.
 
 ## Remaining optimization sequence
 
@@ -186,4 +190,3 @@ public and product-native evaluation:
 - zero surviving derivatives after explicit forget;
 - bounded retrieval context and predictable local latency;
 - a measurable lift in suggestion/draft adoption over a no-memory baseline.
-

@@ -72,6 +72,12 @@ proposal slots are stable within that run. If a provider retry changes wording,
 the first durable proposal remains canonical and a replay mismatch is recorded
 instead of creating a duplicate review card.
 
+The candidate separately binds explicitly cited claim-support references and
+the complete prompt-visible input closure. The first keeps review/source UX
+precise; the second remains authoritative for policy changes and transitive
+forget. Claim support cannot name a source outside the full closure, and either
+projection changing blocks approval.
+
 Proposal creation revalidates every cited source while holding an immediate
 SQLite write transaction. The candidate row, conflict decision, and provenance
 edges commit atomically; a matching replay can repair a missing edge left by a

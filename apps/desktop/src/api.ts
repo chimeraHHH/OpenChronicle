@@ -302,6 +302,10 @@ function candidatePayload(value: unknown, evidenceValue: unknown = []): Candidat
   const raw = objectValue(value, "candidate payload");
   const conflictKey = optionalString(raw.conflict_key, "candidate conflict key");
   const evidence = arrayValue(evidenceValue, "candidate evidence").map(reference);
+  const claimEvidence =
+    raw.claim_evidence === undefined
+      ? evidence
+      : arrayValue(raw.claim_evidence, "candidate claim evidence").map(reference);
   const confidence = raw.confidence === null ? null : raw.confidence === undefined ? undefined : numberValue(raw.confidence, "candidate confidence");
   const appliedEntryId = raw.applied_entry_id === null ? null : optionalString(raw.applied_entry_id, "candidate entry id");
   const reviewedAt = raw.reviewed_at === null ? null : optionalString(raw.reviewed_at, "candidate reviewed time");
@@ -323,6 +327,7 @@ function candidatePayload(value: unknown, evidenceValue: unknown = []): Candidat
     review_reason: optionalString(raw.review_reason, "candidate review reason") ?? "",
     last_error: optionalString(raw.last_error, "candidate error") ?? "",
     evidence,
+    claim_evidence: claimEvidence.length > 0 ? claimEvidence : evidence,
     evidence_count: evidence.length,
   };
 }

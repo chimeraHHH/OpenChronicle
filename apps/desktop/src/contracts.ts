@@ -707,6 +707,7 @@ export interface Candidate {
   review_reason?: string;
   last_error?: string;
   evidence: EvidenceRef[];
+  claim_evidence: EvidenceRef[];
 }
 
 export interface MemorySummary {
@@ -903,4 +904,5 @@ export interface SourceSubject {
   id: string;
   path?: string;
   label: string;
+  sources?: EvidenceRef[];
 }

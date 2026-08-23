@@ -918,8 +918,8 @@ describe("trusted console", () => {
     expect(document.querySelector("script")).toBeNull();
     expect(document.querySelector("a[href='x']")).toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "View sources" }));
-    const drawer = await screen.findByRole("dialog", { name: "Proposal sources" });
+    await user.click(screen.getByRole("button", { name: "View cited sources" }));
+    const drawer = await screen.findByRole("dialog", { name: "Cited proposal sources" });
     expect(await within(drawer).findByText(maliciousText)).toBeInTheDocument();
     expect(within(drawer).getAllByText(maliciousText)[0]?.closest("bdi")).not.toBeNull();
     expect((await within(drawer).findByText("current")).closest(".status-badge")).toHaveClass(
@@ -1055,7 +1055,8 @@ describe("trusted console", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Review" }));
-    expect(await screen.findByText("1 direct source(s)")).toBeInTheDocument();
+    expect(await screen.findByText("1 explicitly cited source(s)")).toBeInTheDocument();
+    expect(screen.getByText("1 policy/deletion source(s)")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Edit proposal" }));
     const textarea = screen.getByRole("textbox", { name: "Memory text" });
     await user.clear(textarea);
@@ -1063,7 +1064,8 @@ describe("trusted console", () => {
     await user.click(screen.getByRole("button", { name: "Save changes" }));
 
     expect(await screen.findByText("Changes saved to the proposal. Nothing was added to durable memory.")).toBeInTheDocument();
-    expect(screen.getByText("1 direct source(s)")).toBeInTheDocument();
+    expect(screen.getByText("1 explicitly cited source(s)")).toBeInTheDocument();
+    expect(screen.getByText("1 policy/deletion source(s)")).toBeInTheDocument();
     expect(tauri.invoke.mock.calls.filter(([command]) => command === "get_candidate")).toHaveLength(1);
   });
 
@@ -1209,13 +1211,13 @@ describe("trusted console", () => {
     render(<App />);
 
     await user.click(await screen.findByRole("button", { name: "Review" }));
-    const sourceButton = await screen.findByRole("button", { name: "View sources" });
+    const sourceButton = await screen.findByRole("button", { name: "View cited sources" });
     sourceButton.focus();
     await user.click(sourceButton);
-    expect(await screen.findByRole("dialog", { name: "Proposal sources" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Cited proposal sources" })).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "Escape" });
-    expect(screen.queryByRole("dialog", { name: "Proposal sources" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Cited proposal sources" })).not.toBeInTheDocument();
     expect(sourceButton).toHaveFocus();
   });
 

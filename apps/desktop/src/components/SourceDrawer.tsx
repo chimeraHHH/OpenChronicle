@@ -68,6 +68,17 @@ export function SourceDrawer({ api, subject, onClose }: SourceDrawerProps) {
       id: subject.id,
       ...(subject.path ? { path: subject.path } : {}),
     };
+    if (subject.sources && subject.sources.length > 0) {
+      const directSources = subject.sources;
+      setTrace({
+        subject: subjectRef,
+        direct_sources: directSources,
+        trace: directSources.map((source) => ({ depth: 1, source })),
+      });
+      setSelected(directSources[0] ?? null);
+      setLoading(false);
+      return;
+    }
     void api
       .traceProvenance(subjectRef)
       .then((nextTrace) => {

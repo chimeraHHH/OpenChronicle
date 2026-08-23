@@ -384,6 +384,11 @@ def tool_propose_memory_candidate(
     )
     if not evidence:
         return {"error": "at least one replacement-fact evidence source is required"}
+    claim_evidence = [
+        ref
+        for ref in cited_evidence
+        if target_ref is None or ref.key != target_ref.key
+    ]
     try:
         candidate = MemoryService(conn, soft_limit_tokens=soft_limit_tokens).propose_candidate(
             kind=kind,
@@ -393,6 +398,7 @@ def tool_propose_memory_candidate(
             content=content,
             tags=tags,
             evidence=evidence,
+            claim_evidence=claim_evidence,
             confidence=confidence,
             conflict_key=conflict_key,
             producer_run_key=state.producer_run_key,

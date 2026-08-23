@@ -928,6 +928,7 @@ describe("desktop bridge adapters", () => {
     expect(result.content).toBe(maliciousText);
     expect(result.evidence).toEqual(detail.evidence);
     expect(result.evidence_count).toBe(1);
+    expect(result.claim_evidence).toHaveLength(1);
   });
 
   it("unwraps CAS mutation responses and sends one request object", async () => {

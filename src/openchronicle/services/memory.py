@@ -111,6 +111,7 @@ class MemoryService:
         content: str,
         tags: list[str],
         evidence: list[EvidenceRef],
+        claim_evidence: list[EvidenceRef] | None = None,
         confidence: float | None = None,
         conflict_key: str = "",
         producer_run_key: str = "",
@@ -129,6 +130,7 @@ class MemoryService:
                 content=content,
                 tags=tags,
                 evidence=evidence,
+                claim_evidence=claim_evidence,
                 confidence=confidence,
                 conflict_key=conflict_key,
                 producer_run_key=producer_run_key,
@@ -146,6 +148,7 @@ class MemoryService:
         content: str,
         tags: list[str],
         evidence: list[EvidenceRef],
+        claim_evidence: list[EvidenceRef] | None,
         confidence: float | None,
         conflict_key: str,
         producer_run_key: str,
@@ -170,6 +173,13 @@ class MemoryService:
             raise ValueError("memory candidates require at least one evidence reference")
         if any(not ref.content_hash for ref in evidence):
             raise ValueError("memory candidate evidence must bind a source content hash")
+        claims = _unique_evidence_refs(
+            evidence if claim_evidence is None else claim_evidence
+        )
+        if not claims:
+            raise ValueError("memory candidates require at least one claim-support source")
+        if any(claim not in evidence for claim in claims):
+            raise ValueError("claim-support sources must be part of the input evidence closure")
         if confidence is not None and not 0 <= confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
         conflict_key = conflict_key.strip().casefold()
@@ -196,6 +206,7 @@ class MemoryService:
             content_hash=digest,
             tags=clean_tags,
             evidence=evidence,
+            claim_evidence=claims,
         )
         clean_run_key = producer_run_key.strip()
         if proposal_slot < 0:
@@ -245,6 +256,7 @@ class MemoryService:
                 target_entry_hash=target_entry_hash,
                 content=normalized_content,
                 content_hash=digest,
+                claim_evidence=claims,
                 tags=clean_tags,
                 confidence=confidence,
                 conflict_key=conflict_key,
@@ -259,7 +271,12 @@ class MemoryService:
                     subject=_candidate_ref(candidate.id),
                     sources=evidence,
                 )
-            elif candidate.proposal_digest != proposal_digest or existing_sources != evidence:
+            elif (
+                candidate.proposal_digest != proposal_digest
+                or existing_sources != evidence
+                or bool(candidate.claim_evidence)
+                and candidate.claim_evidence != claims
+            ):
                 candidate_store.record_replay_mismatch(self.conn, candidate.id)
             self.conn.execute("COMMIT")
         except BaseException:
@@ -310,6 +327,7 @@ class MemoryService:
                 content_hash=digest,
                 tags=clean_tags,
                 evidence=sources,
+                claim_evidence=current.claim_evidence or None,
             )
             self.conn.execute("BEGIN IMMEDIATE")
             try:
@@ -391,7 +409,10 @@ class MemoryService:
         invalid_sources = [
             source for source in sources if not provenance_store.is_current(self.conn, source)
         ]
-        binding_changed = not candidate_store.proposal_is_current(current, sources)
+        binding_changed = (
+            not candidate_store.projection_is_current(current)
+            or not candidate_store.proposal_is_current(current, sources)
+        )
         assert self.cfg is not None
         policy_denied = bool(
             sources
@@ -444,10 +465,14 @@ class MemoryService:
                 publish_sources = provenance_store.direct_sources(
                     self.conn, _candidate_ref(candidate_id)
                 )
+                publish_candidate = self._required(candidate_id)
                 publish_denied = (
                     publish_sources != sources
+                    or publish_candidate.status != "applying"
+                    or publish_candidate.version != applying.version
+                    or not candidate_store.projection_is_current(publish_candidate)
                     or not candidate_store.proposal_is_current(
-                        applying,
+                        publish_candidate,
                         publish_sources,
                     )
                     or any(
@@ -1024,6 +1049,14 @@ class MemoryService:
 
 def _candidate_ref(candidate_id: str) -> EvidenceRef:
     return EvidenceRef(kind="memory_candidate", id=candidate_id)
+
+
+def _unique_evidence_refs(refs: list[EvidenceRef]) -> list[EvidenceRef]:
+    result: list[EvidenceRef] = []
+    for ref in refs:
+        if ref not in result:
+            result.append(ref)
+    return result
 
 
 def _candidate_entry_id(candidate_id: str) -> str:

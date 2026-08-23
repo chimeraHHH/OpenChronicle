@@ -414,8 +414,10 @@ export function ReviewPage({
                     ))
                   : "None"}
               </dd>
-              <dt>Evidence</dt>
-              <dd>{candidate.evidence.length} direct source(s)</dd>
+              <dt>Claim support</dt>
+              <dd>{candidate.claim_evidence.length} explicitly cited source(s)</dd>
+              <dt>Input closure</dt>
+              <dd>{candidate.evidence.length} policy/deletion source(s)</dd>
             </dl>
 
             <div className="button-row button-row--review">
@@ -425,12 +427,13 @@ export function ReviewPage({
                   onOpenSource({
                     kind: "memory_candidate",
                     id: candidate.id,
-                    label: "Proposal sources",
+                    label: "Cited proposal sources",
+                    sources: candidate.claim_evidence,
                   })
                 }
                 type="button"
               >
-                View sources
+                View cited sources
               </button>
               <button
                 aria-describedby={candidate.status === "conflict" ? "conflict-warning" : undefined}

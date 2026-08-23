@@ -519,3 +519,72 @@ def test_activity_search_returns_distinct_grounded_sessions_only(
             ("event-2026-04-20.md", "event-pattern-b", "sess_b"),
         }
         assert len(state.allowed_evidence) == 2
+
+
+def test_candidate_separates_claim_support_from_full_input_closure(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        for path, entry_id, content in (
+            ("project-signal.md", "signal-entry", "The project selects SQLite."),
+            ("topic-background.md", "background-entry", "Unrelated background context."),
+        ):
+            entries_mod.create_file(
+                conn,
+                name=path,
+                description="reviewed source",
+                tags=["source"],
+            )
+            entries_mod.append_entry_once(
+                conn,
+                name=path,
+                content=content,
+                tags=["source"],
+                entry_id=entry_id,
+                origin=files_mod.MANUAL_ENTRY_ORIGIN,
+            )
+        state = writer_tools.CommitState(producer_run_key="claim-support-run")
+        signal = writer_tools.tool_read_memory(
+            conn,
+            cfg,
+            path="project-signal.md",
+            state=state,
+        )
+        writer_tools.tool_read_memory(
+            conn,
+            cfg,
+            path="topic-background.md",
+            state=state,
+        )
+        signal_token = signal["entries"][0]["evidence_token"]
+
+        proposed = writer_tools.tool_propose_memory_candidate(
+            conn,
+            kind="project",
+            path="project-target.md",
+            content="The project uses SQLite.",
+            tags=["project", "database"],
+            evidence_tokens=[signal_token],
+            confidence=0.9,
+            conflict_key="project.database",
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+
+        assert proposed["ok"] is True
+        candidate = candidate_store.get(conn, proposed["candidate_id"])
+        assert candidate is not None
+        assert [(ref.path, ref.id) for ref in candidate.claim_evidence] == [
+            ("project-signal.md", "signal-entry")
+        ]
+        flow_sources = provenance_store.direct_sources(
+            conn,
+            EvidenceRef(kind="memory_candidate", id=candidate.id),
+        )
+        assert {(ref.path, ref.id) for ref in flow_sources} == {
+            ("project-signal.md", "signal-entry"),
+            ("topic-background.md", "background-entry"),
+        }
+        assert candidate_store.projection_is_current(candidate)
+        assert candidate_store.proposal_is_current(candidate, flow_sources)

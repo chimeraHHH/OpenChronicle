@@ -133,6 +133,7 @@ def test_candidate_store_migrates_pre_stage1_schema(tmp_path: Path) -> None:
             "proposal_slot",
             "target_entry_id",
             "target_entry_hash",
+            "claim_evidence_json",
         } <= columns
     finally:
         conn.close()
@@ -356,6 +357,24 @@ def test_candidate_row_and_evidence_edges_commit_atomically(
         assert provenance_store.direct_sources(
             conn, EvidenceRef(kind="memory_candidate", id=candidate.id)
         ) == [_source()]
+
+
+def test_claim_support_projection_tamper_blocks_approval(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        candidate = _propose(service)
+        assert candidate.claim_evidence == [_source()]
+        conn.execute(
+            "UPDATE memory_candidates SET claim_evidence_json='[]' WHERE id=?",
+            (candidate.id,),
+        )
+
+        with pytest.raises(candidate_store.CandidateConflict, match="evidence"):
+            service.approve_candidate(candidate.id, expected_version=candidate.version)
+        conflicted = service.get_candidate(candidate.id)
+        assert conflicted is not None
+        assert conflicted.status == "conflict"
+        assert not files_store.memory_path(candidate.target_path).exists()
 
 
 def test_candidate_edit_uses_cas_and_surfaces_conflicts(ac_root: Path) -> None:
