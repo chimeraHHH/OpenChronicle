@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "dataset_id": "OC-Vida-Memory-Decisions-v1",
+  "split": "model-decision-dev-v1",
+  "cases": [
+    {
+      "id": "remember-explicit-project-model",
+      "targets": [
+        {"id": "project.timeline-model", "description": "OpenChronicle timeline model"}
+      ],
+      "current_memory": [],
+      "evidence": [
+        {"id": "r1-user", "session_id": "r1", "role": "user", "content": "Please remember that OpenChronicle now uses gpt-5.6-luna for one-minute timeline normalization."}
+      ],
+      "gold_operations": [
+        {"type": "remember", "target_id": "project.timeline-model", "old_value": "", "new_value": "gpt-5.6-luna", "evidence_ids": ["r1-user"], "new_value_anchors": ["gpt-5.6-luna"]}
+      ]
+    },
+    {
+      "id": "remember-negative-third-party",
+      "targets": [
+        {"id": "user.editor", "description": "User's preferred editor"},
+        {"id": "coworker.editor", "description": "Coworker's preferred editor"}
+      ],
+      "current_memory": [],
+      "evidence": [
+        {"id": "n1-user", "session_id": "n1", "role": "user", "content": "My coworker uses Zed. I still have not chosen an editor, and I do not want either detail saved."},
+        {"id": "n1-assistant", "session_id": "n1", "role": "assistant", "content": "Understood, Zed is your editor."}
+      ],
+      "gold_operations": []
+    },
+    {
+      "id": "update-confirmed-model",
+      "targets": [
+        {"id": "project.timeline-model", "description": "OpenChronicle timeline model"},
+        {"id": "project.reducer-model", "description": "OpenChronicle reducer model"}
+      ],
+      "current_memory": [
+        {"target_id": "project.timeline-model", "value": "gpt-5.4-nano"}
+      ],
+      "evidence": [
+        {"id": "u1-user", "session_id": "u1", "role": "user", "content": "Change the saved timeline model from gpt-5.4-nano to gpt-5.6-luna. The reducer model is unchanged."}
+      ],
+      "gold_operations": [
+        {"type": "update", "target_id": "project.timeline-model", "old_value": "gpt-5.4-nano", "new_value": "gpt-5.6-luna", "evidence_ids": ["u1-user"], "new_value_anchors": ["gpt-5.6-luna"]}
+      ]
+    },
+    {
+      "id": "update-negative-tentative",
+      "targets": [
+        {"id": "user.editor", "description": "User's preferred editor"}
+      ],
+      "current_memory": [
+        {"target_id": "user.editor", "value": "Cursor"}
+      ],
+      "evidence": [
+        {"id": "u2-user", "session_id": "u2", "role": "user", "content": "I might try Zed next month, but I have not decided. Do not update my saved editor preference."}
+      ],
+      "gold_operations": []
+    },
+    {
+      "id": "forget-one-target-not-neighbor",
+      "targets": [
+        {"id": "user.editor.long-form", "description": "Long-form Markdown editor preference"},
+        {"id": "user.reporting.style", "description": "Report style preference"}
+      ],
+      "current_memory": [
+        {"target_id": "user.editor.long-form", "value": "Typora"},
+        {"target_id": "user.reporting.style", "value": "Concise with action list"}
+      ],
+      "evidence": [
+        {"id": "f1-user", "session_id": "f1", "role": "user", "content": "Forget that I use Typora for long-form Markdown. Keep my concise report-with-actions preference."}
+      ],
+      "gold_operations": [
+        {"type": "forget", "target_id": "user.editor.long-form", "old_value": "Typora", "new_value": "", "evidence_ids": ["f1-user"], "new_value_anchors": []}
+      ]
+    },
+    {
+      "id": "reflect-independent-sessions",
+      "targets": [
+        {"id": "user.reporting.next-actions-pattern", "description": "Repeated preference for reports ending with concrete next actions"}
+      ],
+      "current_memory": [],
+      "evidence": [
+        {"id": "p1-user", "session_id": "p1", "role": "user", "content": "I adopted the report after you added a three-item action list at the end."},
+        {"id": "p2-user", "session_id": "p2", "role": "user", "content": "Again, please end this separate project summary with concrete next actions; that format is useful to me."}
+      ],
+      "gold_operations": [
+        {"type": "reflect", "target_id": "user.reporting.next-actions-pattern", "old_value": "", "new_value": "The user repeatedly prefers reports to end with concrete next actions.", "evidence_ids": ["p1-user", "p2-user"], "new_value_anchors": ["repeatedly prefers", "reports", "concrete next actions"]}
+      ]
+    },
+    {
+      "id": "reflect-negative-single-session",
+      "targets": [
+        {"id": "user.reporting.next-actions-pattern", "description": "Repeated preference for reports ending with concrete next actions"}
+      ],
+      "current_memory": [],
+      "evidence": [
+        {"id": "p3-user", "session_id": "p3", "role": "user", "content": "For this one report only, add an action list at the end."},
+        {"id": "p3-assistant", "session_id": "p3", "role": "assistant", "content": "You always prefer action lists in every report."}
+      ],
+      "gold_operations": []
+    },
+    {
+      "id": "multi-operation-update-and-remember",
+      "targets": [
+        {"id": "project.timeline-model", "description": "OpenChronicle timeline model"},
+        {"id": "project.summary-failure-policy", "description": "Fallback policy when timeline summarization fails"}
+      ],
+      "current_memory": [
+        {"target_id": "project.timeline-model", "value": "gpt-5.4-nano"}
+      ],
+      "evidence": [
+        {"id": "m1-user", "session_id": "m1", "role": "user", "content": "Use gpt-5.6-luna instead of gpt-5.4-nano for timeline normalization. Also remember: if Luna fails, leave the item retryable and do not create a local rule summary."}
+      ],
+      "gold_operations": [
+        {"type": "update", "target_id": "project.timeline-model", "old_value": "gpt-5.4-nano", "new_value": "gpt-5.6-luna", "evidence_ids": ["m1-user"], "new_value_anchors": ["gpt-5.6-luna"]},
+        {"type": "remember", "target_id": "project.summary-failure-policy", "old_value": "", "new_value": "If Luna fails, leave the item retryable and do not create a local rule summary.", "evidence_ids": ["m1-user"], "new_value_anchors": ["fails", "retryable", "do not create a local rule summary"]}
+      ]
+    }
+  ]
+}

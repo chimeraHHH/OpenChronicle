@@ -211,8 +211,10 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   remember/update/forget/reflect operations, five state checkpoints,
   stale-value rate, forget leakage, over-forget, provenance support, and
   trajectory order through production review services.
-- [ ] Model-decision lifecycle evaluation with operation precision/recall and
-  stage-level extraction/update/retrieval/answer failure labels. The fresh
+- [x] Inert model-decision lifecycle evaluation with operation
+  precision/recall/F1 plus provider/parse/detection/value/provenance failure
+  labels. It scores remember/update/forget/reflect without executing any
+  prediction; forget remains user-confirmed product behavior. The fresh
   external survey selects MemOps as the closest public contract; see
   [local-long-term-memory-research-2026-08-23.md](local-long-term-memory-research-2026-08-23.md).
 - [x] Explicit MCP `search(as_of=...)` historical snapshot over recorded and

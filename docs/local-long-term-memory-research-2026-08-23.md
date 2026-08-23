@@ -126,7 +126,7 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
 | Durable fact lifecycle | Reviewed append/supersede, typed slot and valid time, current and historical projections | Add disputed/retracted states only when product cases require them. |
 | Retrieval | Local BM25 + multilingual embedding + RRF, explicit unavailable state, explicit MCP `as_of` | Add adjacent event expansion and ranking explanations; defer cross-encoder/graph. |
 | Published Memory | Current facts, source view, correction, export, complete revision-lineage forget, on-demand desktop history | Add desktop `as_of` query UX; current view intentionally hides superseded values. |
-| Evaluation | Native retrieval fixture, real LongMemEval-V2 trajectory smoke, adapter | Add lifecycle-operation evaluation and run a fixed public tier before making quality claims. |
+| Evaluation | Native retrieval and reviewed lifecycle fixtures, inert model-decision adapter, real LongMemEval-V2 trajectory smoke | Run a fixed public MemOps and LongMemEval-V2 tier before making quality claims. |
 | Procedural memory | Suggestions and feedback exist, but no reviewed reusable workflow memory | Promote only repeated/adopted text workflows, templates, or checklists; never execute them. |
 
 ## Implemented decisions from this research
@@ -169,10 +169,15 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
     current fact's clean, newest-first immutable lineage through a
     revision-bound desktop protocol. Each version retains its source-drawer
     identity, while superseded values remain absent from the default snapshot.
+11. **Separated model-decision gate.** A tools-free JSON evaluator now scores
+    remember/update/forget/reflect detection, target binding, frozen value
+    anchors, exact evidence support, abstention, and first failure stage. It
+    never stages, approves, edits, or deletes memory; `forget` is only an inert
+    benchmark label.
 
 ## Remaining optimization sequence
 
-### P0: extend lifecycle evaluation from gold execution to model decisions
+### P0: run the model-decision adapter on fixed public and native tiers
 
 The native gold-operation fixture is implemented for:
 
@@ -182,12 +187,12 @@ The native gold-operation fixture is implemented for:
 - bounded reflection without unsupported generalization;
 - multi-step state trajectories with correct order and provenance.
 
-It reports operation success, stale-value rate, forget leakage,
-over-forget, provenance support, and trajectory order separately. HaluMem-style
-stage labels and operation precision/recall remain to be added through a bounded
-MemOps-compatible model-decision adapter. They should identify whether failure
-began in extraction, update, retrieval, or answer use. Do not hide these behind
-a single LLM-judge score.
+The execution gate reports operation success, stale-value rate, forget leakage,
+over-forget, provenance support, and trajectory order separately. The new
+model-decision adapter adds operation precision/recall/F1 and explicit
+provider/parse/detection/value/provenance failures without a second judge
+model. Its native development split must now be followed by a fixed official
+MemOps tier; neither result should be hidden behind one aggregate score.
 
 In parallel, finish a fixed official LongMemEval-V2 small-tier run and preserve
 the adapter version, dataset revision, model, latency, and retrieved evidence.
@@ -196,9 +201,9 @@ quality.
 
 ### P0: finish historical fact inspection UX
 
-The current-value path, user correction, full-lineage forget, and explicit MCP
-`as_of` search are complete. Add the desktop switch between current and
-immutable revision history without allowing superseded entries into ordinary
+The current-value path, user correction, full-lineage forget, explicit MCP
+`as_of` search, and on-demand desktop immutable revision history are complete.
+Add a desktop `as_of` query without allowing superseded entries into ordinary
 current recall.
 Disputed/retracted states should be introduced only with concrete product cases;
 do not build a universal ontology.
@@ -268,12 +273,12 @@ corruption, hallucination, latency, and cost.
 
 ## Immediate decision
 
-The native lifecycle operation harness is now implemented. The next evaluation
-slice is a bounded model-decision adapter that maps noisy evidence into the same
-gold operations and stage labels; the next product slice is historical `as_of`
-inspection. Neither requires a graph store or another autonomous memory agent.
-Together they will tell us whether failures begin at extraction or retrieval
-before event segmentation or reranking is promoted on intuition.
+The native lifecycle harness and inert model-decision adapter are implemented.
+The next evaluation slice is a fixed official MemOps tier; the next product
+slice is desktop `as_of` inspection. Neither requires a graph store or another
+autonomous memory agent. Together with the retrieval baselines, these results
+will tell us whether failures begin at extraction or retrieval before event
+segmentation or reranking is promoted on intuition.
 
 ## Success criteria
 
