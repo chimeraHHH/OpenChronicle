@@ -297,6 +297,7 @@ class MemoryService:
                 raise ValueError("memory candidate evidence is missing or changed")
             conflicts = (
                 _current_subject_conflicts(
+                    self.conn,
                     candidate_store.active_subject_conflicts(
                         self.conn,
                         subject_key=fact_metadata.subject_key,
@@ -317,7 +318,19 @@ class MemoryService:
                     for candidate in conflicts
                     if candidate.applied_entry_id != clean_target_entry_id
                 ]
-            status = "conflict" if conflicts else "pending"
+            published_conflict = bool(
+                fact_metadata is not None
+                and _published_subject_conflict(
+                    self.conn,
+                    self.cfg or Config(),
+                    subject_key=fact_metadata.subject_key,
+                    target_path=target_path if clean_operation == "supersede" else "",
+                    target_entry_id=(
+                        clean_target_entry_id if clean_operation == "supersede" else ""
+                    ),
+                )
+            )
+            status = "conflict" if conflicts or published_conflict else "pending"
             candidate, created = candidate_store.insert(
                 self.conn,
                 candidate_id=candidate_id,
@@ -415,6 +428,7 @@ class MemoryService:
             try:
                 edit_conflicts = (
                     _current_subject_conflicts(
+                        self.conn,
                         candidate_store.active_subject_conflicts(
                             self.conn,
                             subject_key=current.subject_key,
@@ -437,6 +451,18 @@ class MemoryService:
                     )
                     for candidate in edit_conflicts
                 )
+                if current.subject_key:
+                    has_conflict = has_conflict or _published_subject_conflict(
+                        self.conn,
+                        self.cfg or Config(),
+                        subject_key=current.subject_key,
+                        target_path=(
+                            current.target_path if current.operation == "supersede" else ""
+                        ),
+                        target_entry_id=(
+                            current.target_entry_id if current.operation == "supersede" else ""
+                        ),
+                    )
                 updated = candidate_store.update_content(
                     self.conn,
                     candidate_id=candidate_id,
@@ -537,6 +563,28 @@ class MemoryService:
         if current.status == "accepted":
             return current
 
+        entry_id = _candidate_entry_id(candidate_id)
+        if (
+            current.subject_key
+            and not _markdown_entry_exists(current.target_path, entry_id)
+            and _typed_candidate_has_conflict(
+                self.conn,
+                self.cfg,
+                current,
+            )
+        ):
+            detail = "typed memory subject became occupied before approval"
+            latest = self._required(candidate_id)
+            candidate_store.transition(
+                self.conn,
+                candidate_id=candidate_id,
+                expected_version=latest.version,
+                from_statuses=(latest.status,),
+                to_status="conflict",
+                error=detail,
+            )
+            raise candidate_store.CandidateConflict(detail)
+
         if current.status == "applying":
             applying = current
         else:
@@ -547,7 +595,6 @@ class MemoryService:
                 from_statuses=("pending",),
                 to_status="applying",
             )
-        entry_id = _candidate_entry_id(candidate_id)
         entry_sources = [_candidate_ref(candidate_id), *sources]
         try:
             # Cleanup and capture writes use the same lock. Re-read both the
@@ -590,6 +637,27 @@ class MemoryService:
                     raise candidate_store.CandidateConflict(
                         "candidate evidence changed or was excluded before publication"
                     )
+                if (
+                    publish_candidate.subject_key
+                    and not _markdown_entry_exists(publish_candidate.target_path, entry_id)
+                    and _typed_candidate_has_conflict(
+                        self.conn,
+                        self.cfg,
+                        publish_candidate,
+                    )
+                ):
+                    detail = "typed memory subject became occupied before publication"
+                    latest = self._required(candidate_id)
+                    if latest.status == "applying":
+                        candidate_store.transition(
+                            self.conn,
+                            candidate_id=candidate_id,
+                            expected_version=latest.version,
+                            from_statuses=("applying",),
+                            to_status="conflict",
+                            error=detail,
+                        )
+                    raise candidate_store.CandidateConflict(detail)
                 if applying.operation == "supersede" and not _markdown_entry_exists(
                     applying.target_path, entry_id
                 ):
@@ -1444,6 +1512,7 @@ def _markdown_entry_exists(path: str, entry_id: str) -> bool:
 
 
 def _current_subject_conflicts(
+    conn: sqlite3.Connection,
     candidates: list[MemoryCandidate],
 ) -> list[MemoryCandidate]:
     """Exclude accepted candidates whose published fact is already historical.
@@ -1455,7 +1524,12 @@ def _current_subject_conflicts(
     """
     current: list[MemoryCandidate] = []
     for candidate in candidates:
-        if candidate.status != "accepted" or not candidate.applied_entry_id:
+        if (
+            candidate.status != "accepted"
+            or not candidate.applied_entry_id
+            or not candidate_store.projection_is_current(candidate)
+            or candidate.applied_entry_id != _candidate_entry_id(candidate.id)
+        ):
             current.append(candidate)
             continue
         path = files_store.memory_path(candidate.target_path)
@@ -1471,9 +1545,102 @@ def _current_subject_conflicts(
             (entry for entry in parsed.entries if entry.id == candidate.applied_entry_id),
             None,
         )
-        if entry is None or not entry.provenance_valid or not entry.superseded_by:
+        if entry is None or not _entry_has_verified_successor(conn, parsed, entry):
             current.append(candidate)
     return current
+
+
+def _entry_has_verified_successor(
+    conn: sqlite3.Connection,
+    parsed: files_store.ParsedFile,
+    entry: files_store.ParsedEntry,
+) -> bool:
+    successor_id = entry.superseded_by
+    if (
+        not entry.provenance_valid
+        or not successor_id
+        or not entry.body.strip().startswith("~~")
+        or not entry.body.strip().endswith("~~")
+    ):
+        return False
+    successors = [candidate for candidate in parsed.entries if candidate.id == successor_id]
+    if len(successors) != 1:
+        return False
+    successor = successors[0]
+    if (
+        parsed.entries.index(successor) <= parsed.entries.index(entry)
+        or not successor.provenance_valid
+        or not successor.origin_valid
+    ):
+        return False
+    if entry.fact_metadata is not None and (
+        successor.fact_metadata is None
+        or successor.fact_metadata.subject_key != entry.fact_metadata.subject_key
+    ):
+        return False
+    expected_source = EvidenceRef(
+        kind="memory_entry",
+        id=entry.id,
+        path=parsed.path.name,
+        timestamp=entry.timestamp,
+        content_hash=content_digest(entry.body),
+    )
+    if not successor.evidence_refs or successor.evidence_refs[0] != expected_source:
+        return False
+    return provenance_store.direct_sources(
+        conn,
+        EvidenceRef(kind="memory_entry", id=successor.id, path=parsed.path.name),
+    ) == successor.evidence_refs
+
+
+def _typed_candidate_has_conflict(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    candidate: MemoryCandidate,
+) -> bool:
+    conflicts = _current_subject_conflicts(
+        conn,
+        candidate_store.active_subject_conflicts(
+            conn,
+            subject_key=candidate.subject_key,
+            content_hash=candidate.content_hash,
+        ),
+    )
+    for other in conflicts:
+        if other.id == candidate.id:
+            continue
+        if (
+            candidate.operation == "supersede"
+            and other.applied_entry_id == candidate.target_entry_id
+        ):
+            continue
+        return True
+    return _published_subject_conflict(
+        conn,
+        cfg,
+        subject_key=candidate.subject_key,
+        target_path=candidate.target_path if candidate.operation == "supersede" else "",
+        target_entry_id=(
+            candidate.target_entry_id if candidate.operation == "supersede" else ""
+        ),
+    )
+
+
+def _published_subject_conflict(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    subject_key: str,
+    target_path: str,
+    target_entry_id: str,
+) -> bool:
+    for fact in list_current_facts(conn, cfg, limit=10_000):
+        if fact.subject_key != subject_key:
+            continue
+        if fact.path == target_path and fact.id == target_entry_id:
+            continue
+        return True
+    return False
 
 
 def _current_supersede_target(

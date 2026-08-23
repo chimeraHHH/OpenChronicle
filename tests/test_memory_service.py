@@ -13,14 +13,17 @@ from openchronicle.daily_wrap import store as daily_wrap_store
 from openchronicle.memory_candidates import store as candidate_store
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef, content_digest
+from openchronicle.services.current_facts import list_current_facts
 from openchronicle.services.memory import (
     MemoryService,
     PurgeClosureUnverifiable,
     StalePurgePlan,
 )
+from openchronicle.services.published_memory import correct_current_fact
 from openchronicle.store import entries as entries_store
 from openchronicle.store import files as files_store
 from openchronicle.store import fts
+from openchronicle.store.facts import make_fact_metadata
 
 
 def _source() -> EvidenceRef:
@@ -280,6 +283,251 @@ def test_typed_fact_can_be_superseded_more_than_once(ac_root: Path) -> None:
         assert entries[harare.applied_entry_id].superseded_by == lyon.applied_entry_id
         assert entries[lyon.applied_entry_id].superseded_by is None
         assert entries[lyon.applied_entry_id].body == "The capital of France is Lyon."
+
+
+def test_manual_correction_owns_typed_subject_slot_without_a_candidate(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        _ensure_source(conn)
+        paris = service.propose_candidate(
+            kind="project_fact",
+            target_path="project-france.md",
+            content="The capital of France is Paris.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+        paris = service.approve_candidate(paris.id, expected_version=paris.version)
+        current = next(
+            fact
+            for fact in list_current_facts(conn, service.cfg or config_mod.Config(), limit=100)
+            if fact.id == paris.applied_entry_id
+        )
+        harare = correct_current_fact(
+            conn,
+            service.cfg or config_mod.Config(),
+            path=current.path,
+            entry_id=current.id,
+            expected_revision=current.revision,
+            content="The capital of France is Harare.",
+            tags=list(current.tags),
+        )
+
+        duplicate = service.propose_candidate(
+            kind="project_fact",
+            target_path="project-france-alternate.md",
+            content="The capital of France is Lyon.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+        assert duplicate.status == "conflict"
+
+        correction = service.propose_candidate(
+            kind="project_fact",
+            operation="supersede",
+            target_path=harare.path,
+            target_entry_id=harare.id,
+            content="The capital of France is Lyon.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+        assert correction.status == "pending"
+
+
+def test_forged_superseded_marker_does_not_release_typed_subject_slot(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        _ensure_source(conn)
+        paris = service.propose_candidate(
+            kind="project_fact",
+            target_path="project-france.md",
+            content="The capital of France is Paris.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+        paris = service.approve_candidate(paris.id, expected_version=paris.version)
+        path = files_store.memory_path("project-france.md")
+        text = path.read_text(encoding="utf-8")
+        path.write_text(
+            text.replace(
+                f"{{id: {paris.applied_entry_id}}}",
+                f"{{id: {paris.applied_entry_id}}} #superseded-by:forged",
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+        candidate = service.propose_candidate(
+            kind="project_fact",
+            target_path="project-france-alternate.md",
+            content="The capital of France is Harare.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+
+        assert candidate.status == "conflict"
+
+
+def test_successor_without_matching_sqlite_provenance_does_not_release_subject_slot(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        _ensure_source(conn)
+        paris = service.propose_candidate(
+            kind="project_fact",
+            target_path="project-france.md",
+            content="The capital of France is Paris.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+        paris = service.approve_candidate(paris.id, expected_version=paris.version)
+        harare_id = entries_store.supersede_entry(
+            conn,
+            name=paris.target_path,
+            old_entry_id=paris.applied_entry_id or "",
+            new_content="The capital of France is Harare.",
+            reason="direct correction",
+            tags=["project", "fact"],
+            fact_metadata=make_fact_metadata(
+                subject_key="capital.france",
+                assertion_kind="observed",
+            ),
+        )
+        provenance_store.delete_subject(
+            conn,
+            EvidenceRef(kind="memory_entry", id=harare_id, path=paris.target_path),
+        )
+
+        candidate = service.propose_candidate(
+            kind="project_fact",
+            target_path="project-france-alternate.md",
+            content="The capital of France is Lyon.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+
+        assert candidate.status == "conflict"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("target_path", "project-tampered.md"),
+        ("applied_entry_id", "candidate-forged"),
+    ],
+)
+def test_tampered_accepted_candidate_does_not_release_typed_subject_slot(
+    ac_root: Path,
+    field: str,
+    value: str,
+) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        _ensure_source(conn)
+        paris = service.propose_candidate(
+            kind="project_fact",
+            target_path="project-france.md",
+            content="The capital of France is Paris.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+        paris = service.approve_candidate(paris.id, expected_version=paris.version)
+        current = next(
+            fact
+            for fact in list_current_facts(conn, service.cfg or config_mod.Config(), limit=100)
+            if fact.id == paris.applied_entry_id
+        )
+        harare = correct_current_fact(
+            conn,
+            service.cfg or config_mod.Config(),
+            path=current.path,
+            entry_id=current.id,
+            expected_revision=current.revision,
+            content="The capital of France is Harare.",
+            tags=list(current.tags),
+        )
+        conn.execute(
+            f"UPDATE memory_candidates SET {field}=? WHERE id=?",
+            (value, paris.id),
+        )
+
+        candidate = service.propose_candidate(
+            kind="project_fact",
+            operation="supersede",
+            target_path=harare.path,
+            target_entry_id=harare.id,
+            content="The capital of France is Lyon.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+
+        assert candidate.status == "conflict"
+
+
+def test_typed_candidate_approval_rechecks_external_current_facts(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        _ensure_source(conn)
+        candidate = service.propose_candidate(
+            kind="project_fact",
+            target_path="project-france.md",
+            content="The capital of France is Lyon.",
+            tags=["project", "fact"],
+            evidence=[_source()],
+            subject_key="capital.france",
+            assertion_kind="observed",
+        )
+        assert candidate.status == "pending"
+        entries_store.create_file(
+            conn,
+            name="project-external.md",
+            description="external current memory",
+            tags=["project"],
+        )
+        entries_store.append_entry_once(
+            conn,
+            name="project-external.md",
+            content="The capital of France is Harare.",
+            tags=["project", "fact"],
+            entry_id="external-france-capital",
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+            fact_metadata=make_fact_metadata(
+                subject_key="capital.france",
+                assertion_kind="user_asserted",
+            ),
+        )
+
+        with pytest.raises(candidate_store.CandidateConflict, match="subject became occupied"):
+            service.approve_candidate(candidate.id, expected_version=candidate.version)
+
+        conflicted = service.get_candidate(candidate.id)
+        assert conflicted is not None
+        assert conflicted.status == "conflict"
+        assert not files_store.memory_path(candidate.target_path).exists()
 
 
 def test_supersede_approval_rejects_a_changed_target(ac_root: Path) -> None:
