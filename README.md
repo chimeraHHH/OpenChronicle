@@ -288,6 +288,7 @@ Documentation
 * [docs/stage1-memory-daily-wrap.md](docs/stage1-memory-daily-wrap.md) - provenance, review inbox, Daily Wrap, privacy, and failure semantics
 * [docs/desktop-shell.md](docs/desktop-shell.md) - Tauri trust boundary, fixed bridge protocol, dangerous-action semantics, and release gates
 * [docs/vida-public-product-research.md](docs/vida-public-product-research.md) - dated official-source Vida capability and privacy research
+* [docs/local-long-term-memory-research-2026-08-23.md](docs/local-long-term-memory-research-2026-08-23.md) - multi-agent paper/repository survey and local-memory implementation decisions
 * [docs/vida-like-roadmap.md](docs/vida-like-roadmap.md) - clean-room parity plan and staged safety gates
 * [docs/runtime-reliability.md](docs/runtime-reliability.md) - process fault matrix, 10k replay, and the still-open 24-hour/daemon-queue/cascade-replay gates
 * [docs/troubleshooting.md](docs/troubleshooting.md) - common issues
