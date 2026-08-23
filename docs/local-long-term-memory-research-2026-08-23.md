@@ -155,12 +155,18 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
    into review and Published Memory. Global subject-slot conflicts prevent the
    same present-tense fact from silently diverging across files; supersede keeps
    one slot and current recall excludes scheduled or expired values.
+8. **Native lifecycle operation gate.** Three deterministic traces now execute
+   seven gold remember/update/forget/reflect operations through production
+   review services and inspect five intermediate states. The clean result has
+   zero stale-value, forget-leakage, and over-forget failures with complete
+   claim-support coverage. It is a local regression result, not a public MemOps
+   score or a model-extraction claim.
 
 ## Remaining optimization sequence
 
-### P0: lifecycle-operation evaluation before another storage feature
+### P0: extend lifecycle evaluation from gold execution to model decisions
 
-Add a bounded MemOps-compatible adapter or equivalent native fixtures for:
+The native gold-operation fixture is implemented for:
 
 - remember with exact source support;
 - update without returning the superseded value as current;
@@ -168,10 +174,12 @@ Add a bounded MemOps-compatible adapter or equivalent native fixtures for:
 - bounded reflection without unsupported generalization;
 - multi-step state trajectories with correct order and provenance.
 
-Report operation precision/recall, stale-value rate, forget leakage,
-over-forget, provenance support, and answer accuracy separately. HaluMem-style
-stage labels should identify whether failure began in extraction, update,
-retrieval, or answer use. Do not hide these behind a single LLM-judge score.
+It reports operation success, stale-value rate, forget leakage,
+over-forget, provenance support, and trajectory order separately. HaluMem-style
+stage labels and operation precision/recall remain to be added through a bounded
+MemOps-compatible model-decision adapter. They should identify whether failure
+began in extraction, update, retrieval, or answer use. Do not hide these behind
+a single LLM-judge score.
 
 In parallel, finish a fixed official LongMemEval-V2 small-tier run and preserve
 the adapter version, dataset revision, model, latency, and retrieved evidence.
@@ -252,12 +260,12 @@ corruption, hallucination, latency, and cost.
 
 ## Immediate decision
 
-The next memory-specific implementation slice should be the lifecycle operation
-evaluation harness, not a graph store or another autonomous memory agent. It
-will tell us whether the existing reviewed supersede and complete-lineage forget
-actually outperform simpler rewrite/delete baselines, and it will provide the
-failure labels needed to choose between historical queries, event segmentation,
-or retrieval reranking on evidence rather than intuition.
+The native lifecycle operation harness is now implemented. The next evaluation
+slice is a bounded model-decision adapter that maps noisy evidence into the same
+gold operations and stage labels; the next product slice is historical `as_of`
+inspection. Neither requires a graph store or another autonomous memory agent.
+Together they will tell us whether failures begin at extraction or retrieval
+before event segmentation or reranking is promoted on intuition.
 
 ## Success criteria
 

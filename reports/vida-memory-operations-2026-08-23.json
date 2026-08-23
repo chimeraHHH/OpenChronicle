@@ -1,0 +1,242 @@
+{
+  "dataset": {
+    "checkpoint_count": 5,
+    "id": "OC-Vida-Memory-Operations-v1",
+    "operation_count": 7,
+    "path": "benchmarks/vida-memory-ops-v1/fixtures/traces.json",
+    "sha256": "d8b712133ee26aa36f1ff9c4c3be86408fc8fd936cb3186bc0b397056cd44ba4",
+    "split": "reviewed-lifecycle-dev-v1",
+    "trace_count": 3
+  },
+  "environment": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.11.15"
+  },
+  "evaluation_id": "vida-memory-operations-v1",
+  "metric_contract": {
+    "path": "benchmarks/vida-memory-ops-v1/json/metric_contract.json",
+    "sha256": "cc9badcc73620404126a933dc9e2e2ba4b45aa9aade5528e48d89480269d8ab5"
+  },
+  "repository": {
+    "commit": "624faa9758156cb4b8b500322a0a0d763ff7d999",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "schema_version": 1,
+  "variant": {
+    "gate_verdict": {
+      "checks": {
+        "checkpoint_pass_rate": true,
+        "forget_leakage_rate": true,
+        "operation_success_rate": true,
+        "over_forget_rate": true,
+        "provenance_support_rate": true,
+        "stale_value_rate": true,
+        "trajectory_order_accuracy": true
+      },
+      "passed": true
+    },
+    "id": "production_reviewed_memory_lifecycle",
+    "metrics": {
+      "checkpoint_pass_rate": 1.0,
+      "forget_leakage_rate": 0.0,
+      "operation_success_rate": 1.0,
+      "over_forget_rate": 0.0,
+      "provenance_support_rate": 1.0,
+      "stale_value_rate": 0.0,
+      "trace_pass_rate": 1.0,
+      "trajectory_order_accuracy": 1.0
+    },
+    "traces": [
+      {
+        "checkpoints": [
+          {
+            "after_operation": "remember-old-model",
+            "checkpoint_id": "old-model-is-initially-current",
+            "current_keys": [
+              "timeline-model-old"
+            ],
+            "expected_current_missing": [],
+            "expected_history_missing": [],
+            "forbidden_current_present": [],
+            "forbidden_history_present": [],
+            "history_keys": [
+              "timeline-model-old"
+            ],
+            "operation_type": "remember",
+            "passed": true
+          },
+          {
+            "after_operation": "update-current-model",
+            "checkpoint_id": "new-model-is-current-old-remains-history",
+            "current_keys": [
+              "timeline-model-current"
+            ],
+            "expected_current_missing": [],
+            "expected_history_missing": [],
+            "forbidden_current_present": [],
+            "forbidden_history_present": [],
+            "history_keys": [
+              "timeline-model-current",
+              "timeline-model-old"
+            ],
+            "operation_type": "update",
+            "passed": true
+          },
+          {
+            "after_operation": "forget-model-lineage",
+            "checkpoint_id": "forget-current-model-removes-complete-lineage",
+            "current_keys": [],
+            "expected_current_missing": [],
+            "expected_history_missing": [],
+            "forbidden_current_present": [],
+            "forbidden_history_present": [],
+            "history_keys": [],
+            "operation_type": "forget",
+            "passed": true
+          }
+        ],
+        "operation_order": [
+          "remember-old-model",
+          "update-current-model",
+          "forget-model-lineage"
+        ],
+        "operations": [
+          {
+            "candidate_id": "mc-fb7a8605ce734ee7740c5215",
+            "claim_source_count": 1,
+            "entry_id": "candidate-b22f00ecbd3825e1d9d4",
+            "key": "timeline-model-old",
+            "operation_id": "remember-old-model",
+            "provenance_support_valid": true,
+            "succeeded": true,
+            "target_key": "",
+            "type": "remember"
+          },
+          {
+            "candidate_id": "mc-211018884c84257f91894ebb",
+            "claim_source_count": 1,
+            "entry_id": "candidate-f55b4dd53fb1eeae2cb5",
+            "key": "timeline-model-current",
+            "operation_id": "update-current-model",
+            "provenance_support_valid": true,
+            "succeeded": true,
+            "target_key": "timeline-model-old",
+            "type": "update"
+          },
+          {
+            "operation_id": "forget-model-lineage",
+            "plan_entry_count": 2,
+            "provenance_support_valid": null,
+            "removed_entry": true,
+            "succeeded": true,
+            "target_key": "timeline-model-current",
+            "type": "forget"
+          }
+        ],
+        "passed": true,
+        "trace_id": "remember-update-preserves-history"
+      },
+      {
+        "checkpoints": [
+          {
+            "after_operation": "forget-editor-only",
+            "checkpoint_id": "forget-removes-editor-and-retains-report-style",
+            "current_keys": [
+              "report-style"
+            ],
+            "expected_current_missing": [],
+            "expected_history_missing": [],
+            "forbidden_current_present": [],
+            "forbidden_history_present": [],
+            "history_keys": [
+              "report-style"
+            ],
+            "operation_type": "forget",
+            "passed": true
+          }
+        ],
+        "operation_order": [
+          "remember-editor",
+          "remember-report-style",
+          "forget-editor-only"
+        ],
+        "operations": [
+          {
+            "candidate_id": "mc-572eafe8e4bf1d742898f8a6",
+            "claim_source_count": 1,
+            "entry_id": "candidate-5e0f5af1477e4a3f3137",
+            "key": "editor-preference",
+            "operation_id": "remember-editor",
+            "provenance_support_valid": true,
+            "succeeded": true,
+            "target_key": "",
+            "type": "remember"
+          },
+          {
+            "candidate_id": "mc-91a5c4f3e3b20811928c6a93",
+            "claim_source_count": 1,
+            "entry_id": "candidate-3839d6baf3b2d91647a8",
+            "key": "report-style",
+            "operation_id": "remember-report-style",
+            "provenance_support_valid": true,
+            "succeeded": true,
+            "target_key": "",
+            "type": "remember"
+          },
+          {
+            "operation_id": "forget-editor-only",
+            "plan_entry_count": 1,
+            "provenance_support_valid": null,
+            "removed_entry": true,
+            "succeeded": true,
+            "target_key": "editor-preference",
+            "type": "forget"
+          }
+        ],
+        "passed": true,
+        "trace_id": "forget-target-without-over-forget"
+      },
+      {
+        "checkpoints": [
+          {
+            "after_operation": "reflect-action-list-pattern",
+            "checkpoint_id": "reflection-is-current-and-preserves-both-sources",
+            "current_keys": [
+              "action-list-pattern"
+            ],
+            "expected_current_missing": [],
+            "expected_history_missing": [],
+            "forbidden_current_present": [],
+            "forbidden_history_present": [],
+            "history_keys": [
+              "action-list-pattern"
+            ],
+            "operation_type": "reflect",
+            "passed": true
+          }
+        ],
+        "operation_order": [
+          "reflect-action-list-pattern"
+        ],
+        "operations": [
+          {
+            "candidate_id": "mc-7efdcaabc27314d7eaf0e7f3",
+            "claim_source_count": 2,
+            "entry_id": "candidate-91d7ba346c4a37e9ade9",
+            "key": "action-list-pattern",
+            "operation_id": "reflect-action-list-pattern",
+            "provenance_support_valid": true,
+            "succeeded": true,
+            "target_key": "",
+            "type": "reflect"
+          }
+        ],
+        "passed": true,
+        "trace_id": "reflect-requires-independent-support"
+      }
+    ]
+  }
+}

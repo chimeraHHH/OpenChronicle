@@ -19,3 +19,6 @@ dataset is copied. This native v1 split executes already-known gold operations;
 it does not yet measure whether a model correctly infers those operations from
 noisy conversation or activity history. The `reflect` case verifies two-source
 support and state behavior, not the semantic quality of the inferred sentence.
+
+The first clean result and its interpretation boundary are recorded in
+[analysis/reviewed-lifecycle-2026-08-23.md](analysis/reviewed-lifecycle-2026-08-23.md).
