@@ -1148,9 +1148,10 @@ def recover_legacy_terminal_intent(
         )
         return None
 
-    # A terminal reducer with any trailing timeline evidence always wrote an
-    # entry (using a heuristic fallback after exhausted model retries). Only a
-    # truly empty trailing window is allowed to bind an empty terminal ID.
+    # Pre-outbox reducer versions always wrote an entry when trailing timeline
+    # evidence existed, including their now-removed heuristic fallback. This
+    # migration path only reconstructs that historical contract; current
+    # reducer failures remain failed and retryable instead of writing text.
     if _blocks_for_session(
         conn,
         window_start,

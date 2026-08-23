@@ -56,7 +56,7 @@ stateDiagram-v2
     ended --> failed: reducer fail
 
     failed --> reduced: retry schedule (5/15/30/60/120 min)<br/>or daily safety-net
-    failed --> failed: retry still fails<br/>(retry_count++ up to MAX_RETRIES=5)
+    failed --> failed: retry still fails<br/>(retry_count++; 120 min remains the retry ceiling)
 
     reduced --> reduced: recovery drains terminal delivery<br/>classified_end finalized, intent cleared
     reduced --> [*]
