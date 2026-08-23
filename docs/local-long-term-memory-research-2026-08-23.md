@@ -214,8 +214,16 @@ sample digests, supports repeated update operations on one target, and keeps
 all upstream generated conversations outside this repository. Its first clean
 run recalled all 27 gold operations with 0.931 precision, 1.000 recall, 0.964
 F1, and 0.963 exact provenance support. Two elaborations were still
-misclassified as updates, and repeat stability remains unmeasured. This is an
-official-data adapter smoke, not the full MemOps evaluation.
+    misclassified as updates, and repeat stability remains unmeasured. This is an
+    official-data adapter smoke, not the full MemOps evaluation.
+
+A subsequent frozen three-run stability gate kept recall 1.000, F1 0.982, one
+false update, provenance 0.963, and zero provider/parse failures in every run,
+but failed exact case-decision agreement at 0.250. Operation type/target/order
+was identical across all runs; the variation came from free-text values plus
+the reflect evidence set. This failed v1 result is retained. Follow-up metrics
+must separate structural decisions, provenance selection, and surface
+paraphrase instead of weakening the original gate after seeing the result.
 
 In parallel, finish a fixed official LongMemEval-V2 small-tier run and preserve
 the adapter version, dataset revision, model, latency, and retrieved evidence.

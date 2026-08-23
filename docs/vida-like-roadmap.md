@@ -224,6 +224,10 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   clean run recovered all 27 operations at 0.964 F1 and 0.963 provenance
   support, with two false update operations; full longitudinal questions,
   official judging, and repeat stability remain open.
+  A later frozen three-run stability v1 kept recall/F1/provenance stable at
+  1.000/0.982/0.963 with one false update, but failed byte-level case-decision
+  agreement (0.250). Structural and provenance-set stability must be measured
+  separately without rewriting that failed gate.
 - [x] Explicit MCP `search(as_of=...)` historical snapshot over recorded and
   typed valid time, kept separate from ordinary current-only recall.
 - [x] On-demand Published Memory revision-history inspection, bound to the

@@ -66,3 +66,9 @@ uv run python scripts/run_vida_memory_decision_stability.py \
 The aggregate records metric min/max/mean/stdev, provider/parse failures,
 per-case exact decision signatures, and whole-run signature diversity. It does
 not rerun or judge the model and cannot execute predicted operations.
+
+The first three-run v1 result is intentionally retained as a failed gate in
+[analysis/official-memops-stability-v1-2026-08-24.md](analysis/official-memops-stability-v1-2026-08-24.md):
+operation metrics were perfectly stable, but byte-level free-text decisions
+were not. Structural, evidence-set, and surface-text agreement need separate
+follow-up metrics.
