@@ -7,6 +7,12 @@ OpenChronicle implementation, a paper survey, and a repository/competitor
 survey. The product constraint is unchanged: local-first, text-product focused,
 no direct computer-use feature, and no unnecessary external infrastructure.
 
+The report was refreshed against `agent/vida-integration@c4459a3` after a second
+multi-agent pass on 2026-08-23. That refresh matters: several apparent gaps in
+the first audit had already been closed by intervening commits. The decisions
+below distinguish the current implementation from genuinely remaining work
+instead of turning stale findings into duplicate infrastructure.
+
 ## Executive decision
 
 Keep canonical Markdown plus SQLite as the local authority. Build rebuildable
@@ -47,7 +53,11 @@ most reference systems:
 - deterministic reviewed supersession that preserves the old fact and restores
   it if the reviewed replacement is purged;
 - a separate historical activity-evidence search for cross-session pattern
-  confirmation.
+  confirmation;
+- typed current facts with stable subject slots, assertion basis, valid-time
+  boundaries, local correction, export, and full revision-lineage forget;
+- Published Memory/About Me desktop inspection with exact sources;
+- no model-failure path that writes a heuristic timeline or session summary.
 
 The clean native hybrid baseline currently records Recall@5, MRR, semantic
 recall, source identity, and abstention at 1.0, with zero forbidden hits and
@@ -84,6 +94,41 @@ been claimed.
 | [HippoRAG 2](https://github.com/OSU-NLP-Group/HippoRAG) | A future option for measured multi-hop failures. | OpenIE and graph propagation in the default personal-fact path. |
 | [screenpipe](https://github.com/screenpipe/screenpipe) | Competitor reference for local capture/search UX. | Its capture stack and current source-available code; OpenChronicle already has a narrower privacy pipeline. |
 
+## 2026 refresh: operation-level evidence
+
+The second pass inspected current upstream heads rather than relying only on
+paper abstracts or benchmark leaderboards:
+
+| Source | Pinned identity inspected | Net-new implication |
+|---|---|---|
+| [MemOps](https://github.com/MemTensor/MemOps) | `312af65e2c7b6d1b70f062ffa8b4cde32aaf6f35` | Its gold traces cover remember, update, forget, reflect, and multi-step state trajectories. It separately measures stale-value use, forget leakage, over-forget, operation detection, and provenance support. This is a closer fit to OpenChronicle's reviewed lifecycle than another retrieval-only leaderboard. |
+| [LongMemEval-V2](https://github.com/xiaowu0162/LongMemEval-V2) | `2cc8c540bdb87fe6761629b585e727e1c4704520` | The current 451-question harness tests static and dynamic state, workflow knowledge, environment gotchas, and premise awareness over long trajectory histories. Keep using only its memory/evidence contract; do not import computer-use behavior into the product. |
+| [Hindsight](https://github.com/vectorize-io/hindsight) | `3295716cafcc593b6a2cdebd03dd71373b091859` | Its semantic, keyword, graph, and temporal channels plus RRF confirm the value of multiple recall signals, but its cross-encoder and graph stages should remain experiments until OpenChronicle error analysis proves they pay for their local footprint. |
+| [Graphiti](https://github.com/getzep/graphiti) | `993e081a6d7948a0d8851c12a5fbdbeb49fed862` | Its episode/reference time and fact valid/invalid time reinforce the existing typed-fact direction. The remaining product gap is historical querying, not the absence of a graph database. |
+| [MIRIX](https://github.com/Mirix-AI/MIRIX) | `8cb06a62bbb7c478beb33dd4f2815696a72df482` | Six logical memory types are useful vocabulary, but a dedicated agent and physical store per type would add cost and autonomous mutation without solving OpenChronicle's present evaluation gaps. |
+| [Personal Model](https://github.com/Intuition-Lab/personal-model) | `b7a28ffadaed3d83d9522efc8c171d6d642fd91b` | Evidence receipts, observation/inference separation, and explicit `degraded`/`not_built` states support making recall quality and unavailable projections visible rather than fabricating a seamless profile. |
+
+Two current papers sharpen the same conclusion. [HaluMem](https://arxiv.org/abs/2511.03506)
+evaluates extraction, update, and question answering separately, showing why an
+end-to-end answer score cannot localize memory corruption. The 2026
+[TrustMem](https://arxiv.org/abs/2606.25161) preprint reports fewer omission,
+corruption, and hallucination errors from constrained consolidation. Its
+author-reported numbers still need independent replication, but the failure
+taxonomy supports OpenChronicle's review-first, provenance-bound write path.
+
+### Corrected gap matrix
+
+| Capability | Current state at `c4459a3` | Remaining optimization |
+|---|---|---|
+| Minute normalization | Model-backed, Luna-ready, retryable failure; no local rule summary | Measure quality/cost/latency on real replay data rather than adding another fallback. |
+| Session reduction | Model-backed and retryable; empty/malformed output is not materialized | Add stage-level extraction error fixtures and observable retry health. |
+| Cross-session pattern evidence | Dedicated bounded event-history BM25 tool, independent-session requirement | Evaluate pattern precision and unsupported generalization; semantic activity search is optional only if BM25 misses are measured. |
+| Durable fact lifecycle | Reviewed append/supersede, typed slot and valid time, current projection | Add public `as_of`/history queries plus disputed/retracted states only when product cases require them. |
+| Retrieval | Local BM25 + multilingual embedding + RRF, explicit unavailable state | Add temporal filters, adjacent event expansion, and ranking explanations; defer cross-encoder/graph. |
+| Published Memory | Current facts, source view, correction, export, complete revision-lineage forget | Expose history/as-of inspection; current view already intentionally hides superseded values. |
+| Evaluation | Native retrieval fixture, real LongMemEval-V2 trajectory smoke, adapter | Add lifecycle-operation evaluation and run a fixed public tier before making quality claims. |
+| Procedural memory | Suggestions and feedback exist, but no reviewed reusable workflow memory | Promote only repeated/adopted text workflows, templates, or checklists; never execute them. |
+
 ## Implemented decisions from this research
 
 1. **No silent local-summary fallback.** Timeline/reducer model failures remain
@@ -113,32 +158,34 @@ been claimed.
 
 ## Remaining optimization sequence
 
-### P0: published-memory product surface
+### P0: lifecycle-operation evaluation before another storage feature
 
-The inspectable Memory/About Me page now supports search, source opening, typed
-current-state metadata, and explicit local JSON/Markdown export through the
-native save dialog. Remaining work is current/history switching,
-edit-as-supersede, and entry-root forget.
+Add a bounded MemOps-compatible adapter or equivalent native fixtures for:
 
-### P0: typed fact history and state transitions
+- remember with exact source support;
+- update without returning the superseded value as current;
+- forget with zero target leakage and zero unrelated over-forget;
+- bounded reflection without unsupported generalization;
+- multi-step state trajectories with correct order and provenance.
 
-The current-value slice is implemented for new reviewed facts:
+Report operation precision/recall, stale-value rate, forget leakage,
+over-forget, provenance support, and answer accuracy separately. HaluMem-style
+stage labels should identify whether failure began in extraction, update,
+retrieval, or answer use. Do not hide these behind a single LLM-judge score.
 
-- `subject_key` or canonical fact slot;
-- `assertion_kind`: user-asserted, observed, or inferred;
-- `recorded_at` and `valid_from`/`valid_to`;
-- current versus superseded and valid-time state.
+In parallel, finish a fixed official LongMemEval-V2 small-tier run and preserve
+the adapter version, dataset revision, model, latency, and retrieved evidence.
+The current real-trajectory smoke proves compatibility, not longitudinal
+quality.
 
-Remaining work is a user-facing history view plus explicit disputed/retracted
-states and `as_of` queries. Continue treating Markdown metadata as authority;
-do not attempt a universal ontology.
+### P0: historical fact query and inspection
 
-### P0: complete longitudinal evaluation
-
-Run the official LongMemEval-V2 small tier and report answer accuracy together
-with evidence recall and query latency. Add native cases for current-value
-updates, `as_of` history, repeated-session patterns, over-applied preferences,
-and forget leakage.
+The current-value path, user correction, and full-lineage forget are complete.
+Add an explicit `as_of`/history read contract that can answer “what was true at
+time T?” without allowing superseded entries into ordinary current recall. The
+desktop can then switch between current and immutable revision history.
+Disputed/retracted states should be introduced only with concrete product cases;
+do not build a universal ontology.
 
 ### P1: event segmentation and adjacency retrieval
 
@@ -147,6 +194,10 @@ existing session boundaries plus app/window/topic discontinuities. A hit should
 optionally expand to neighboring segments. Do not introduce a new model call on
 every minute; segmentation should be deterministic where possible and model-
 assisted only for ambiguous topic shifts.
+
+The materialized segment must remain a rebuildable projection over exact
+timeline/session evidence. Evaluate minute, session, and event/topic retrieval
+units on the same cases before changing the default.
 
 ### P1: procedural memory from adopted outcomes
 
@@ -159,6 +210,18 @@ text artifacts; they never execute computer actions.
 Add current-state, explicit-temporary TTL, recency, and recall-use signals after
 the existing BM25/vector fusion, with an explain-search view. Time affects rank,
 not physical retention. Cross-encoder reranking is an experiment, not a default.
+
+The explanation should expose channel ranks, filters, temporal interpretation,
+projection/model identity, and an explicit unavailable/degraded reason. It does
+not need production observability infrastructure.
+
+### P2: only evidence-backed consolidation experiments
+
+After lifecycle evaluation exists, compare candidate-only consolidation against
+the current reviewed path. A consolidation pass may propose merge, supersede,
+or procedural candidates, but cannot rewrite approved history. Test constrained
+write prompts or a stronger writer model only as an ablation against omission,
+corruption, hallucination, latency, and cost.
 
 ## Explicit non-goals
 
@@ -184,6 +247,17 @@ not physical retention. Cross-encoder reranking is an experiment, not a default.
   actually applied, and whether they are over-applied.
 - [HaluMem](https://arxiv.org/abs/2511.03506): hallucination across extraction,
   update, and answering stages.
+- [MemOps](https://github.com/MemTensor/MemOps): remember/update/forget/reflect
+  operation traces, target binding, lifecycle state, and provenance metrics.
+
+## Immediate decision
+
+The next memory-specific implementation slice should be the lifecycle operation
+evaluation harness, not a graph store or another autonomous memory agent. It
+will tell us whether the existing reviewed supersede and complete-lineage forget
+actually outperform simpler rewrite/delete baselines, and it will provide the
+failure labels needed to choose between historical queries, event segmentation,
+or retrieval reranking on evidence rather than intuition.
 
 ## Success criteria
 

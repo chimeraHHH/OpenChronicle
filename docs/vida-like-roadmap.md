@@ -207,6 +207,18 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   subject slots, user-asserted/observed/inferred basis, optional valid time,
   Markdown-authoritative round trips, supersede slot preservation, expired or
   scheduled recall filtering, and Review/Published Memory visibility.
+- [ ] Lifecycle-operation memory evaluation: remember/update/forget/reflect
+  traces, stale-value rate, forget leakage, over-forget, provenance support,
+  and stage-level extraction/update/retrieval/answer failure labels. The fresh
+  external survey selects MemOps as the closest public contract; see
+  [local-long-term-memory-research-2026-08-23.md](local-long-term-memory-research-2026-08-23.md).
+- [ ] Historical `as_of` read and Published Memory revision inspection, kept
+  separate from ordinary current-only recall.
+- [ ] Rebuildable event/topic segmentation plus adjacent-event retrieval,
+  gated by a same-case comparison against minute and session retrieval units.
+- [ ] Reviewed procedural memory derived only from repeated/adopted text
+  workflows, templates, or checklists. It remains generation context and never
+  executes computer actions.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1
