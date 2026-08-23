@@ -33,6 +33,8 @@ def canonical_entry_hits_locked(
     conn: sqlite3.Connection,
     cfg: Config,
     hits: list[fts.EntryHit],
+    *,
+    recorded_at: datetime | None = None,
 ) -> list[CanonicalEntryHit]:
     """Authorize recall hits and replace their metadata with Markdown values.
 
@@ -42,6 +44,7 @@ def canonical_entry_hits_locked(
     a missing/tombstoned entry, or a current-policy rejection drops the row.
     """
     context = ContextService(conn, cfg)
+    instant = (recorded_at or datetime.now().astimezone()).astimezone()
     parsed_by_path: dict[str, files_store.ParsedFile | None] = {}
     visible: list[CanonicalEntryHit] = []
     emitted: set[tuple[str, str]] = set()
@@ -63,9 +66,7 @@ def canonical_entry_hits_locked(
             continue
         if hit.path not in parsed_by_path:
             try:
-                parsed_by_path[hit.path] = files_store.read_file(
-                    files_store.memory_path(hit.path)
-                )
+                parsed_by_path[hit.path] = files_store.read_file(files_store.memory_path(hit.path))
             except (FileNotFoundError, OSError, TypeError, ValueError):
                 parsed_by_path[hit.path] = None
         parsed = parsed_by_path[hit.path]
@@ -74,10 +75,20 @@ def canonical_entry_hits_locked(
         entry = next((item for item in parsed.entries if item.id == hit.id), None)
         if entry is None or not _projection_matches(hit, entry):
             continue
-        if entry.fact_metadata is not None and temporal_state(
-            entry.fact_metadata,
-            as_of=datetime.now().astimezone(),
-        ) != "current":
+        if recorded_at is not None and not _entry_was_active_at(
+            entry,
+            entries=parsed.entries,
+            instant=instant,
+        ):
+            continue
+        if (
+            entry.fact_metadata is not None
+            and temporal_state(
+                entry.fact_metadata,
+                as_of=instant,
+            )
+            != "current"
+        ):
             continue
         if not context.memory_entry_allowed(path=hit.path, entry=entry):
             continue
@@ -87,13 +98,42 @@ def canonical_entry_hits_locked(
                 path=parsed.path.name,
                 timestamp=entry.timestamp,
                 tags=tuple(entry.tags),
-                content=entry.body,
+                content=entries_store.entry_index_content(entry),
                 superseded_by=entry.superseded_by,
                 rank=float(hit.rank),
             )
         )
         emitted.add(key)
     return visible
+
+
+def _entry_was_active_at(
+    entry: files_store.ParsedEntry,
+    *,
+    entries: list[files_store.ParsedEntry],
+    instant: datetime,
+) -> bool:
+    """Return whether one immutable revision was the recorded belief at time T."""
+    recorded = _entry_datetime(entry.timestamp, fallback_tz=instant.tzinfo)
+    if recorded is None or recorded > instant:
+        return False
+    if entry.superseded_by is None:
+        return True
+    replacement = next((item for item in entries if item.id == entry.superseded_by), None)
+    if replacement is None:
+        return False
+    replaced = _entry_datetime(replacement.timestamp, fallback_tz=instant.tzinfo)
+    return replaced is not None and instant < replaced
+
+
+def _entry_datetime(value: str, *, fallback_tz) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (AttributeError, ValueError):
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=fallback_tz)
+    return parsed.astimezone()
 
 
 def _hit_has_safe_types(hit: fts.EntryHit) -> bool:

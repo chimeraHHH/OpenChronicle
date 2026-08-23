@@ -20,6 +20,7 @@ from openchronicle.provenance.models import EvidenceRef, content_digest, observa
 from openchronicle.store import entries as entries_mod
 from openchronicle.store import files as files_mod
 from openchronicle.store import fts
+from openchronicle.store.facts import make_fact_metadata
 from openchronicle.timeline import store as timeline_store
 from openchronicle.writer import tools as writer_tools
 
@@ -83,6 +84,90 @@ def test_search(ac_root: Path) -> None:
         out = mcp_server._search(conn, cfg=cfg, query="vim", top_k=3)
     assert out["results"]
     assert out["results"][0]["path"] == "tool-vim.md"
+
+
+def test_search_as_of_returns_only_the_revision_active_at_that_time(
+    ac_root: Path,
+    monkeypatch,
+) -> None:
+    cfg = config_mod.Config()
+    clock = ["2026-08-20T12:00"]
+    monkeypatch.setattr(entries_mod, "_now_iso_minute", lambda: clock[0])
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn,
+            name="project-openchronicle.md",
+            description="OpenChronicle project facts",
+            tags=["project"],
+        )
+        old_id, _ = entries_mod.append_entry_once(
+            conn,
+            name="project-openchronicle.md",
+            content="The timeline model is gpt-5.4-nano.",
+            tags=["project", "timeline", "model"],
+            entry_id="timeline-model-old",
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
+            fact_metadata=make_fact_metadata(
+                subject_key="project.openchronicle.timeline-model",
+                assertion_kind="user_asserted",
+                valid_from="2026-08-20",
+            ),
+        )
+        clock[0] = "2026-08-23T12:00"
+        new_id = entries_mod.supersede_entry(
+            conn,
+            name="project-openchronicle.md",
+            old_entry_id=old_id,
+            new_entry_id="timeline-model-current",
+            new_content="The timeline model is gpt-5.6-luna.",
+            reason="explicit model update",
+            tags=["project", "timeline", "model"],
+            fact_metadata=make_fact_metadata(
+                subject_key="project.openchronicle.timeline-model",
+                assertion_kind="user_asserted",
+                valid_from="2026-08-23",
+            ),
+        )
+
+        before = mcp_server._search(
+            conn,
+            cfg=cfg,
+            query="timeline model",
+            top_k=5,
+            as_of="2026-08-21T12:00:00+08:00",
+        )
+        after = mcp_server._search(
+            conn,
+            cfg=cfg,
+            query="timeline model",
+            top_k=5,
+            as_of="2026-08-23T13:00:00+08:00",
+        )
+        current = mcp_server._search(conn, cfg=cfg, query="timeline model", top_k=5)
+
+    assert [item["id"] for item in before["results"]] == [old_id]
+    assert before["results"][0]["content"] == "The timeline model is gpt-5.4-nano."
+    assert [item["id"] for item in after["results"]] == [new_id]
+    assert [item["id"] for item in current["results"]] == [new_id]
+
+
+def test_search_as_of_rejects_invalid_time_without_recall(ac_root: Path) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        out = mcp_server._search(
+            conn,
+            cfg=cfg,
+            query="anything",
+            as_of="not-a-time",
+        )
+
+    assert out == {
+        "query": "anything",
+        "as_of": "not-a-time",
+        "retrieval_mode": "invalid_as_of",
+        "error": "as_of must be an ISO 8601 date or timestamp",
+        "results": [],
+    }
 
 
 def test_recent_activity(ac_root: Path) -> None:

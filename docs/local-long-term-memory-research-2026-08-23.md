@@ -161,6 +161,10 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
    zero stale-value, forget-leakage, and over-forget failures with complete
    claim-support coverage. It is a local regression result, not a public MemOps
    score or a model-extraction claim.
+9. **Explicit historical search.** MCP `search(as_of=...)` considers immutable
+   superseded revisions but returns only the version recorded and not yet
+   replaced at the requested instant, while applying typed valid-time metadata
+   at the same instant. Default recall remains current-only.
 
 ## Remaining optimization sequence
 
@@ -186,12 +190,12 @@ the adapter version, dataset revision, model, latency, and retrieved evidence.
 The current real-trajectory smoke proves compatibility, not longitudinal
 quality.
 
-### P0: historical fact query and inspection
+### P0: finish historical fact inspection UX
 
-The current-value path, user correction, and full-lineage forget are complete.
-Add an explicit `as_of`/history read contract that can answer “what was true at
-time T?” without allowing superseded entries into ordinary current recall. The
-desktop can then switch between current and immutable revision history.
+The current-value path, user correction, full-lineage forget, and explicit MCP
+`as_of` search are complete. Add the desktop switch between current and
+immutable revision history without allowing superseded entries into ordinary
+current recall.
 Disputed/retracted states should be introduced only with concrete product cases;
 do not build a universal ontology.
 

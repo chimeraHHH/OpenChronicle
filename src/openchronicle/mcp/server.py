@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -215,8 +216,20 @@ def _search(
     until: str | None = None,
     top_k: int = 5,
     include_superseded: bool = False,
+    as_of: str | None = None,
 ) -> dict[str, Any]:
     requested_limit = min(max(top_k, 0), _POLICY_RECALL_LIMIT)
+    try:
+        recorded_at = _parse_as_of(as_of)
+    except ValueError as exc:
+        return {
+            "query": query,
+            "as_of": as_of,
+            "retrieval_mode": "invalid_as_of",
+            "error": str(exc),
+            "results": [],
+        }
+    historical = recorded_at is not None
     retrieval_mode = "hybrid_rrf" if cfg.search.semantic_enabled else "bm25"
     if cfg.search.semantic_enabled:
         try:
@@ -228,21 +241,28 @@ def _search(
                 since=since,
                 until=until,
                 top_k=_POLICY_RECALL_LIMIT,
-                include_superseded=include_superseded,
+                include_superseded=include_superseded or historical,
             )
         except semantic.SemanticIndexUnavailable as exc:
             return {
                 "query": query,
+                "as_of": recorded_at.isoformat() if recorded_at is not None else None,
                 "retrieval_mode": "hybrid_unavailable",
                 "error": str(exc),
                 "results": [],
             }
-        hits = _current_visible_hits(conn, cfg, recall_hits)[:requested_limit]
+        hits = _current_visible_hits(
+            conn,
+            cfg,
+            recall_hits,
+            recorded_at=recorded_at,
+        )[:requested_limit]
     else:
         hits = _page_current_visible_hits(
             conn,
             cfg,
             limit=requested_limit,
+            recorded_at=recorded_at,
             fetch_page=lambda page_size, offset: fts.search(
                 conn,
                 query=query,
@@ -251,11 +271,12 @@ def _search(
                 until=until,
                 top_k=page_size,
                 offset=offset,
-                include_superseded=include_superseded,
+                include_superseded=include_superseded or historical,
             ),
         )
     return {
         "query": query,
+        "as_of": recorded_at.isoformat() if recorded_at is not None else None,
         "retrieval_mode": retrieval_mode,
         "results": [
             {
@@ -324,14 +345,26 @@ def _get_schema() -> dict[str, Any]:
     return {"schema": load_prompt("schema.md")}
 
 
-def _current_visible_hits(conn, cfg: Config, hits):
+def _current_visible_hits(
+    conn,
+    cfg: Config,
+    hits,
+    *,
+    recorded_at: datetime | None = None,
+):
     """Treat FTS as recall only; Markdown and purge state authorize reads."""
     with files_mod.store_write_lock():
-        return _current_visible_hits_locked(conn, cfg, hits)
+        return _current_visible_hits_locked(conn, cfg, hits, recorded_at=recorded_at)
 
 
-def _current_visible_hits_locked(conn, cfg: Config, hits):
-    return canonical_entry_hits_locked(conn, cfg, hits)
+def _current_visible_hits_locked(
+    conn,
+    cfg: Config,
+    hits,
+    *,
+    recorded_at: datetime | None = None,
+):
+    return canonical_entry_hits_locked(conn, cfg, hits, recorded_at=recorded_at)
 
 
 def _page_current_visible_hits(
@@ -340,6 +373,7 @@ def _page_current_visible_hits(
     *,
     limit: int,
     fetch_page: Callable[[int, int], list[fts.EntryHit]],
+    recorded_at: datetime | None = None,
 ) -> list[CanonicalEntryHit]:
     """Page through recall rows until ``limit`` current entries are found.
 
@@ -360,7 +394,12 @@ def _page_current_visible_hits(
             if not page:
                 break
             offset += len(page)
-            for hit in canonical_entry_hits_locked(conn, cfg, page):
+            for hit in canonical_entry_hits_locked(
+                conn,
+                cfg,
+                page,
+                recorded_at=recorded_at,
+            ):
                 key = (hit.path, hit.id)
                 if key in emitted:
                     continue
@@ -371,6 +410,18 @@ def _page_current_visible_hits(
             if len(page) < _POLICY_RECALL_LIMIT:
                 break
     return visible
+
+
+def _parse_as_of(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip() or len(value) > 100 or "\x00" in value:
+        raise ValueError("as_of must be a non-empty ISO 8601 date or timestamp")
+    try:
+        parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("as_of must be an ISO 8601 date or timestamp") from exc
+    return parsed.astimezone()
 
 
 @privacy_egress_fenced
@@ -836,6 +887,7 @@ def build_server(cfg: Config | None = None):
         until: str | None = None,
         top_k: int = default_top_k,
         include_superseded: bool = False,
+        as_of: str | None = None,
     ) -> str:
         """**ALWAYS CALL** before saying "I don't know" about something with a keyword in it.
 
@@ -857,6 +909,13 @@ def build_server(cfg: Config | None = None):
 
         `paths` takes GLOB patterns to scope search, e.g. `['event-*.md']` for
         scheduled events only, or `['project-*.md']` for project notes.
+
+        `as_of` is an explicit historical snapshot time. When supplied, search
+        considers superseded revisions but returns only the revision that had
+        already been recorded and had not yet been replaced at that time. It
+        also applies each typed fact's valid-time interval at the same instant.
+        Ordinary search remains current-only unless `include_superseded` is
+        explicitly requested.
         """
         with fts.cursor() as conn:
             return json.dumps(
@@ -869,6 +928,7 @@ def build_server(cfg: Config | None = None):
                     until=until,
                     top_k=top_k,
                     include_superseded=include_superseded,
+                    as_of=as_of,
                 ),
                 ensure_ascii=False,
             )

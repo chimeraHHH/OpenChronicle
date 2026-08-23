@@ -112,6 +112,12 @@ Normal supersession deletes nothing. The timeline is intact, and `read_memory`
 purges the reviewed replacement candidate, its deterministic replacement is
 deleted and the immediately preceding value becomes current again.
 
+`search(as_of=<ISO-8601>)` is the bounded historical view. It considers the
+chain but returns only the revision that had already been recorded and had not
+yet been replaced at the requested time. The same instant is applied to typed
+`valid_from`/`valid_to` metadata. Default search remains current-only, so adding
+history cannot silently reintroduce stale values into normal context.
+
 ## Compaction
 
 When a file's entry count gets large, the writer can flag it with `flag_compact`.

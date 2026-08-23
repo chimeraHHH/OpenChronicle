@@ -215,8 +215,9 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   stage-level extraction/update/retrieval/answer failure labels. The fresh
   external survey selects MemOps as the closest public contract; see
   [local-long-term-memory-research-2026-08-23.md](local-long-term-memory-research-2026-08-23.md).
-- [ ] Historical `as_of` read and Published Memory revision inspection, kept
-  separate from ordinary current-only recall.
+- [x] Explicit MCP `search(as_of=...)` historical snapshot over recorded and
+  typed valid time, kept separate from ordinary current-only recall.
+- [ ] Published Memory revision-history inspection and `as_of` desktop UX.
 - [ ] Rebuildable event/topic segmentation plus adjacent-event retrieval,
   gated by a same-case comparison against minute and session retrieval units.
 - [ ] Reviewed procedural memory derived only from repeated/adopted text

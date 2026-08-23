@@ -111,7 +111,7 @@ not a metadata-only response. Supports filtering:
 
 Superseded entries include their replacement ID, so agents can follow the chain.
 
-### `search(query, paths?, since?, until?, top_k=5, include_superseded=false)`
+### `search(query, paths?, since?, until?, top_k=5, include_superseded=false, as_of?)`
 
 *"Hybrid local semantic + BM25 search across currently authorized memory
 entries when semantic memory is enabled; otherwise BM25."* Example invocations
@@ -127,6 +127,10 @@ than silently falling back.
 - `since` / `until` — ISO timestamp bounds.
 - `top_k` — default from `search.default_top_k`.
 - `include_superseded` — surface old versions too. Default `false` per `search.filter_superseded_by_default`.
+- `as_of` — ISO 8601 historical snapshot. Search automatically considers old
+  revisions, then returns only entries already recorded and not yet replaced at
+  that time; typed valid-time intervals are evaluated at the same instant.
+  Omit it for ordinary current-only recall.
 
 Result entries carry `rank` (BM25 score or negative RRF score; lower is better).
 
