@@ -2,14 +2,14 @@
 
 Source identity:
 
-- OpenChronicle commit: `bb0cf5013117d4e64a2a67e1afa2e3782c7a3323`
+- OpenChronicle commit: `93fb60faf57bc2471cc09f7c7dcaf3a2e419615a`
 - repository state during run: clean
 - MemoryAgentBench code: `fe1735de8cf8b9908e1e3d3b5612afc815698062`
 - dataset revision: `7ea066982b140a19337e17e60d45d4076e042faf`
 - Parquet SHA-256: `24d5c3f09ce0ce15625cb9f8a98f44f0d864ca6c94d7b4ad04eb697ca3a5ff45`
 - manifest SHA-256: `de9c8c00bbd5b3b4fa67cddaf6d44e689436db677cef7c0d47d973a45d90c629`
 - metric contract SHA-256: `e576c9fda1ac259ac7053483ebb7f2bb820fa5e16d7c4fedccf268c36c53b27d`
-- raw report SHA-256: `5ca02131dbd53f649f32e1f57d23009843f239b3094d8d5263df9111005d1c64`
+- raw report SHA-256: `4a7c075e34d20061cc87dfd64d6ca6aa03a884052d035587ff4ef2fd794ed0ed`
 - sample: `Conflict_Resolution / factconsolidation_sh_6k`
 - scope: all 455 facts and all 100 frozen QA IDs
 
@@ -30,11 +30,11 @@ Source identity:
 | Typed slot-oracle accuracy | 1.000 |
 | Typed contradiction-free accuracy | 1.000 |
 | Typed stale / contradiction rate | 0.000 / 0.000 |
-| Pure BM25 query P50 / P95 | 0.703 / 0.966 ms |
-| BM25 + oracle query P50 / P95 | 0.887 / 1.145 ms |
-| Typed query P50 / P95 | 0.017 / 0.025 ms |
-| Review-first ingest time | 72.228 s |
-| Peak Python traced memory | 17.890 MB |
+| Pure BM25 query P50 / P95 | 0.705 / 0.951 ms |
+| BM25 + oracle query P50 / P95 | 0.874 / 1.117 ms |
+| Typed query P50 / P95 | 0.018 / 0.024 ms |
+| Review-first ingest time | 74.052 s |
+| Peak Python traced memory | 17.889 MB |
 
 All 16 frozen gates passed. Before this clean run, an independent audit found
 two product-level uniqueness failures: direct Published Memory correction and a

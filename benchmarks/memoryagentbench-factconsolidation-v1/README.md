@@ -61,4 +61,6 @@ all gate checks.
 The first frozen result is recorded in
 [analysis/openchronicle-2026-08-24.md](analysis/openchronicle-2026-08-24.md).
 Its complete machine-readable report is stored in
-[`results/openchronicle-bb0cf50.json`](results/openchronicle-bb0cf50.json).
+[`results/openchronicle-93fb60f.json`](results/openchronicle-93fb60f.json).
+The preceding `bb0cf50` report is retained beside it as an audit trail for the
+metric-edge correction.
