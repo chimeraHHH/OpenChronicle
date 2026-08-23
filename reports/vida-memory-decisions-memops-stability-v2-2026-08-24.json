@@ -1,0 +1,338 @@
+{
+  "evaluation_id": "vida-memory-decision-stability-v2",
+  "gate_verdict": {
+    "checks": {
+      "evidence_case_decision_agreement_rate": true,
+      "operation_f1": true,
+      "operation_f1_stdev": true,
+      "operation_fp": true,
+      "operation_precision": true,
+      "operation_recall": true,
+      "provenance_support_rate": true,
+      "provider_or_parse_failures": true,
+      "run_count": true,
+      "run_gate_pass_rate": true,
+      "structural_case_decision_agreement_rate": true
+    },
+    "gates": {
+      "max_operation_f1_stdev": 0.04,
+      "max_operation_fp": 4,
+      "max_provider_or_parse_failure_count": 0,
+      "min_evidence_case_decision_agreement_rate": 0.75,
+      "min_operation_f1": 0.9,
+      "min_operation_precision": 0.85,
+      "min_operation_recall": 0.95,
+      "min_provenance_support_rate": 0.9,
+      "min_run_count": 3,
+      "min_run_gate_pass_rate": 1.0,
+      "min_structural_case_decision_agreement_rate": 1.0
+    },
+    "passed": true
+  },
+  "metric_contract": {
+    "path": "benchmarks/vida-memory-decisions-v1/json/official_memops_stability_contract_v2.json",
+    "sha256": "daa7ef86283c9bf462461b172358b9cc0b79c22b588fb7694e75338be5044f42"
+  },
+  "metric_stats": {
+    "noop_accuracy": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "stdev": 0.0
+    },
+    "operation_f1": {
+      "max": 0.981818,
+      "mean": 0.981818,
+      "min": 0.981818,
+      "stdev": 0.0
+    },
+    "operation_fn": {
+      "max": 0.0,
+      "mean": 0.0,
+      "min": 0.0,
+      "stdev": 0.0
+    },
+    "operation_fp": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "stdev": 0.0
+    },
+    "operation_precision": {
+      "max": 0.964286,
+      "mean": 0.964286,
+      "min": 0.964286,
+      "stdev": 0.0
+    },
+    "operation_recall": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "stdev": 0.0
+    },
+    "operation_tp": {
+      "max": 27.0,
+      "mean": 27.0,
+      "min": 27.0,
+      "stdev": 0.0
+    },
+    "parse_success_rate": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "stdev": 0.0
+    },
+    "provenance_support_rate": {
+      "max": 0.962963,
+      "mean": 0.962963,
+      "min": 0.962963,
+      "stdev": 0.0
+    },
+    "target_binding_accuracy": {
+      "max": 1.0,
+      "mean": 1.0,
+      "min": 1.0,
+      "stdev": 0.0
+    },
+    "value_accuracy": {
+      "max": 0.37037,
+      "mean": 0.37037,
+      "min": 0.37037,
+      "stdev": 0.0
+    }
+  },
+  "metrics": {
+    "all_runs_gate_passed": true,
+    "evidence_case_decision_agreement_rate": 0.75,
+    "exact_case_decision_agreement_rate": 0.25,
+    "operation_f1_max": 0.981818,
+    "operation_f1_min": 0.981818,
+    "operation_f1_stdev": 0.0,
+    "operation_fp_max": 1.0,
+    "operation_precision_min": 0.964286,
+    "operation_recall_min": 1.0,
+    "provenance_support_rate_min": 0.962963,
+    "provider_or_parse_failure_count": 0,
+    "run_count": 3,
+    "run_gate_pass_rate": 1.0,
+    "structural_case_decision_agreement_rate": 1.0,
+    "unique_evidence_run_signature_count": 3,
+    "unique_run_signature_count": 3,
+    "unique_structural_run_signature_count": 1
+  },
+  "per_case_agreement": [
+    {
+      "case_id": "B02-remember",
+      "evidence": {
+        "majority_fraction": 1.0,
+        "signature_counts": {
+          "a1b6c98a528f9bafe093ce2369463a568dbbdd13ccc3d4103116701ce5fe4bcb": 3
+        },
+        "unique_signature_count": 1
+      },
+      "exact": {
+        "majority_fraction": 0.666667,
+        "signature_counts": {
+          "a6c36bd7ba2db712301f12a2aeda1fe87fbc2e962ea44b31d79d866cb4befe6f": 2,
+          "fa3e2ca6cf0391d763b3066a7f3fce01945e00923f2575ed9e449a835d6abe8e": 1
+        },
+        "unique_signature_count": 2
+      },
+      "majority_fraction": 0.666667,
+      "signature_counts": {
+        "a6c36bd7ba2db712301f12a2aeda1fe87fbc2e962ea44b31d79d866cb4befe6f": 2,
+        "fa3e2ca6cf0391d763b3066a7f3fce01945e00923f2575ed9e449a835d6abe8e": 1
+      },
+      "structural": {
+        "majority_fraction": 1.0,
+        "signature_counts": {
+          "82ccd18df0aaf14987375a89c0b30acbac81955b4245d35b88dc6da802a6e856": 3
+        },
+        "unique_signature_count": 1
+      },
+      "unique_signature_count": 2
+    },
+    {
+      "case_id": "C26-update-chain",
+      "evidence": {
+        "majority_fraction": 1.0,
+        "signature_counts": {
+          "840a0332375310607a9149f49c5ce915da5a72a7bdededa7fd5c5f87eef79652": 3
+        },
+        "unique_signature_count": 1
+      },
+      "exact": {
+        "majority_fraction": 1.0,
+        "signature_counts": {
+          "d9891fba3735d069467c13136909e305c9d48ef6c8b023fe5afd7c6fd07361e6": 3
+        },
+        "unique_signature_count": 1
+      },
+      "majority_fraction": 1.0,
+      "signature_counts": {
+        "d9891fba3735d069467c13136909e305c9d48ef6c8b023fe5afd7c6fd07361e6": 3
+      },
+      "structural": {
+        "majority_fraction": 1.0,
+        "signature_counts": {
+          "686c845bcd873e1d7319996a8f468ce5ef8b5b319e6f4762207bcae8642c0c66": 3
+        },
+        "unique_signature_count": 1
+      },
+      "unique_signature_count": 1
+    },
+    {
+      "case_id": "C29-forget",
+      "evidence": {
+        "majority_fraction": 1.0,
+        "signature_counts": {
+          "e2d8487ad90b129c0335507e67410dc94680d2e859a5ef596880f50ce104b868": 3
+        },
+        "unique_signature_count": 1
+      },
+      "exact": {
+        "majority_fraction": 0.333333,
+        "signature_counts": {
+          "0f688da8075bf890cee755c507a20a75046e74b8e362ff8ab14f177de088c6fd": 1,
+          "5aa23c1863fbaedcfe3220d0b3b0ebde936a27b96655a4799544238d95f63ffa": 1,
+          "8271b6846a6debae7a1160c508654f8ccb8e392f0a46469b289c5077c417d934": 1
+        },
+        "unique_signature_count": 3
+      },
+      "majority_fraction": 0.333333,
+      "signature_counts": {
+        "0f688da8075bf890cee755c507a20a75046e74b8e362ff8ab14f177de088c6fd": 1,
+        "5aa23c1863fbaedcfe3220d0b3b0ebde936a27b96655a4799544238d95f63ffa": 1,
+        "8271b6846a6debae7a1160c508654f8ccb8e392f0a46469b289c5077c417d934": 1
+      },
+      "structural": {
+        "majority_fraction": 1.0,
+        "signature_counts": {
+          "253cc3f44379d195c09666ea15ccf2e10ff64b17679ff57276758bd7c72bb0f4": 3
+        },
+        "unique_signature_count": 1
+      },
+      "unique_signature_count": 3
+    },
+    {
+      "case_id": "E12-reflect",
+      "evidence": {
+        "majority_fraction": 0.333333,
+        "signature_counts": {
+          "370cb367327f7c49fb37c3878b13fb29300020217b552c54017c915aec8d4399": 1,
+          "48ce0abf307632551e439c2b45aacd1e0570d072f9e6d563123efb4e5af3ec7f": 1,
+          "914f09561d70ef6d213744190ff9d3ece38ed298d8d46eb1d482ea77cc6d7268": 1
+        },
+        "unique_signature_count": 3
+      },
+      "exact": {
+        "majority_fraction": 0.333333,
+        "signature_counts": {
+          "86e6a2f8bac028e742ba76dd11eb703eea35634cb56051b1e21ae3bfbe680be3": 1,
+          "eacd96e1694fa862d5f755a8292b8be363f91ae78820f706a99daeb22c2fb880": 1,
+          "fe1a2575942f9ceeaa582359006ec034543118953f96633e97d2f82abfdc9645": 1
+        },
+        "unique_signature_count": 3
+      },
+      "majority_fraction": 0.333333,
+      "signature_counts": {
+        "86e6a2f8bac028e742ba76dd11eb703eea35634cb56051b1e21ae3bfbe680be3": 1,
+        "eacd96e1694fa862d5f755a8292b8be363f91ae78820f706a99daeb22c2fb880": 1,
+        "fe1a2575942f9ceeaa582359006ec034543118953f96633e97d2f82abfdc9645": 1
+      },
+      "structural": {
+        "majority_fraction": 1.0,
+        "signature_counts": {
+          "1b4c8cbf182b37c4ef4fec6d5c41396691a41175d31efbab36841a5768312b56": 3
+        },
+        "unique_signature_count": 1
+      },
+      "unique_signature_count": 3
+    }
+  ],
+  "repository": {
+    "commit": "c3518fadc0783261e282c44d149a58b2ddc5f6bc",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "run_count": 3,
+  "run_report_sha256": [
+    {
+      "run": 1,
+      "sha256": "fa2e1f48de45fa88b9b2036fbf5536a26f2ab5410c7f3026cae0f59b0b91c7ab"
+    },
+    {
+      "run": 2,
+      "sha256": "aa2f678ceac763af8ea613417e2c78ceae6765f963ee95327fbaa3a4994fb9ee"
+    },
+    {
+      "run": 3,
+      "sha256": "25622f2ae2237fe63d9f6abec05b387631a8a0e59b17ccf8d57a5a1164819a01"
+    }
+  ],
+  "run_signatures": [
+    {
+      "evidence": "edc91db2ad66e437809441a0d480dcf80b14f8fea997b8cadea514315ed886f0",
+      "exact": "712f9f61ceeaf2a25bc29c114efe2e45620e2619cc3c6f1118d9a8fbe2032f17",
+      "run": 1,
+      "structural": "b4dfd5d50d71abb43be6da192a3be4d466039fd1f7e48fefaf41040aba3f4fcd"
+    },
+    {
+      "evidence": "ce68046c7952a7358595f5850392fce19b5183791f9d6b38887543671c352f76",
+      "exact": "702cfd9b0c6949ca21ab279026f5bec7acb2fadebdb85110bf1497bf070f569d",
+      "run": 2,
+      "structural": "b4dfd5d50d71abb43be6da192a3be4d466039fd1f7e48fefaf41040aba3f4fcd"
+    },
+    {
+      "evidence": "3eeac776d28de0883804a32b5a50142c2d406ff9026626d53686253220685130",
+      "exact": "4727d95fd0b91a1b6ed4611f7fc3f09fb5d75984f4aec48589ea76631824c4b6",
+      "run": 3,
+      "structural": "b4dfd5d50d71abb43be6da192a3be4d466039fd1f7e48fefaf41040aba3f4fcd"
+    }
+  ],
+  "schema_version": 1,
+  "source_evaluation": {
+    "action_capability": "none",
+    "dataset": {
+      "case_count": 4,
+      "gold_operation_count": 27,
+      "id": "MemOps-Official-Adjacent-Smoke-v1",
+      "path": "benchmarks/vida-memory-decisions-v1/json/official_memops_manifest.json",
+      "sha256": "8ccf9ba5d4a1faf583dad8ab3fa19b60e53443381fe0fc6ebc57764540d79b43",
+      "source": "official_memops_external",
+      "source_files": [
+        {
+          "file": "B02_remember.json",
+          "sha256": "71b10a3d9cf57fc43520a234a3244e54744e71d279d72115bb6c8e0bd09aa15f"
+        },
+        {
+          "file": "C26_update.json",
+          "sha256": "490097629cee90daa883df4b1e74a5632e4ba0e5df055d3c54a600d6d2324da6"
+        },
+        {
+          "file": "C29_forget.json",
+          "sha256": "c058892375d2e233fd7e7bda92dd46131487df51d94fbc5c0815a19fc9a12296"
+        },
+        {
+          "file": "E12_reflect.json",
+          "sha256": "e91a20977f5dace17c0ec33876b403725dfa45c9848158a3f955977113406185"
+        }
+      ],
+      "source_revision": "312af65e2c7b6d1b70f062ffa8b4cde32aaf6f35",
+      "split": "official-adjacent-fixed-4"
+    },
+    "evaluation_id": "vida-memory-decisions-v1",
+    "metric_contract": {
+      "path": "benchmarks/vida-memory-decisions-v1/json/official_memops_metric_contract.json",
+      "sha256": "ff18101d8c88ab88b4d29c7e71838665fa3c517705f0dbac1efa046aa9345ce5"
+    },
+    "provider": {
+      "model": "gpt-5.6-sol",
+      "provider": "codex_cli",
+      "reasoning_effort": "none",
+      "stage": "classifier"
+    },
+    "repository_commit": "4b866f6eb8aafa36d26935940d993c37b854b0c5",
+    "variant_id": "configured_model_memory_decision_json_v1"
+  }
+}

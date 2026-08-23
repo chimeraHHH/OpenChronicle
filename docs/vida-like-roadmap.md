@@ -228,6 +228,10 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   1.000/0.982/0.963 with one false update, but failed byte-level case-decision
   agreement (0.250). Structural and provenance-set stability must be measured
   separately without rewriting that failed gate.
+  The separate v2 aggregate over the same three runs passes at 1.000 structural
+  operation agreement and 0.750 exact evidence-set agreement; complete
+  free-text output agreement remains the original 0.250 diagnostic. Reflect
+  evidence calibration and the full official pipeline remain open.
 - [x] Explicit MCP `search(as_of=...)` historical snapshot over recorded and
   typed valid time, kept separate from ordinary current-only recall.
 - [x] On-demand Published Memory revision-history inspection, bound to the

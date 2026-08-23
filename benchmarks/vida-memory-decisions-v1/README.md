@@ -79,3 +79,6 @@ evidence-set agreement on at least 75% of cases. Complete generated-value JSON
 agreement remains visible as a stricter diagnostic but is not relabeled as a
 structural decision failure. Pass `--contract ..._v2.json` to the same
 aggregation command; the v1 contract and report remain unchanged.
+
+The clean v2 aggregate and its limitations are recorded in
+[analysis/official-memops-stability-v2-2026-08-24.md](analysis/official-memops-stability-v2-2026-08-24.md).

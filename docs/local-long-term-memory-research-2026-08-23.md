@@ -225,6 +225,13 @@ the reflect evidence set. This failed v1 result is retained. Follow-up metrics
 must separate structural decisions, provenance selection, and surface
 paraphrase instead of weakening the original gate after seeing the result.
 
+The separate v2 contract re-aggregates the same source runs and passes with
+1.000 operation type/target/order agreement and 0.750 exact evidence-set
+agreement, while keeping complete free-text agreement at its observed 0.250
+diagnostic. This isolates the remaining instability to reflect evidence scope
+and harmless/unchecked value paraphrase; no judge model is used to claim
+semantic equivalence.
+
 In parallel, finish a fixed official LongMemEval-V2 small-tier run and preserve
 the adapter version, dataset revision, model, latency, and retrieved evidence.
 The current real-trajectory smoke proves compatibility, not longitudinal
