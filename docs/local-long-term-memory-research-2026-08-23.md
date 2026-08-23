@@ -7,11 +7,11 @@ OpenChronicle implementation, a paper survey, and a repository/competitor
 survey. The product constraint is unchanged: local-first, text-product focused,
 no direct computer-use feature, and no unnecessary external infrastructure.
 
-The report was refreshed against `agent/vida-integration@c4459a3` after a second
-multi-agent pass on 2026-08-23. That refresh matters: several apparent gaps in
-the first audit had already been closed by intervening commits. The decisions
-below distinguish the current implementation from genuinely remaining work
-instead of turning stale findings into duplicate infrastructure.
+The report was refreshed again against `agent/vida-integration@df17ba5` after a
+third multi-agent pass on 2026-08-24. That refresh matters: several apparent
+gaps in the first audit had already been closed by intervening commits. The
+decisions below distinguish the current implementation from genuinely
+remaining work instead of turning stale findings into duplicate infrastructure.
 
 ## Executive decision
 
@@ -127,7 +127,7 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
 | Retrieval | Local BM25 + multilingual embedding + RRF, explicit unavailable state, explicit MCP `as_of` | Add adjacent event expansion and ranking explanations; defer cross-encoder/graph. |
 | Published Memory | Current facts, source view, correction, export, complete revision-lineage forget, on-demand desktop history | Add desktop `as_of` query UX; current view intentionally hides superseded values. |
 | Evaluation | Native retrieval and reviewed lifecycle fixtures, inert model-decision adapter, real LongMemEval-V2 trajectory smoke | Run a fixed public MemOps and LongMemEval-V2 tier before making quality claims. |
-| Procedural memory | Suggestions and feedback exist, but no reviewed reusable workflow memory | Promote only repeated/adopted text workflows, templates, or checklists; never execute them. |
+| Procedural memory | Adopted text artifacts can be screened into reviewed `procedure-*` entries; Prompt Rescue consumes up to three current relevant procedures and binds their exact revisions | Evaluate whether the reviewed context improves artifacts without stale-memory use or irrelevant-procedure leakage; extend to Reply Rescue only after the Prompt Rescue gate passes. |
 
 ## Implemented decisions from this research
 
@@ -190,6 +190,48 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
     event adjacency 1.000 anchor recall, 0.738 times the whole-session context,
     and a 0.714 reduction in forbidden-anchor rate. It also records residual
     neighbor noise and is not a held-out/public result.
+14. **Reviewed memory now changes a future text artifact.** Prompt Rescue
+    retrieves at most three current, authorized, text-only `procedure-*`
+    entries through local hybrid search or BM25, sends only a bounded body
+    excerpt plus its stable identity, and treats it as untrusted reference
+    material. The current request always wins. Exact memory revisions are
+    stored in the job projection and provenance; supersede, expiry, policy
+    rejection, or forget hides the old artifact. A repeated identical input is
+    assigned a new stable job identity for the new memory snapshot instead of
+    mutating an adopted output. A semantic-backend failure produces explicit
+    empty context and never silently switches to a different retriever.
+15. **Cross-file semantic recall repair.** A lexical BM25 hit is now a hard
+    vector scope only when the query explicitly names a distinctive token from
+    that memory path. Generic lexical text can no longer suppress a correct
+    vector-only hit from another file. The existing entity-isolation behavior
+    remains intact.
+
+## 2026-08-24 benchmark selection
+
+The paper agent compared six public suites at pinned revisions instead of
+choosing a benchmark by popularity. The next deterministic gate should be
+[`MemoryAgentBench`](https://github.com/HUST-AI-HYZ/MemoryAgentBench/tree/fe1735de8cf8b9908e1e3d3b5612afc815698062)
+`Conflict_Resolution / factconsolidation_sh_6k`, with its Hugging Face data
+pinned to `7ea066982b140a19337e17e60d45d4076e042faf`. It is MIT-licensed,
+pure text, runs one official 6K source configuration, and uses deterministic
+substring exact match instead of an LLM judge. The adapter must run every
+`qa_pair_id` belonging to that source rather than the repository's global
+first-N query ablation, and must additionally freeze the downloaded file hash
+because the upstream loader currently requests the moving `main` revision.
+
+The follow-up order is:
+
+1. MemoryAgentBench FactConsolidation 6K for stable conflict/update regression;
+2. [MemOps](https://github.com/MemTensor/MemOps/tree/312af65e2c7b6d1b70f062ffa8b4cde32aaf6f35)
+   for operation-level remember/forget/update/reflect/trajectory diagnosis;
+3. PrefEval explicit and implicit preference tiers for preference following;
+4. LoCoMo and LongMemEval-V2 for broader community comparison;
+5. HaluMem only as a research audit because its CC BY-NC-ND data and
+   LLM-judge-heavy pipeline do not fit a commercial CI gate.
+
+This benchmark choice does not justify importing any benchmark agent runtime,
+graph database, or computer-use behavior. Only the frozen data schema and
+evaluator contract belong in OpenChronicle.
 
 ## Remaining optimization sequence
 

@@ -411,8 +411,9 @@ def search(
     top_k: int = 5,
     offset: int = 0,
     include_superseded: bool = False,
+    match_any_terms: bool = False,
 ) -> list[EntryHit]:
-    safe_query = _safe_fts_query(query)
+    safe_query = _safe_fts_or_query(query) if match_any_terms else _safe_fts_query(query)
     if not safe_query or safe_query == '""':
         return []
     clauses = ["entries MATCH ?"]

@@ -18,9 +18,15 @@ from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, canonical_digest
 from ..writer import llm as llm_mod
 from . import store
+from .memory_context import (
+    ReviewedMemorySelection,
+    prompt_rescue_query,
+    reviewed_procedure_refs_are_current,
+    select_reviewed_procedures,
+)
 from .selection import SelectionReceipt
 
-TEMPLATE_VERSION = 1
+TEMPLATE_VERSION = 2
 _OUTPUT_FIELDS = {
     "schema_version",
     "workflow",
@@ -116,22 +122,54 @@ class PromptRescueService:
         )
         template = load_prompt("prompt_rescue.md")
         provider = self.provider_summary()
-        return store.create(
-            self.conn,
-            source_kind=source_kind,
-            source_binding=source_binding,
-            rough_prompt=normalized["rough_prompt"],
-            target=normalized["target"],
-            audience=normalized["audience"],
-            constraints=normalized["constraints"],
-            desired_format=normalized["desired_format"],
-            policy_digest=privacy_policy.stored_observation_policy_digest(self.cfg.capture),
-            template_version=TEMPLATE_VERSION,
-            template_digest=canonical_digest(
+        create_kwargs = {
+            "source_kind": source_kind,
+            "source_binding": source_binding,
+            "rough_prompt": normalized["rough_prompt"],
+            "target": normalized["target"],
+            "audience": normalized["audience"],
+            "constraints": normalized["constraints"],
+            "desired_format": normalized["desired_format"],
+            "policy_digest": privacy_policy.stored_observation_policy_digest(
+                self.cfg.capture
+            ),
+            "template_version": TEMPLATE_VERSION,
+            "template_digest": canonical_digest(
                 {"schema": "prompt-rescue-template-v1", "text": template}
             ),
-            model_identity=provider["model"],
-            provider_location=provider["location"],
+            "model_identity": provider["model"],
+            "provider_location": provider["location"],
+        }
+        job, created = store.create(self.conn, **create_kwargs)
+        if created or self._current(job):
+            return job, created
+
+        # A prior artifact can become intentionally hidden when one of its
+        # reviewed memories is superseded or forgotten. Give the same explicit
+        # input a new stable identity for the current memory snapshot instead
+        # of returning an unclaimable stale job or mutating an adopted output.
+        selection = select_reviewed_procedures(
+            self.conn,
+            self.cfg,
+            query=prompt_rescue_query(
+                rough_prompt=normalized["rough_prompt"],
+                target=normalized["target"],
+                audience=normalized["audience"],
+                constraints=normalized["constraints"],
+                desired_format=normalized["desired_format"],
+            ),
+        )
+        refresh_salt = canonical_digest(
+            {
+                "schema": "prompt-rescue-memory-refresh-v1",
+                "retrieval_mode": selection.retrieval_mode,
+                "sources": [ref.to_dict() for ref in selection.refs],
+            }
+        )
+        return store.create(
+            self.conn,
+            **create_kwargs,
+            identity_salt=refresh_salt,
         )
 
     def list(self, *, limit: int = 50) -> list[store.PromptRescueJob]:
@@ -169,13 +207,38 @@ class PromptRescueService:
                     or not self._current(current)
                 ):
                     raise PromptRescueValidationError("prompt rescue input changed")
-                output = self._generate(current)
-            return store.complete(
-                self.conn,
-                job_id=claimed.id,
-                lease_token=lease_token,
-                output=output,
-            )
+                selection = select_reviewed_procedures(
+                    self.conn,
+                    self.cfg,
+                    query=prompt_rescue_query(
+                        rough_prompt=current.rough_prompt,
+                        target=current.target,
+                        audience=current.audience,
+                        constraints=current.constraints,
+                        desired_format=current.desired_format,
+                    ),
+                )
+                output = self._generate(current, selection)
+                latest = store.get(self.conn, claimed.id)
+                if (
+                    latest is None
+                    or latest.status != "leased"
+                    or latest.lease_token != lease_token
+                    or not self._current(latest)
+                    or not reviewed_procedure_refs_are_current(
+                        self.conn,
+                        self.cfg,
+                        selection.refs,
+                    )
+                ):
+                    raise PromptRescueValidationError("prompt rescue input changed")
+                return store.complete(
+                    self.conn,
+                    job_id=claimed.id,
+                    lease_token=lease_token,
+                    output=output,
+                    memory_context_refs=selection.refs,
+                )
         except llm_mod.ProviderCallCancelledError:
             store.release_claim(
                 self.conn,
@@ -246,7 +309,11 @@ class PromptRescueService:
             expected_version=expected_version,
         )
 
-    def _generate(self, job: store.PromptRescueJob) -> dict[str, Any]:
+    def _generate(
+        self,
+        job: store.PromptRescueJob,
+        selection: ReviewedMemorySelection,
+    ) -> dict[str, Any]:
         return generate_output(
             self.cfg,
             rough_prompt=job.rough_prompt,
@@ -254,11 +321,18 @@ class PromptRescueService:
             audience=job.audience,
             constraints=job.constraints,
             desired_format=job.desired_format,
+            reviewed_memory_context=selection.to_prompt_dict(),
             llm_caller=self.llm_caller,
         )
 
     def _current(self, job: store.PromptRescueJob) -> bool:
         if not _job_is_current(self.conn, job):
+            return False
+        if not reviewed_procedure_refs_are_current(
+            self.conn,
+            self.cfg,
+            job.memory_context_refs,
+        ):
             return False
         if job.source_kind != "macos_selection":
             return True
@@ -293,6 +367,7 @@ def generate_output(
     audience: str,
     constraints: tuple[str, ...],
     desired_format: str,
+    reviewed_memory_context: dict[str, object] | None = None,
     llm_caller: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
     normalized = validate_source(
@@ -309,6 +384,8 @@ def generate_output(
         "audience": normalized["audience"],
         "constraints": list(normalized["constraints"]),
         "desired_format": normalized["desired_format"],
+        "reviewed_memory_context": reviewed_memory_context
+        or {"items": []},
     }
     encoded = json.dumps(
         payload,
@@ -343,7 +420,11 @@ def _job_is_current(
         conn,
         EvidenceRef(kind="prompt_rescue", id=job.id),
     )
-    return bool(sources == [job.input_ref] and provenance_store.is_current(conn, job.input_ref))
+    expected_sources = [job.input_ref, *job.memory_context_refs]
+    return bool(
+        sources == expected_sources
+        and all(provenance_store.is_current(conn, source) for source in expected_sources)
+    )
 
 
 def validate_config(cfg: Config) -> None:

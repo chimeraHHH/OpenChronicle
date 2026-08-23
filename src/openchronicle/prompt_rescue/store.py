@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS prompt_rescue_jobs (
     audience TEXT NOT NULL DEFAULT '',
     constraints_json TEXT NOT NULL DEFAULT '[]',
     desired_format TEXT NOT NULL DEFAULT '',
+    memory_context_json TEXT NOT NULL DEFAULT '[]',
     source_digest TEXT NOT NULL,
     policy_digest TEXT NOT NULL,
     template_version INTEGER NOT NULL,
@@ -81,6 +82,7 @@ class PromptRescueJob:
     audience: str
     constraints: tuple[str, ...]
     desired_format: str
+    memory_context_refs: tuple[EvidenceRef, ...]
     source_digest: str
     policy_digest: str
     template_version: int
@@ -121,6 +123,15 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         table_sql = str(existing["sql"] if isinstance(existing, sqlite3.Row) else existing[0])
         if "source_binding_json" not in table_sql or "macos_selection" not in table_sql:
             _migrate_v1_schema(conn)
+        columns = {
+            str(row[1])
+            for row in conn.execute("PRAGMA table_info(prompt_rescue_jobs)").fetchall()
+        }
+        if "memory_context_json" not in columns:
+            conn.execute(
+                "ALTER TABLE prompt_rescue_jobs "
+                "ADD COLUMN memory_context_json TEXT NOT NULL DEFAULT '[]'"
+            )
     for statement in SCHEMA.split(";"):
         if statement.strip():
             conn.execute(statement)
@@ -201,6 +212,7 @@ def create(
     model_identity: str,
     provider_location: str,
     source_binding: dict[str, Any] | None = None,
+    identity_salt: str = "",
     now: datetime | None = None,
 ) -> tuple[PromptRescueJob, bool]:
     binding = {} if source_binding is None else source_binding
@@ -219,6 +231,12 @@ def create(
         provider_location=provider_location,
         source_binding=binding,
     )
+    if (
+        not isinstance(identity_salt, str)
+        or "\x00" in identity_salt
+        or (identity_salt and len(identity_salt) != 64)
+    ):
+        raise ValueError("prompt rescue identity salt is invalid")
     created = _aware(now or datetime.now(UTC))
     created_at = created.isoformat(timespec="microseconds")
     created_us = _instant_us(created)
@@ -231,8 +249,7 @@ def create(
         desired_format=desired_format,
         source_binding=binding,
     )
-    idempotency_key = canonical_digest(
-        {
+    identity_payload = {
             "schema": "prompt-rescue-job-v1",
             "source_digest": source_hash,
             "policy_digest": policy_digest,
@@ -241,7 +258,10 @@ def create(
             "model_identity": model_identity,
             "provider_location": provider_location,
         }
-    )
+    if identity_salt:
+        identity_payload["schema"] = "prompt-rescue-job-v2"
+        identity_payload["identity_salt"] = identity_salt
+    idempotency_key = canonical_digest(identity_payload)
     job_id = f"prompt-rescue-{idempotency_key[:32]}"
     projection = _projection_digest(
         job_id=job_id,
@@ -254,6 +274,7 @@ def create(
         template_digest=template_digest,
         model_identity=model_identity,
         provider_location=provider_location,
+        memory_context_refs=(),
         output_digest="",
         output_edited=False,
         error_code="",
@@ -306,7 +327,7 @@ def create(
         if job is None:
             raise RuntimeError("prompt rescue insert did not produce a current row")
         was_created = conn.total_changes > before
-        expected_sources = [job.input_ref]
+        expected_sources = [job.input_ref, *job.memory_context_refs]
         subject = EvidenceRef(kind="prompt_rescue", id=job.id)
         if was_created:
             provenance_store.replace_sources(
@@ -314,8 +335,6 @@ def create(
                 subject=subject,
                 sources=expected_sources,
             )
-        elif provenance_store.direct_sources_checked(conn, subject) != expected_sources:
-            raise RuntimeError("prompt rescue replay provenance differs")
     return job, was_created
 
 
@@ -430,7 +449,9 @@ def complete(
     job_id: str,
     lease_token: str,
     output: dict[str, Any],
+    memory_context_refs: tuple[EvidenceRef, ...] = (),
 ) -> PromptRescueJob:
+    _validate_memory_context_refs(memory_context_refs)
     return _finish(
         conn,
         job_id=job_id,
@@ -438,6 +459,7 @@ def complete(
         status="ready",
         output=output,
         error_code="",
+        memory_context_refs=memory_context_refs,
     )
 
 
@@ -457,6 +479,7 @@ def fail(
         status="failed",
         output=None,
         error_code=error_code,
+        memory_context_refs=(),
     )
 
 
@@ -475,6 +498,7 @@ def retry(
         output=None,
         output_edited=False,
         error_code="",
+        memory_context_refs=(),
     )
 
 
@@ -495,6 +519,7 @@ def release_claim(
             output=None,
             output_edited=False,
             error_code="",
+            memory_context_refs=(),
             lease_token=None,
             lease_expires_at=None,
         )
@@ -516,6 +541,7 @@ def edit_output(
         output=output,
         output_edited=True,
         error_code="",
+        memory_context_refs=None,
     )
 
 
@@ -563,6 +589,7 @@ def _finish(
     status: str,
     output: dict[str, Any] | None,
     error_code: str,
+    memory_context_refs: tuple[EvidenceRef, ...] | None,
 ) -> PromptRescueJob:
     with _atomic(conn, "prompt_rescue_finish"):
         current = get(conn, job_id)
@@ -575,6 +602,11 @@ def _finish(
             output=output,
             output_edited=False,
             error_code=error_code,
+            memory_context_refs=(
+                current.memory_context_refs
+                if memory_context_refs is None
+                else memory_context_refs
+            ),
             lease_token=None,
             lease_expires_at=None,
         )
@@ -590,6 +622,7 @@ def _transition(
     output: dict[str, Any] | None,
     output_edited: bool,
     error_code: str,
+    memory_context_refs: tuple[EvidenceRef, ...] | None,
 ) -> PromptRescueJob:
     with _atomic(conn, "prompt_rescue_transition"):
         current = get(conn, job_id)
@@ -602,6 +635,11 @@ def _transition(
             output=output,
             output_edited=output_edited,
             error_code=error_code,
+            memory_context_refs=(
+                current.memory_context_refs
+                if memory_context_refs is None
+                else memory_context_refs
+            ),
             lease_token=None,
             lease_expires_at=None,
         )
@@ -615,9 +653,17 @@ def _update(
     output: dict[str, Any] | None,
     output_edited: bool,
     error_code: str,
+    memory_context_refs: tuple[EvidenceRef, ...],
     lease_token: str | None,
     lease_expires_at: str | None,
 ) -> PromptRescueJob:
+    _validate_memory_context_refs(memory_context_refs)
+    memory_context_json = json.dumps(
+        [ref.to_dict() for ref in memory_context_refs],
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     output_json = (
         json.dumps(output, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         if output is not None
@@ -632,6 +678,7 @@ def _update(
         output_digest=output_hash,
         output_edited=output_edited,
         error_code=error_code,
+        memory_context_refs=memory_context_refs,
         attempt_count=current.attempt_count,
         lease_token=lease_token,
         lease_expires_at=lease_expires_at,
@@ -641,13 +688,14 @@ def _update(
     result = conn.execute(
         """
         UPDATE prompt_rescue_jobs
-           SET status=?, output_json=?, output_digest=?, output_edited=?,
+           SET status=?, memory_context_json=?, output_json=?, output_digest=?, output_edited=?,
                error_code=?, lease_token=?, lease_expires_at=?, updated_at=?,
                version=?, projection_digest=?
          WHERE id=? AND version=?
         """,
         (
             status,
+            memory_context_json,
             output_json,
             output_hash,
             int(output_edited),
@@ -666,6 +714,11 @@ def _update(
     updated = get(conn, current.id)
     if updated is None:
         raise RuntimeError("updated prompt rescue projection is invalid")
+    provenance_store.replace_sources(
+        conn,
+        subject=EvidenceRef(kind="prompt_rescue", id=updated.id),
+        sources=[updated.input_ref, *updated.memory_context_refs],
+    )
     return updated
 
 
@@ -673,6 +726,7 @@ def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
     try:
         constraints_value = json.loads(row["constraints_json"])
         binding_value = json.loads(row["source_binding_json"])
+        memory_context_value = json.loads(row["memory_context_json"])
         output_value = json.loads(row["output_json"]) if row["output_json"] else None
         created = _aware(datetime.fromisoformat(row["created_at"]))
         lease_expires = (
@@ -683,6 +737,8 @@ def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
         if (
             not isinstance(constraints_value, list)
             or not all(isinstance(value, str) for value in constraints_value)
+            or not isinstance(memory_context_value, list)
+            or not all(isinstance(value, dict) for value in memory_context_value)
             or not _valid_source_binding(row["source_kind"], binding_value)
             or (output_value is not None and not isinstance(output_value, dict))
             or row["status"] not in VALID_STATUSES
@@ -707,6 +763,12 @@ def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
         ):
             return None
         constraints = tuple(constraints_value)
+        memory_context_refs = tuple(
+            EvidenceRef.from_dict(value) for value in memory_context_value
+        )
+        _validate_memory_context_refs(memory_context_refs)
+        if memory_context_refs and row["status"] != "ready":
+            return None
         expected_source = source_digest(
             source_kind=row["source_kind"],
             rough_prompt=row["rough_prompt"],
@@ -729,6 +791,7 @@ def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
             audience=row["audience"],
             constraints=constraints,
             desired_format=row["desired_format"],
+            memory_context_refs=memory_context_refs,
             source_digest=row["source_digest"],
             policy_digest=row["policy_digest"],
             template_version=row["template_version"],
@@ -753,6 +816,7 @@ def _to_job(row: sqlite3.Row | tuple) -> PromptRescueJob | None:
             output_digest=job.output_digest,
             output_edited=job.output_edited,
             error_code=job.error_code,
+            memory_context_refs=job.memory_context_refs,
             attempt_count=job.attempt_count,
             lease_token=job.lease_token,
             lease_expires_at=job.lease_expires_at,
@@ -771,6 +835,7 @@ def _projection_for_job(
     output_digest: str,
     output_edited: bool,
     error_code: str,
+    memory_context_refs: tuple[EvidenceRef, ...] | None = None,
     attempt_count: int,
     lease_token: str | None,
     lease_expires_at: str | None,
@@ -788,6 +853,11 @@ def _projection_for_job(
         template_digest=job.template_digest,
         model_identity=job.model_identity,
         provider_location=job.provider_location,
+        memory_context_refs=(
+            job.memory_context_refs
+            if memory_context_refs is None
+            else memory_context_refs
+        ),
         output_digest=output_digest,
         output_edited=output_edited,
         error_code=error_code,
@@ -813,6 +883,7 @@ def _projection_digest(
     template_digest: str,
     model_identity: str,
     provider_location: str,
+    memory_context_refs: tuple[EvidenceRef, ...],
     output_digest: str,
     output_edited: bool,
     error_code: str,
@@ -824,8 +895,7 @@ def _projection_digest(
     updated_at: str,
     version: int,
 ) -> str:
-    return canonical_digest(
-        {
+    payload: dict[str, Any] = {
             "schema": "prompt-rescue-projection-v1",
             "id": job_id,
             "idempotency_key": idempotency_key,
@@ -848,7 +918,30 @@ def _projection_digest(
             "updated_at": updated_at,
             "version": version,
         }
-    )
+    if memory_context_refs:
+        payload["schema"] = "prompt-rescue-projection-v2"
+        payload["memory_context_refs"] = [ref.to_dict() for ref in memory_context_refs]
+    return canonical_digest(payload)
+
+
+def _validate_memory_context_refs(refs: tuple[EvidenceRef, ...]) -> None:
+    if not isinstance(refs, tuple):
+        raise ValueError("prompt rescue memory context is invalid")
+    identities = {(ref.kind, ref.path, ref.id) for ref in refs if isinstance(ref, EvidenceRef)}
+    if (
+        len(refs) > 3
+        or len(identities) != len(refs)
+        or any(
+            not isinstance(ref, EvidenceRef)
+            or ref.kind != "memory_entry"
+            or not ref.path.startswith("procedure-")
+            or not ref.path.endswith(".md")
+            or not ref.timestamp
+            or not ref.content_hash
+            for ref in refs
+        )
+    ):
+        raise ValueError("prompt rescue memory context is invalid")
 
 
 def _validate_input(**values: Any) -> None:

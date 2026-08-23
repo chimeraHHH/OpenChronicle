@@ -13,7 +13,10 @@ from openchronicle.prompt_rescue.selection import SelectionReceipt
 from openchronicle.prompt_rescue.service import PromptRescueService
 from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef
-from openchronicle.store import fts
+from openchronicle.store import entries as entries_store
+from openchronicle.store import files as files_store
+from openchronicle.store import fts, semantic
+from openchronicle.store.facts import make_fact_metadata
 
 
 class _Message:
@@ -75,6 +78,39 @@ def _selection(**updates) -> SelectionReceipt:
     return SelectionReceipt(**values)
 
 
+def _publish_procedure(
+    conn,
+    *,
+    path: str = "procedure-release-note.md",
+    entry_id: str = "reviewed-release-note",
+    content: str = (
+        "Release note procedure: state the user-visible change, then include "
+        "concise migration guidance. This is text-only and never executes actions."
+    ),
+) -> str:
+    entries_store.create_file(
+        conn,
+        name=path,
+        description="Reviewed text-only procedure",
+        tags=["procedure", "text-only"],
+    )
+    entries_store.append_entry_once(
+        conn,
+        name=path,
+        content=content,
+        tags=["procedure", "checklist", "text-only"],
+        entry_id=entry_id,
+        origin=files_store.MANUAL_ENTRY_ORIGIN,
+        fact_metadata=make_fact_metadata(
+            subject_key=f"procedure.{entry_id}",
+            # Adopted artifacts are screened and reviewed before publication,
+            # but intentionally retain the inferred assertion label.
+            assertion_kind="inferred",
+        ),
+    )
+    return entry_id
+
+
 def test_prompt_rescue_queues_idempotently_and_prepares_no_action_artifact(
     ac_root: Path,
 ) -> None:
@@ -119,6 +155,7 @@ def test_prompt_rescue_queues_idempotently_and_prepares_no_action_artifact(
         payload = json.loads(calls[0]["messages"][1]["content"])
         assert payload["rough_prompt"] == rough
         assert payload["constraints"] == ["Use only supplied facts"]
+        assert payload["reviewed_memory_context"] == {"items": []}
         sources = provenance_store.direct_sources_checked(
             conn,
             EvidenceRef(kind="prompt_rescue", id=ready.id),
@@ -126,6 +163,258 @@ def test_prompt_rescue_queues_idempotently_and_prepares_no_action_artifact(
         assert sources == [ready.input_ref]
         assert provenance_store.is_current(conn, ready.input_ref)
         assert service.list() == [ready]
+
+
+def test_prompt_rescue_applies_reviewed_procedure_and_binds_exact_provenance(
+    ac_root: Path,
+) -> None:
+    cfg = _cfg()
+    calls: list[dict[str, Any]] = []
+
+    def fake_llm(_cfg, _stage: str, **kwargs):
+        calls.append(kwargs)
+        return _Response(_output())
+
+    with fts.cursor() as conn:
+        entry_id = _publish_procedure(conn)
+        entries_store.create_file(
+            conn,
+            name="procedure-interview.md",
+            description="Unrelated reviewed procedure",
+            tags=["procedure", "text-only"],
+        )
+        entries_store.append_entry_once(
+            conn,
+            name="procedure-interview.md",
+            content="Ask the candidate one behavioral question at a time.",
+            tags=["procedure", "text-only"],
+            entry_id="reviewed-interview",
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+            fact_metadata=make_fact_metadata(
+                subject_key="procedure.interview",
+                assertion_kind="user_asserted",
+            ),
+        )
+        service = PromptRescueService(conn, cfg, llm_caller=fake_llm)
+        queued, _created = service.queue(rough_prompt="draft a release note")
+
+        ready = service.process_next()
+
+        assert ready is not None and ready.status == "ready"
+        context = json.loads(calls[0]["messages"][1]["content"])[
+            "reviewed_memory_context"
+        ]
+        assert [item["memory_id"] for item in context["items"]] == [entry_id]
+        assert "migration guidance" in context["items"][0]["content"]
+        assert "assertion_kind" not in context["items"][0]
+        assert len(ready.memory_context_refs) == 1
+        memory_ref = ready.memory_context_refs[0]
+        assert memory_ref.id == entry_id
+        assert provenance_store.direct_sources_checked(
+            conn,
+            EvidenceRef(kind="prompt_rescue", id=ready.id),
+        ) == [queued.input_ref, memory_ref]
+        assert service.get(ready.id) == ready
+        replay, replay_created = service.queue(rough_prompt="draft a release note")
+        assert replay_created is False
+        assert replay == ready
+
+
+def test_prompt_rescue_memory_projection_and_identity_duplicates_fail_closed(
+    ac_root: Path,
+) -> None:
+    cfg = _cfg()
+    with fts.cursor() as conn:
+        _publish_procedure(conn)
+        service = PromptRescueService(
+            conn,
+            cfg,
+            llm_caller=lambda *_a, **_k: _Response(_output()),
+        )
+        queued, _created = service.queue(rough_prompt="draft a release note")
+        ready = service.process_next()
+        assert ready is not None and ready.memory_context_refs
+
+        conn.execute(
+            "UPDATE prompt_rescue_jobs SET memory_context_json='[]' WHERE id=?",
+            (ready.id,),
+        )
+        assert store.get(conn, ready.id) is None
+
+    with fts.cursor() as conn:
+        service = PromptRescueService(conn, cfg)
+        queued, _created = service.queue(rough_prompt="duplicate context fixture")
+        leased = store.claim_next(
+            conn,
+            lease_token="duplicate-context",
+            lease_seconds=30,
+        )
+        assert leased is not None
+        first = EvidenceRef(
+            kind="memory_entry",
+            id="same-entry",
+            path="procedure-same.md",
+            timestamp="2026-08-24T00:00:00+00:00",
+            content_hash="a" * 64,
+        )
+        second = EvidenceRef(
+            kind="memory_entry",
+            id="same-entry",
+            path="procedure-same.md",
+            timestamp="2026-08-24T00:01:00+00:00",
+            content_hash="b" * 64,
+        )
+        with pytest.raises(ValueError, match="memory context"):
+            store.complete(
+                conn,
+                job_id=queued.id,
+                lease_token="duplicate-context",
+                output=_output(),
+                memory_context_refs=(first, second),
+            )
+
+
+def test_prompt_rescue_completion_rolls_back_if_provenance_write_fails(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _cfg()
+    with fts.cursor() as conn:
+        service = PromptRescueService(conn, cfg)
+        queued, _created = service.queue(rough_prompt="atomic completion fixture")
+        leased = store.claim_next(
+            conn,
+            lease_token="atomic-completion",
+            lease_seconds=30,
+        )
+        assert leased is not None
+
+        def fail_provenance(*_args, **_kwargs):
+            raise RuntimeError("fixture provenance failure")
+
+        monkeypatch.setattr(provenance_store, "replace_sources", fail_provenance)
+        with pytest.raises(RuntimeError, match="provenance failure"):
+            store.complete(
+                conn,
+                job_id=queued.id,
+                lease_token="atomic-completion",
+                output=_output(),
+            )
+
+        current = store.get(conn, queued.id)
+        assert current is not None
+        assert current.status == "leased"
+        assert current.output is None
+
+
+def test_prompt_rescue_memory_change_during_generation_fails_and_can_refresh(
+    ac_root: Path,
+) -> None:
+    cfg = _cfg()
+    with fts.cursor() as conn:
+        old_id = _publish_procedure(conn)
+        service: PromptRescueService
+
+        def changing_llm(_cfg, _stage: str, **_kwargs):
+            entries_store.supersede_entry(
+                conn,
+                name="procedure-release-note.md",
+                old_entry_id=old_id,
+                new_entry_id="reviewed-release-note-v2",
+                new_content=(
+                    "Release note procedure: lead with migration guidance, then state "
+                    "the user-visible change. This remains text-only."
+                ),
+                reason="User reviewed a revised ordering.",
+                fact_metadata=make_fact_metadata(
+                    subject_key="procedure.reviewed-release-note",
+                    assertion_kind="user_asserted",
+                ),
+            )
+            return _Response(_output())
+
+        service = PromptRescueService(conn, cfg, llm_caller=changing_llm)
+        queued, _created = service.queue(rough_prompt="draft a release note")
+        failed = service.process_next()
+
+        assert failed is not None and failed.status == "failed"
+        assert failed.error_code == "input_changed"
+        assert failed.memory_context_refs == ()
+        assert provenance_store.direct_sources_checked(
+            conn,
+            EvidenceRef(kind="prompt_rescue", id=failed.id),
+        ) == [queued.input_ref]
+
+
+def test_ready_prompt_rescue_hides_after_supersede_and_same_input_gets_new_job(
+    ac_root: Path,
+) -> None:
+    cfg = _cfg()
+    with fts.cursor() as conn:
+        old_id = _publish_procedure(conn)
+        service = PromptRescueService(
+            conn,
+            cfg,
+            llm_caller=lambda *_a, **_k: _Response(_output()),
+        )
+        original, _created = service.queue(rough_prompt="draft a release note")
+        ready = service.process_next()
+        assert ready is not None and ready.status == "ready"
+
+        entries_store.supersede_entry(
+            conn,
+            name="procedure-release-note.md",
+            old_entry_id=old_id,
+            new_entry_id="reviewed-release-note-v2",
+            new_content="Release note procedure: state migration guidance first.",
+            reason="Reviewed update.",
+            fact_metadata=make_fact_metadata(
+                subject_key="procedure.reviewed-release-note",
+                assertion_kind="user_asserted",
+            ),
+        )
+
+        assert service.get(ready.id) is None
+        refreshed, created = service.queue(rough_prompt="draft a release note")
+        replay, replay_created = service.queue(rough_prompt="draft a release note")
+        assert created is True
+        assert refreshed.id != original.id
+        assert refreshed.status == "queued"
+        assert replay_created is False
+        assert replay == refreshed
+
+
+def test_semantic_unavailable_is_explicit_empty_context_without_bm25_fallback(
+    ac_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = _cfg()
+    cfg.search.semantic_enabled = True
+
+    def unavailable(*_args, **_kwargs):
+        raise semantic.SemanticIndexUnavailable("fixture unavailable")
+
+    monkeypatch.setattr(semantic, "configured_hybrid_search", unavailable)
+    calls: list[dict[str, Any]] = []
+
+    def fake_llm(_cfg, _stage: str, **kwargs):
+        calls.append(kwargs)
+        return _Response(_output())
+
+    with fts.cursor() as conn:
+        _publish_procedure(conn)
+        service = PromptRescueService(conn, cfg, llm_caller=fake_llm)
+        queued, _created = service.queue(rough_prompt="draft a release note")
+        ready = service.process_next()
+
+        assert ready is not None and ready.status == "ready"
+        payload = json.loads(calls[0]["messages"][1]["content"])
+        assert payload["reviewed_memory_context"] == {"items": []}
+        assert ready.memory_context_refs == ()
+        assert provenance_store.direct_sources_checked(
+            conn,
+            EvidenceRef(kind="prompt_rescue", id=ready.id),
+        ) == [queued.input_ref]
 
 
 def test_prompt_rescue_selection_binding_is_durable_idempotent_and_policy_current(
