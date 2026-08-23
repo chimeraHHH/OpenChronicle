@@ -11,9 +11,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 16 adds bounded, current published-memory
-// summaries; résumé rescue still has no upload, application, submission, or send capabilities.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 16 as const;
+// WebView result projection. Version 17 adds typed fact-slot, assertion-basis,
+// and valid-time metadata to review and published-memory snapshots.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 17 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -665,6 +665,8 @@ export type CandidateStatus =
   | "accepted"
   | "rejected";
 
+export type AssertionKind = "user_asserted" | "observed" | "inferred";
+
 export interface EvidenceRef {
   kind: string;
   id: string;
@@ -685,6 +687,10 @@ export interface CandidateSummary {
   confidence?: number | null;
   evidence_count?: number;
   conflict_key?: string;
+  subject_key?: string;
+  assertion_kind?: AssertionKind;
+  valid_from?: string;
+  valid_to?: string;
 }
 
 export interface Candidate {
@@ -700,6 +706,10 @@ export interface Candidate {
   updated_at: string;
   evidence_count?: number;
   conflict_key?: string;
+  subject_key?: string;
+  assertion_kind?: AssertionKind;
+  valid_from?: string;
+  valid_to?: string;
   tags: string[];
   confidence?: number | null;
   applied_entry_id?: string | null;
@@ -718,6 +728,11 @@ export interface MemorySummary {
   tags: string[];
   origin: string;
   source_count: number;
+  subject_key?: string;
+  assertion_kind?: AssertionKind;
+  valid_from?: string;
+  valid_to?: string;
+  state: "current";
 }
 
 export interface ForgetPreview {

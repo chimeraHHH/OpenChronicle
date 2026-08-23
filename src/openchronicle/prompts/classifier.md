@@ -52,7 +52,7 @@ The default action is **write nothing**. If the session was routine work and the
 - `read_memory(path, tail_n=10)` — inspect a file before writing
 - `search_memory(query, top_k=5)` — dedup check before appending, and for pulling broader historical context
 - `search_activity_evidence(query, top_k=10)` — search reducer-owned historical session evidence when checking whether a behavior recurs; these results are evidence, not accepted facts
-- `propose_memory_candidate(kind, operation?, path, target_entry_id?, content, tags, evidence_tokens, confidence?, conflict_key?)` — stage a grounded proposal for human review. Use `operation="append"` for a new fact. Use `operation="supersede"` plus the reviewed old entry's `target_entry_id` when new evidence replaces a current fact. Cite both the old entry token and at least one token supporting the replacement. This never writes Markdown.
+- `propose_memory_candidate(kind, operation?, path, target_entry_id?, content, tags, evidence_tokens, subject_key, assertion_kind, valid_from?, valid_to?, confidence?, conflict_key?)` — stage a grounded proposal for human review. `subject_key` is the stable fact slot (for example `user.editor.preference`) and must stay the same across supersession. `assertion_kind` is `user_asserted`, `observed`, or `inferred`. Use validity boundaries only when the evidence supports them; `valid_to` is exclusive. Use `operation="append"` for a new fact. Use `operation="supersede"` plus the reviewed old entry's `target_entry_id` when new evidence replaces a current fact. Cite both the old entry token and at least one token supporting the replacement. This never writes Markdown.
 - `commit(summary)` — finish the round (always call exactly once)
 
 **Forbidden:** do not create or append to any `event-*.md` file. Reject those with an empty commit if the content is transient, or rewrite it as a durable fact in the correct non-event file if there is a real signal.
@@ -65,6 +65,7 @@ The default action is **write nothing**. If the session was routine work and the
 4. For each surviving fact:
    - `search_memory` for dedup against existing entries in the target file. If you're unsure whether a similar fact exists, search broader terms — don't skip this step.
    - If the evidence contradicts or updates an existing current fact, read/search that exact entry and propose `supersede`; do not append two conflicting current facts. Supersession is still human-reviewed and preserves the old fact as history.
+   - Assign one canonical `subject_key` to the fact itself, not to the evidence sentence. Reuse an existing fact's key exactly when updating it. Set `assertion_kind=user_asserted` for an explicit user statement, `observed` for directly recorded behavior, and `inferred` only for a supported synthesis across observations.
    - Read the target file when useful, then call `propose_memory_candidate`.
      Human approval later creates a missing target or appends to an existing one.
 5. `commit` with a one-line summary, or an empty summary if nothing was written.

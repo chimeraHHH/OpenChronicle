@@ -103,6 +103,13 @@ been claimed.
    model's explicitly cited fact support and every input exposed before the
    proposal. Review stays focused without weakening privacy re-evaluation or
    transitive forget.
+7. **Typed current facts.** New classifier proposals bind a canonical
+   `subject_key`, `assertion_kind`, and optional valid-time interval. The
+   metadata is stored in the canonical Markdown provenance frame, survives
+   compaction, participates in candidate tamper/replay digests, and is projected
+   into review and Published Memory. Global subject-slot conflicts prevent the
+   same present-tense fact from silently diverging across files; supersede keeps
+   one slot and current recall excludes scheduled or expired values.
 
 ## Remaining optimization sequence
 
@@ -113,18 +120,18 @@ support search, current/history switching, source opening, edit-as-supersede,
 export, and explicit forget. This converts the implemented memory backend into
 a visible user contract.
 
-### P0: typed current-fact projection
+### P0: typed fact history and state transitions
 
-Add optional machine-readable fields to reviewed facts:
+The current-value slice is implemented for new reviewed facts:
 
 - `subject_key` or canonical fact slot;
 - `assertion_kind`: user-asserted, observed, or inferred;
 - `recorded_at` and `valid_from`/`valid_to`;
-- current, superseded, disputed, or retracted state.
+- current versus superseded and valid-time state.
 
-These fields should be a rebuildable projection of reviewed Markdown metadata,
-not a second authority. Start with explicit preferences, project decisions,
-commitments, and tool choices; do not attempt a universal ontology.
+Remaining work is a user-facing history view plus explicit disputed/retracted
+states and `as_of` queries. Continue treating Markdown metadata as authority;
+do not attempt a universal ontology.
 
 ### P0: complete longitudinal evaluation
 

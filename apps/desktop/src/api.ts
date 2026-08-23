@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AssertionKind,
   Candidate,
   CandidateStatus,
   DailyWrap,
@@ -274,6 +275,14 @@ function candidateStatus(value: unknown): CandidateStatus {
   return status;
 }
 
+const assertionKinds = new Set(["user_asserted", "observed", "inferred"] as const);
+
+function optionalAssertionKind(value: unknown): AssertionKind | undefined {
+  const result = optionalString(value, "assertion kind");
+  if (!result) return undefined;
+  return allowedString(result, assertionKinds, "assertion kind");
+}
+
 function reference(value: unknown): EvidenceRef {
   const raw = objectValue(value, "evidence reference");
   const path = optionalString(raw.path, "evidence path");
@@ -301,6 +310,10 @@ function sameReference(left: EvidenceRef, right: EvidenceRef): boolean {
 function candidatePayload(value: unknown, evidenceValue: unknown = []): Candidate {
   const raw = objectValue(value, "candidate payload");
   const conflictKey = optionalString(raw.conflict_key, "candidate conflict key");
+  const subjectKey = optionalString(raw.subject_key, "candidate subject key");
+  const assertionKind = optionalAssertionKind(raw.assertion_kind);
+  const validFrom = optionalString(raw.valid_from, "candidate valid from");
+  const validTo = optionalString(raw.valid_to, "candidate valid to");
   const evidence = arrayValue(evidenceValue, "candidate evidence").map(reference);
   const claimEvidence =
     raw.claim_evidence === undefined
@@ -322,6 +335,10 @@ function candidatePayload(value: unknown, evidenceValue: unknown = []): Candidat
     tags: stringArray(raw.tags, "candidate tags"),
     ...(confidence === undefined ? {} : { confidence }),
     ...(conflictKey ? { conflict_key: conflictKey } : {}),
+    ...(subjectKey ? { subject_key: subjectKey } : {}),
+    ...(assertionKind ? { assertion_kind: assertionKind } : {}),
+    ...(validFrom ? { valid_from: validFrom } : {}),
+    ...(validTo ? { valid_to: validTo } : {}),
     ...(appliedEntryId === undefined ? {} : { applied_entry_id: appliedEntryId }),
     ...(reviewedAt === undefined ? {} : { reviewed_at: reviewedAt }),
     review_reason: optionalString(raw.review_reason, "candidate review reason") ?? "",
@@ -410,6 +427,13 @@ function timelineItem(value: unknown): TimelineItem {
 
 function memorySummary(value: unknown): MemorySummary {
   const raw = objectValue(value, "published memory summary");
+  const subjectKey = optionalString(raw.subject_key, "published memory subject key");
+  const assertionKind = optionalAssertionKind(raw.assertion_kind);
+  const validFrom = optionalString(raw.valid_from, "published memory valid from");
+  const validTo = optionalString(raw.valid_to, "published memory valid to");
+  if (stringValue(raw.state, "published memory state") !== "current") {
+    return protocolError("published memory state");
+  }
   return {
     id: stringValue(raw.id, "published memory id"),
     path: stringValue(raw.path, "published memory path"),
@@ -418,6 +442,11 @@ function memorySummary(value: unknown): MemorySummary {
     tags: stringArray(raw.tags, "published memory tags"),
     origin: stringValue(raw.origin, "published memory origin"),
     source_count: numberValue(raw.source_count, "published memory source count"),
+    ...(subjectKey ? { subject_key: subjectKey } : {}),
+    ...(assertionKind ? { assertion_kind: assertionKind } : {}),
+    ...(validFrom ? { valid_from: validFrom } : {}),
+    ...(validTo ? { valid_to: validTo } : {}),
+    state: "current",
   };
 }
 
@@ -2671,6 +2700,10 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
   const candidates = arrayValue(raw.candidates, "candidate summaries").map((value) => {
     const item = objectValue(value, "candidate summary");
     const confidence = item.confidence === null ? null : item.confidence === undefined ? undefined : numberValue(item.confidence, "candidate confidence");
+    const subjectKey = optionalString(item.subject_key, "candidate summary subject key");
+    const assertionKind = optionalAssertionKind(item.assertion_kind);
+    const validFrom = optionalString(item.valid_from, "candidate summary valid from");
+    const validTo = optionalString(item.valid_to, "candidate summary valid to");
     return {
       id: stringValue(item.id, "candidate summary id"),
       status: candidateStatus(item.status),
@@ -2681,6 +2714,10 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
       updated_at: stringValue(item.updated_at, "candidate summary updated time"),
       tags: stringArray(item.tags, "candidate summary tags"),
       ...(confidence === undefined ? {} : { confidence }),
+      ...(subjectKey ? { subject_key: subjectKey } : {}),
+      ...(assertionKind ? { assertion_kind: assertionKind } : {}),
+      ...(validFrom ? { valid_from: validFrom } : {}),
+      ...(validTo ? { valid_to: validTo } : {}),
     };
   });
   const dailyWraps = arrayValue(dailyWrap.wraps, "Daily Wrap summaries").map((value) => {

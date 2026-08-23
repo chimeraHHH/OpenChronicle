@@ -49,8 +49,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks published-memory snapshots as bridge protocol v16", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(16);
+  it("tracks typed current-fact snapshots as bridge protocol v17", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(17);
   });
 
   it("requests a bounded snapshot and maps only canonical backend fields", async () => {
@@ -75,6 +75,9 @@ describe("desktop bridge adapters", () => {
       id: "memory-entry-1",
       path: "user-preferences.md",
       source_count: 2,
+      subject_key: "user.communication.report-style",
+      assertion_kind: "user_asserted",
+      state: "current",
     });
     expect(result.review_counts).toEqual({ pending: 1, conflict: 0, applying: 0, accepted: 0, rejected: 0 });
     expect(result.timeline[0]).toMatchObject({
@@ -929,6 +932,11 @@ describe("desktop bridge adapters", () => {
     expect(result.evidence).toEqual(detail.evidence);
     expect(result.evidence_count).toBe(1);
     expect(result.claim_evidence).toHaveLength(1);
+    expect(result).toMatchObject({
+      subject_key: "project-alpha-decision",
+      assertion_kind: "user_asserted",
+      valid_from: "2026-08-08T08:00:00+08:00",
+    });
   });
 
   it("unwraps CAS mutation responses and sends one request object", async () => {

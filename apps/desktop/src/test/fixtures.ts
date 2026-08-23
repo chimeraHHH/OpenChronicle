@@ -42,6 +42,9 @@ export function candidateSummary(
     updated_at: "2026-08-08T08:00:00+08:00",
     evidence_count: 1,
     conflict_key: "project-alpha-decision",
+    subject_key: "project-alpha-decision",
+    assertion_kind: "user_asserted",
+    valid_from: "2026-08-08T08:00:00+08:00",
     ...overrides,
   };
 }
@@ -60,6 +63,10 @@ export function candidateDetail(overrides: Partial<Candidate> = {}): Candidate {
     updated_at: summary.updated_at,
     evidence_count: 1,
     ...(summary.conflict_key ? { conflict_key: summary.conflict_key } : {}),
+    ...(summary.subject_key ? { subject_key: summary.subject_key } : {}),
+    ...(summary.assertion_kind ? { assertion_kind: summary.assertion_kind } : {}),
+    ...(summary.valid_from ? { valid_from: summary.valid_from } : {}),
+    ...(summary.valid_to ? { valid_to: summary.valid_to } : {}),
     tags: ["architecture"],
     confidence: 0.94,
     applied_entry_id: null,
@@ -95,6 +102,10 @@ export function memorySummary(overrides: Partial<MemorySummary> = {}): MemorySum
     tags: ["preference", "local-first"],
     origin: "derived-v1",
     source_count: 2,
+    subject_key: "user.communication.report-style",
+    assertion_kind: "user_asserted",
+    valid_from: "2026-08-08T08:00:00+08:00",
+    state: "current",
     ...overrides,
   };
 }
@@ -880,6 +891,10 @@ export function bridgeSnapshot(value: DesktopSnapshot = snapshot()) {
       content_preview: item.content_preview,
       tags: item.tags ?? [],
       confidence: item.confidence ?? null,
+      subject_key: item.subject_key ?? "",
+      assertion_kind: item.assertion_kind ?? "",
+      valid_from: item.valid_from ?? "",
+      valid_to: item.valid_to ?? "",
       updated_at: item.updated_at,
     })),
     daily_wrap: {

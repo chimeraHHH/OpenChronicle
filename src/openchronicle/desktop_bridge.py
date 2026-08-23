@@ -44,7 +44,7 @@ from .store import fts
 from .suggestions import store as suggestion_store
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 16
+PROTOCOL_VERSION = 17
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -1158,6 +1158,10 @@ def _candidate_payload(candidate) -> dict[str, Any]:
         "tags": [str(tag)[:100] for tag in candidate.tags[:100]],
         "confidence": candidate.confidence,
         "conflict_key": str(candidate.conflict_key)[:500],
+        "subject_key": str(candidate.subject_key)[:200],
+        "assertion_kind": str(candidate.assertion_kind)[:50],
+        "valid_from": str(candidate.valid_from)[:100],
+        "valid_to": str(candidate.valid_to)[:100],
         "status": str(candidate.status)[:50],
         "version": int(candidate.version),
         "applied_entry_id": (

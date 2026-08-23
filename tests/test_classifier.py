@@ -326,6 +326,8 @@ def test_failed_candidate_proposal_does_not_consume_idempotency_slot(
             evidence_tokens=[token],
             confidence=0.9,
             conflict_key="",
+            subject_key="project.migration.status",
+            assertion_kind="observed",
             soft_limit_tokens=16_000,
             state=state,
         )
@@ -338,6 +340,8 @@ def test_failed_candidate_proposal_does_not_consume_idempotency_slot(
             evidence_tokens=[token],
             confidence=0.9,
             conflict_key="",
+            subject_key="project.migration.status",
+            assertion_kind="observed",
             soft_limit_tokens=16_000,
             state=state,
         )
@@ -405,6 +409,8 @@ def test_classifier_supersede_requires_seen_target_and_replacement_evidence(
             evidence_tokens=[signal_token],
             confidence=0.95,
             conflict_key="tool-storage-preference",
+            subject_key="tool-storage-preference",
+            assertion_kind="user_asserted",
             soft_limit_tokens=16_000,
             state=state,
         )
@@ -421,6 +427,8 @@ def test_classifier_supersede_requires_seen_target_and_replacement_evidence(
             evidence_tokens=[target_token],
             confidence=0.95,
             conflict_key="tool-storage-preference",
+            subject_key="tool-storage-preference",
+            assertion_kind="user_asserted",
             soft_limit_tokens=16_000,
             state=state,
         )
@@ -437,6 +445,8 @@ def test_classifier_supersede_requires_seen_target_and_replacement_evidence(
             evidence_tokens=[target_token, signal_token],
             confidence=0.95,
             conflict_key="tool-storage-preference",
+            subject_key="tool-storage-preference",
+            assertion_kind="user_asserted",
             soft_limit_tokens=16_000,
             state=state,
         )
@@ -568,6 +578,8 @@ def test_candidate_separates_claim_support_from_full_input_closure(
             evidence_tokens=[signal_token],
             confidence=0.9,
             conflict_key="project.database",
+            subject_key="project.database",
+            assertion_kind="observed",
             soft_limit_tokens=16_000,
             state=state,
         )

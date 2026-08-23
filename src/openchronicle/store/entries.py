@@ -20,6 +20,7 @@ from ..provenance.models import EvidenceRef, content_digest
 from ..testing import failpoints
 from . import files as files_mod
 from . import fts
+from .facts import FactMetadata
 
 logger = get("openchronicle.store")
 
@@ -126,6 +127,7 @@ def append_entry(
     tags: list[str],
     soft_limit_tokens: int | None = None,
     origin: str = files_mod.AUTOMATION_ENTRY_ORIGIN,
+    fact_metadata: FactMetadata | None = None,
 ) -> str:
     """Append a new entry, returning its id."""
     with files_mod.review_operation_lock():
@@ -137,6 +139,7 @@ def append_entry(
             soft_limit_tokens=soft_limit_tokens,
             requested_id=None,
             origin=origin,
+            fact_metadata=fact_metadata,
         )
     return entry_id
 
@@ -151,6 +154,7 @@ def append_entry_once(
     evidence_refs: list[EvidenceRef] | None = None,
     soft_limit_tokens: int | None = None,
     origin: str = files_mod.AUTOMATION_ENTRY_ORIGIN,
+    fact_metadata: FactMetadata | None = None,
 ) -> tuple[str, bool]:
     """Append a deterministic entry once and repair a missing FTS row.
 
@@ -170,6 +174,7 @@ def append_entry_once(
             requested_id=entry_id,
             evidence_refs=evidence_refs,
             origin=origin,
+            fact_metadata=fact_metadata,
         )
 
 
@@ -183,6 +188,7 @@ def _append_entry(
     requested_id: str | None,
     evidence_refs: list[EvidenceRef] | None = None,
     origin: str,
+    fact_metadata: FactMetadata | None,
 ) -> tuple[str, bool]:
     require_autocommit(conn)
     path = files_mod.memory_path(name)
@@ -217,13 +223,15 @@ def _append_entry(
     if any(not tag or any(char.isspace() for char in tag) for tag in tags):
         raise ValueError("entry tags must be non-empty and contain no whitespace")
     rendered_body = body
-    if evidence_refs:
+    if evidence_refs or fact_metadata is not None:
         import json
 
         payload = {
             "v": 1,
-            "sources": [source.to_dict() for source in evidence_refs],
+            "sources": [source.to_dict() for source in (evidence_refs or [])],
         }
+        if fact_metadata is not None:
+            payload["fact"] = fact_metadata.to_dict()
         rendered_body += (
             "\n<!-- oc-provenance: "
             + json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -255,6 +263,10 @@ def _append_entry(
                 if evidence_refs is not None and existing.evidence_refs != evidence_refs:
                     raise ValueError(
                         f"deterministic entry {entry_id} already exists with different provenance"
+                    )
+                if existing.fact_metadata != fact_metadata:
+                    raise ValueError(
+                        f"deterministic entry {entry_id} already exists with different fact metadata"
                     )
                 indexed = conn.execute(
                     "SELECT 1 FROM entries WHERE id=? AND path=? LIMIT 1",
@@ -629,6 +641,7 @@ def supersede_entry(
     tags: list[str] | None = None,
     new_entry_id: str | None = None,
     additional_evidence_refs: list[EvidenceRef] | None = None,
+    fact_metadata: FactMetadata | None = None,
 ) -> str:
     """Mark old entry superseded and append a provenance-linked replacement."""
     if new_entry_id is not None and not re.fullmatch(r"[a-zA-Z0-9-]+", new_entry_id):
@@ -644,6 +657,7 @@ def supersede_entry(
             tags=tags,
             new_entry_id=new_entry_id,
             additional_evidence_refs=additional_evidence_refs,
+            fact_metadata=fact_metadata,
         )
 
 
@@ -657,6 +671,7 @@ def _supersede_entry_locked(
     tags: list[str] | None,
     new_entry_id: str | None,
     additional_evidence_refs: list[EvidenceRef] | None,
+    fact_metadata: FactMetadata | None,
 ) -> str:
     require_autocommit(conn)
     path = files_mod.memory_path(name)
@@ -697,6 +712,7 @@ def _supersede_entry_locked(
                 target.superseded_by != new_entry_id
                 or existing_replacement.body.strip() != body
                 or not existing_replacement.provenance_valid
+                or existing_replacement.fact_metadata != fact_metadata
             ):
                 raise ValueError(
                     f"deterministic replacement {new_entry_id} conflicts with Markdown"
@@ -805,6 +821,8 @@ def _supersede_entry_locked(
             "v": 1,
             "sources": [source.to_dict() for source in replacement_sources],
         }
+        if fact_metadata is not None:
+            provenance_payload["fact"] = fact_metadata.to_dict()
         provenance_comment = (
             "<!-- oc-provenance: "
             + json.dumps(

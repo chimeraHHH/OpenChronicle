@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
     tags_json TEXT NOT NULL DEFAULT '[]',
     confidence REAL,
     conflict_key TEXT NOT NULL DEFAULT '',
+    subject_key TEXT NOT NULL DEFAULT '',
+    assertion_kind TEXT NOT NULL DEFAULT '',
+    valid_from TEXT NOT NULL DEFAULT '',
+    valid_to TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
     applied_entry_id TEXT,
@@ -85,6 +89,10 @@ class MemoryCandidate:
     tags: list[str]
     confidence: float | None
     conflict_key: str
+    subject_key: str
+    assertion_kind: str
+    valid_from: str
+    valid_to: str
     status: str
     version: int
     applied_entry_id: str | None
@@ -111,6 +119,10 @@ class MemoryCandidate:
             "tags": self.tags,
             "confidence": self.confidence,
             "conflict_key": self.conflict_key,
+            "subject_key": self.subject_key,
+            "assertion_kind": self.assertion_kind,
+            "valid_from": self.valid_from,
+            "valid_to": self.valid_to,
             "status": self.status,
             "version": self.version,
             "applied_entry_id": self.applied_entry_id,
@@ -139,6 +151,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             ("target_entry_id", "TEXT NOT NULL DEFAULT ''"),
             ("target_entry_hash", "TEXT NOT NULL DEFAULT ''"),
             ("claim_evidence_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("subject_key", "TEXT NOT NULL DEFAULT ''"),
+            ("assertion_kind", "TEXT NOT NULL DEFAULT ''"),
+            ("valid_from", "TEXT NOT NULL DEFAULT ''"),
+            ("valid_to", "TEXT NOT NULL DEFAULT ''"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE memory_candidates ADD COLUMN {name} {declaration}")
@@ -161,6 +177,13 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             WHERE producer_run_key <> ''
             """
         )
+        conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_memory_candidates_subject
+            ON memory_candidates(subject_key, status)
+            WHERE subject_key <> ''
+            """
+        )
         conn.execute("COMMIT")
     except BaseException:
         if conn.in_transaction:
@@ -174,7 +197,8 @@ def _backfill_projection_migration(conn: sqlite3.Connection) -> None:
         """
         SELECT id, kind, operation, target_path, target_entry_id,
                target_entry_hash, content, content_hash, claim_evidence_json,
-               tags_json, confidence, conflict_key
+               tags_json, confidence, conflict_key, subject_key,
+               assertion_kind, valid_from, valid_to
           FROM memory_candidates
          ORDER BY id
         """
@@ -199,6 +223,10 @@ def _backfill_projection_migration(conn: sqlite3.Connection) -> None:
                 tags=values["tags"],
                 evidence=sources,
                 claim_evidence=values["claim_evidence"] or None,
+                subject_key=values["subject_key"],
+                assertion_kind=values["assertion_kind"],
+                valid_from=values["valid_from"],
+                valid_to=values["valid_to"],
             )
             if sources and all(source.content_hash for source in sources)
             else ""
@@ -226,6 +254,10 @@ def _legacy_projection_values(row: sqlite3.Row) -> dict[str, object] | None:
         "claim_evidence_json",
         "tags_json",
         "conflict_key",
+        "subject_key",
+        "assertion_kind",
+        "valid_from",
+        "valid_to",
     )
     if any(not isinstance(row[name], str) for name in string_fields):
         return None
@@ -261,6 +293,10 @@ def _legacy_projection_values(row: sqlite3.Row) -> dict[str, object] | None:
         "tags": tags,
         "confidence": confidence,
         "conflict_key": row["conflict_key"],
+        "subject_key": row["subject_key"],
+        "assertion_kind": row["assertion_kind"],
+        "valid_from": row["valid_from"],
+        "valid_to": row["valid_to"],
     }
 
 
@@ -335,6 +371,10 @@ def projection_digest(
     target_entry_id: str = "",
     target_entry_hash: str = "",
     claim_evidence: list[EvidenceRef] | None = None,
+    subject_key: str = "",
+    assertion_kind: str = "",
+    valid_from: str = "",
+    valid_to: str = "",
 ) -> str:
     payload = {
         "kind": kind,
@@ -363,6 +403,13 @@ def projection_digest(
                 ),
             )
         ]
+    if subject_key or assertion_kind or valid_from or valid_to:
+        payload["fact"] = {
+            "subject_key": subject_key,
+            "assertion_kind": assertion_kind,
+            "valid_from": valid_from,
+            "valid_to": valid_to,
+        }
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -388,6 +435,10 @@ def projection_is_current(candidate: MemoryCandidate) -> bool:
             target_entry_id=candidate.target_entry_id,
             target_entry_hash=candidate.target_entry_hash,
             claim_evidence=candidate.claim_evidence,
+            subject_key=candidate.subject_key,
+            assertion_kind=candidate.assertion_kind,
+            valid_from=candidate.valid_from,
+            valid_to=candidate.valid_to,
         )
     )
 
@@ -403,6 +454,10 @@ def proposal_digest(
     target_entry_id: str = "",
     target_entry_hash: str = "",
     claim_evidence: list[EvidenceRef] | None = None,
+    subject_key: str = "",
+    assertion_kind: str = "",
+    valid_from: str = "",
+    valid_to: str = "",
 ) -> str:
     """Bind a candidate proposal to the exact source revisions it saw."""
     source_keys = sorted(
@@ -416,6 +471,26 @@ def proposal_digest(
         if claim_evidence is not None
         else source_keys
     )
+    if subject_key or assertion_kind or valid_from or valid_to:
+        fields = [
+            "memory-candidate-v4",
+            kind,
+            operation,
+            target_path,
+            target_entry_id,
+            target_entry_hash,
+            content_hash,
+            subject_key,
+            assertion_kind,
+            valid_from,
+            valid_to,
+            *sorted(tags),
+            "claim-sources",
+            *claim_keys,
+            "flow-sources",
+            *source_keys,
+        ]
+        return hashlib.sha256("\0".join(fields).encode()).hexdigest()
     if claim_keys != source_keys:
         fields = [
             "memory-candidate-v3",
@@ -466,6 +541,10 @@ def proposal_is_current(
             tags=candidate.tags,
             evidence=evidence,
             claim_evidence=candidate.claim_evidence or None,
+            subject_key=candidate.subject_key,
+            assertion_kind=candidate.assertion_kind,
+            valid_from=candidate.valid_from,
+            valid_to=candidate.valid_to,
         )
     )
 
@@ -489,6 +568,10 @@ def insert(
     tags: list[str],
     confidence: float | None,
     conflict_key: str,
+    subject_key: str,
+    assertion_kind: str,
+    valid_from: str,
+    valid_to: str,
     status: str,
 ) -> tuple[MemoryCandidate, bool]:
     if status not in VALID_STATUSES:
@@ -506,6 +589,10 @@ def insert(
         target_entry_id=target_entry_id,
         target_entry_hash=target_entry_hash,
         claim_evidence=claim_evidence,
+        subject_key=subject_key,
+        assertion_kind=assertion_kind,
+        valid_from=valid_from,
+        valid_to=valid_to,
     )
     before = conn.total_changes
     conn.execute(
@@ -514,9 +601,10 @@ def insert(
             id, idempotency_key, proposal_digest, projection_digest, producer_run_key,
             proposal_slot, kind, operation, target_path,
             target_entry_id, target_entry_hash, content,
-            content_hash, claim_evidence_json, tags_json, confidence, conflict_key, status,
+            content_hash, claim_evidence_json, tags_json, confidence, conflict_key,
+            subject_key, assertion_kind, valid_from, valid_to, status,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             candidate_id,
@@ -536,6 +624,10 @@ def insert(
             json.dumps(tags, ensure_ascii=False),
             confidence,
             conflict_key,
+            subject_key,
+            assertion_kind,
+            valid_from,
+            valid_to,
             status,
             now,
             now,
@@ -654,6 +746,26 @@ def active_conflicts(
     return [_to_candidate(row) for row in rows]
 
 
+def active_subject_conflicts(
+    conn: sqlite3.Connection,
+    *,
+    subject_key: str,
+    content_hash: str,
+) -> list[MemoryCandidate]:
+    if not subject_key:
+        return []
+    rows = conn.execute(
+        """
+        SELECT * FROM memory_candidates
+         WHERE subject_key=? AND content_hash<>?
+           AND status IN ('pending', 'conflict', 'applying', 'accepted')
+         ORDER BY created_at, id
+        """,
+        (subject_key, content_hash),
+    ).fetchall()
+    return [_to_candidate(row) for row in rows]
+
+
 def update_content(
     conn: sqlite3.Connection,
     *,
@@ -682,6 +794,10 @@ def update_content(
         target_entry_id=current.target_entry_id,
         target_entry_hash=current.target_entry_hash,
         claim_evidence=current.claim_evidence,
+        subject_key=current.subject_key,
+        assertion_kind=current.assertion_kind,
+        valid_from=current.valid_from,
+        valid_to=current.valid_to,
     )
     result = conn.execute(
         """
@@ -904,6 +1020,10 @@ def _to_candidate(row: sqlite3.Row) -> MemoryCandidate:
         tags=[str(tag) for tag in tags] if isinstance(tags, list) else [],
         confidence=float(row["confidence"]) if row["confidence"] is not None else None,
         conflict_key=row["conflict_key"] or "",
+        subject_key=row["subject_key"] or "",
+        assertion_kind=row["assertion_kind"] or "",
+        valid_from=row["valid_from"] or "",
+        valid_to=row["valid_to"] or "",
         status=row["status"],
         version=int(row["version"]),
         applied_entry_id=row["applied_entry_id"],

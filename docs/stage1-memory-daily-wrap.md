@@ -78,6 +78,15 @@ precise; the second remains authoritative for policy changes and transitive
 forget. Claim support cannot name a source outside the full closure, and either
 projection changing blocks approval.
 
+Classifier-created candidates also carry typed fact semantics: a normalized
+global `subject_key`, `assertion_kind` (`user_asserted`, `observed`, or
+`inferred`), and optional `valid_from`/exclusive `valid_to`. These values are
+review-visible and digest-bound. Approval stores them in the canonical Markdown
+provenance frame; compaction round-trips the frame, while current recall excludes
+scheduled and expired facts. A typed supersede must preserve the subject slot,
+and another active proposal with that slot conflicts even if it targets a
+different Markdown file.
+
 Proposal creation revalidates every cited source while holding an immediate
 SQLite write transaction. The candidate row, conflict decision, and provenance
 edges commit atomically; a matching replay can repair a missing edge left by a

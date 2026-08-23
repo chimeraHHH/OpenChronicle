@@ -20,6 +20,7 @@ from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, content_digest
 from ..store import entries as entries_store
 from ..store import files as files_store
+from ..store.facts import FactMetadata, make_fact_metadata, normalize_subject_key
 from .context import ContextService
 
 logger = get("openchronicle.memory")
@@ -114,6 +115,10 @@ class MemoryService:
         claim_evidence: list[EvidenceRef] | None = None,
         confidence: float | None = None,
         conflict_key: str = "",
+        subject_key: str = "",
+        assertion_kind: str = "",
+        valid_from: str = "",
+        valid_to: str = "",
         producer_run_key: str = "",
         proposal_slot: int = 0,
         transaction_guard: Callable[[sqlite3.Connection], None] | None = None,
@@ -133,6 +138,10 @@ class MemoryService:
                 claim_evidence=claim_evidence,
                 confidence=confidence,
                 conflict_key=conflict_key,
+                subject_key=subject_key,
+                assertion_kind=assertion_kind,
+                valid_from=valid_from,
+                valid_to=valid_to,
                 producer_run_key=producer_run_key,
                 proposal_slot=proposal_slot,
                 transaction_guard=transaction_guard,
@@ -151,6 +160,10 @@ class MemoryService:
         claim_evidence: list[EvidenceRef] | None,
         confidence: float | None,
         conflict_key: str,
+        subject_key: str,
+        assertion_kind: str,
+        valid_from: str,
+        valid_to: str,
         producer_run_key: str,
         proposal_slot: int,
         transaction_guard: Callable[[sqlite3.Connection], None] | None,
@@ -182,11 +195,26 @@ class MemoryService:
             raise ValueError("claim-support sources must be part of the input evidence closure")
         if confidence is not None and not 0 <= confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
+        fact_metadata = _optional_fact_metadata(
+            subject_key=subject_key,
+            assertion_kind=assertion_kind,
+            valid_from=valid_from,
+            valid_to=valid_to,
+        )
         conflict_key = conflict_key.strip().casefold()
+        if fact_metadata is not None:
+            if conflict_key and normalize_subject_key(conflict_key) != fact_metadata.subject_key:
+                raise ValueError("conflict_key must match subject_key for typed facts")
+            conflict_key = fact_metadata.subject_key
         digest = content_digest(normalized_content)
         target_entry_hash = ""
         if clean_operation == "supersede":
             target = _current_supersede_target(target_path, clean_target_entry_id)
+            if target.fact_metadata is not None:
+                if fact_metadata is None:
+                    raise ValueError("superseding a typed fact requires typed fact metadata")
+                if target.fact_metadata.subject_key != fact_metadata.subject_key:
+                    raise ValueError("supersede must preserve the target subject_key")
             target_entry_hash = content_digest(target.body)
             if any(
                 source.kind == "memory_entry"
@@ -207,6 +235,10 @@ class MemoryService:
             tags=clean_tags,
             evidence=evidence,
             claim_evidence=claims,
+            subject_key=fact_metadata.subject_key if fact_metadata else "",
+            assertion_kind=fact_metadata.assertion_kind if fact_metadata else "",
+            valid_from=fact_metadata.valid_from if fact_metadata else "",
+            valid_to=fact_metadata.valid_to if fact_metadata else "",
         )
         clean_run_key = producer_run_key.strip()
         if proposal_slot < 0:
@@ -232,16 +264,27 @@ class MemoryService:
             ]
             if invalid_sources:
                 raise ValueError("memory candidate evidence is missing or changed")
-            status = (
-                "conflict"
-                if candidate_store.active_conflicts(
+            conflicts = (
+                candidate_store.active_subject_conflicts(
+                    self.conn,
+                    subject_key=fact_metadata.subject_key,
+                    content_hash=digest,
+                )
+                if fact_metadata is not None
+                else candidate_store.active_conflicts(
                     self.conn,
                     target_path=target_path,
                     conflict_key=conflict_key,
                     content_hash=digest,
                 )
-                else "pending"
             )
+            if clean_operation == "supersede":
+                conflicts = [
+                    candidate
+                    for candidate in conflicts
+                    if candidate.applied_entry_id != clean_target_entry_id
+                ]
+            status = "conflict" if conflicts else "pending"
             candidate, created = candidate_store.insert(
                 self.conn,
                 candidate_id=candidate_id,
@@ -260,6 +303,10 @@ class MemoryService:
                 tags=clean_tags,
                 confidence=confidence,
                 conflict_key=conflict_key,
+                subject_key=fact_metadata.subject_key if fact_metadata else "",
+                assertion_kind=fact_metadata.assertion_kind if fact_metadata else "",
+                valid_from=fact_metadata.valid_from if fact_metadata else "",
+                valid_to=fact_metadata.valid_to if fact_metadata else "",
                 status=status,
             )
             existing_sources = provenance_store.direct_sources(
@@ -328,17 +375,34 @@ class MemoryService:
                 tags=clean_tags,
                 evidence=sources,
                 claim_evidence=current.claim_evidence or None,
+                subject_key=current.subject_key,
+                assertion_kind=current.assertion_kind,
+                valid_from=current.valid_from,
+                valid_to=current.valid_to,
             )
             self.conn.execute("BEGIN IMMEDIATE")
             try:
-                has_conflict = any(
-                    candidate.id != candidate_id
-                    for candidate in candidate_store.active_conflicts(
+                edit_conflicts = (
+                    candidate_store.active_subject_conflicts(
+                        self.conn,
+                        subject_key=current.subject_key,
+                        content_hash=digest,
+                    )
+                    if current.subject_key
+                    else candidate_store.active_conflicts(
                         self.conn,
                         target_path=current.target_path,
                         conflict_key=next_conflict_key,
                         content_hash=digest,
                     )
+                )
+                has_conflict = any(
+                    candidate.id != candidate_id
+                    and not (
+                        current.operation == "supersede"
+                        and candidate.applied_entry_id == current.target_entry_id
+                    )
+                    for candidate in edit_conflicts
                 )
                 updated = candidate_store.update_content(
                     self.conn,
@@ -542,6 +606,7 @@ class MemoryService:
                         tags=applying.tags,
                         new_entry_id=entry_id,
                         additional_evidence_refs=entry_sources,
+                        fact_metadata=_candidate_fact_metadata(applying),
                     )
                 else:
                     entries_store.append_entry_once(
@@ -552,6 +617,7 @@ class MemoryService:
                         entry_id=entry_id,
                         evidence_refs=entry_sources,
                         soft_limit_tokens=self.soft_limit_tokens,
+                        fact_metadata=_candidate_fact_metadata(applying),
                     )
         except BaseException as exc:
             latest = self._required(candidate_id)
@@ -1095,6 +1161,35 @@ def _current_supersede_target(
             f"entry {target_entry_id} is already superseded by {target.superseded_by}"
         )
     return target
+
+
+def _optional_fact_metadata(
+    *,
+    subject_key: str,
+    assertion_kind: str,
+    valid_from: str,
+    valid_to: str,
+) -> FactMetadata | None:
+    values = (subject_key, assertion_kind, valid_from, valid_to)
+    if not any(value.strip() for value in values):
+        return None
+    if not subject_key.strip() or not assertion_kind.strip():
+        raise ValueError("typed facts require subject_key and assertion_kind")
+    return make_fact_metadata(
+        subject_key=subject_key,
+        assertion_kind=assertion_kind,
+        valid_from=valid_from,
+        valid_to=valid_to,
+    )
+
+
+def _candidate_fact_metadata(candidate: MemoryCandidate) -> FactMetadata | None:
+    return _optional_fact_metadata(
+        subject_key=candidate.subject_key,
+        assertion_kind=candidate.assertion_kind,
+        valid_from=candidate.valid_from,
+        valid_to=candidate.valid_to,
+    )
 
 
 def _require_current_supersede_target(candidate: MemoryCandidate) -> None:

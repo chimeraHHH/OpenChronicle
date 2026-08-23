@@ -406,6 +406,20 @@ export function ReviewPage({
               <dd><UntrustedText>{candidate.target_path}</UntrustedText></dd>
               <dt>Operation</dt>
               <dd><bdi>{titleCase(candidate.operation)}</bdi></dd>
+              <dt>Fact slot</dt>
+              <dd>
+                {candidate.subject_key
+                  ? <UntrustedText>{candidate.subject_key}</UntrustedText>
+                  : "Legacy / unspecified"}
+              </dd>
+              <dt>Assertion basis</dt>
+              <dd>{candidate.assertion_kind ? titleCase(candidate.assertion_kind) : "Unspecified"}</dd>
+              <dt>Valid time</dt>
+              <dd>
+                {candidate.valid_from || candidate.valid_to
+                  ? `${candidate.valid_from || "Open start"} → ${candidate.valid_to || "Open end"}`
+                  : "Open-ended"}
+              </dd>
               <dt>Tags</dt>
               <dd>
                 {candidate.tags.length > 0

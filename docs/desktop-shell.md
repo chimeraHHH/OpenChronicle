@@ -34,11 +34,11 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v16** cumulatively
+The bridge protocol is versioned and allowlisted. Protocol **v17** cumulatively
 includes immutable Daily Wrap reads, side-effect-free suggestions, Prompt and
 Reply Rescue review, exact-selection receipts, reviewed résumé source/import
 flows, deterministic preview/export, supervised résumé proposal review, and a
-bounded current published-memory snapshot.
+bounded typed current-fact snapshot.
 Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:

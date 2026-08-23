@@ -203,6 +203,9 @@ describe("trusted console", () => {
       screen.getAllByText("User prefers local-first tools and concise technical reports.").length,
     ).toBeGreaterThan(0);
     expect(screen.getByText(/Superseded versions are kept in history/i)).toBeInTheDocument();
+    expect(screen.getByText("user.communication.report-style")).toBeInTheDocument();
+    expect(screen.getByText("User Asserted")).toBeInTheDocument();
+    expect(screen.getByText(/2026-08-08T08:00:00\+08:00.*Open end/)).toBeInTheDocument();
 
     const search = screen.getByRole("searchbox", { name: "Search remembered facts" });
     await user.type(search, "unmatched phrase");
@@ -914,6 +917,8 @@ describe("trusted console", () => {
 
     await user.click(await screen.findByRole("button", { name: "Review" }));
     expect((await screen.findAllByText(maliciousText)).length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("project-alpha-decision")).toBeInTheDocument();
+    expect(screen.getByText("User Asserted")).toBeInTheDocument();
     expect(document.querySelector("img")).toBeNull();
     expect(document.querySelector("script")).toBeNull();
     expect(document.querySelector("a[href='x']")).toBeNull();

@@ -87,7 +87,7 @@ Both paths then run a bounded, review-first tool-call loop over `writer/tools.py
 | `read_memory(path, tail_n?)` | Fetch a durable (non-`event-*`) memory file's frontmatter + last 1–20 entries (default 10). |
 | `search_memory(query, top_k?, include_superseded?)` | Local semantic + BM25 RRF when enabled, otherwise BM25, over durable current non-tombstoned memory; `top_k` is 1–20. Enabled backend failures are explicit. |
 | `search_activity_evidence(query, top_k?)` | Bounded BM25 recall over current, authorized, non-heuristic `event-*` session entries. It returns session IDs and evidence tokens for cross-session pattern confirmation; event entries remain outside the durable semantic index. |
-| `propose_memory_candidate(kind, operation?, path, target_entry_id?, content, tags, evidence_tokens, confidence?, conflict_key?)` | Persist an append or supersede candidate whose evidence tokens must have been authorized by the current prompt or an actual read/search result. Supersede requires the exact reviewed target and separate replacement evidence. It does not mutate Markdown. |
+| `propose_memory_candidate(kind, operation?, path, target_entry_id?, content, tags, evidence_tokens, subject_key, assertion_kind, valid_from?, valid_to?, confidence?, conflict_key?)` | Persist an append or supersede candidate whose evidence tokens must have been authorized by the current prompt or an actual read/search result. `subject_key` is the global fact slot; `assertion_kind` is user-asserted, observed, or inferred. Supersede preserves the slot and requires the exact reviewed target plus separate replacement evidence. It does not mutate Markdown. |
 | `commit(summary)` | End a model-driven round. Called exactly once; the proven-empty terminal path does not call the provider or this tool. |
 
 Iteration cap: `writer.max_tool_iterations = 12`.
@@ -175,6 +175,15 @@ the fact. Both are revision-bound in the candidate projection/proposal digest;
 claim sources must be an exact subset of the full closure. Review UI source
 opening uses claim support, while policy re-evaluation and purge continue to use
 the complete provenance graph.
+
+New classifier proposals are typed current facts. Their normalized subject slot,
+assertion basis, and optional inclusive-start/exclusive-end validity interval are
+bound into both proposal and projection digests. Approval writes the same
+metadata into the entry's Markdown `oc-provenance` frame, so SQLite and the
+desktop snapshot remain rebuildable views rather than a second source of truth.
+Conflicts are global by subject slot even when two proposals target different
+files. Current recall and Published Memory omit future-scheduled and expired
+facts; legacy entries remain readable with unspecified semantic metadata.
 
 Compaction accepts only non-empty files whose entries are currently authorized
 as explicit `oc-origin:manual-v1` roots or live provenance-bearing derivatives.

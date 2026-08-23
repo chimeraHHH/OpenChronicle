@@ -5,12 +5,14 @@ from __future__ import annotations
 import math
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime
 
 from ..config import Config
 from ..memory_candidates import store as candidate_store
 from ..store import entries as entries_store
 from ..store import files as files_store
 from ..store import fts
+from ..store.facts import temporal_state
 from .context import ContextService
 
 
@@ -71,6 +73,11 @@ def canonical_entry_hits_locked(
             continue
         entry = next((item for item in parsed.entries if item.id == hit.id), None)
         if entry is None or not _projection_matches(hit, entry):
+            continue
+        if entry.fact_metadata is not None and temporal_state(
+            entry.fact_metadata,
+            as_of=datetime.now().astimezone(),
+        ) != "current":
             continue
         if not context.memory_entry_allowed(path=hit.path, entry=entry):
             continue

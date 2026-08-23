@@ -208,6 +208,10 @@ def test_mcp_list_rejects_each_stale_file_projection_field(ac_root: Path) -> Non
         ("tags_json", '["TAMPERED_CANDIDATE_TAG"]'),
         ("confidence", 0.1),
         ("conflict_key", "tampered-conflict"),
+        ("subject_key", "tampered.subject"),
+        ("assertion_kind", "inferred"),
+        ("valid_from", "2030-01-01"),
+        ("valid_to", "2020-01-01"),
     ],
 )
 def test_candidate_semantic_sql_tamper_is_excluded_everywhere(
@@ -226,6 +230,9 @@ def test_candidate_semantic_sql_tamper_is_excluded_everywhere(
             evidence=[source],
             confidence=0.9,
             conflict_key="projection-integrity",
+            subject_key="projection-integrity",
+            assertion_kind="observed",
+            valid_from="2026-08-01",
         )
         ref = EvidenceRef(kind="memory_candidate", id=candidate.id)
         context = ContextService(conn, cfg)

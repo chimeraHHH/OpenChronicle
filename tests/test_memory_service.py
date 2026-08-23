@@ -134,6 +134,10 @@ def test_candidate_store_migrates_pre_stage1_schema(tmp_path: Path) -> None:
             "target_entry_id",
             "target_entry_hash",
             "claim_evidence_json",
+            "subject_key",
+            "assertion_kind",
+            "valid_from",
+            "valid_to",
         } <= columns
     finally:
         conn.close()

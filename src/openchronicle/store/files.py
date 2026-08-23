@@ -22,6 +22,7 @@ import frontmatter
 from .. import paths
 from ..provenance.models import EvidenceRef
 from ..testing import failpoints
+from .facts import FactMetadata
 
 
 def atomic_write_text(path: Path, content: str) -> None:
@@ -250,6 +251,7 @@ class ParsedEntry:
     body: str
     superseded_by: str | None = None
     evidence_refs: list[EvidenceRef] = field(default_factory=list)
+    fact_metadata: FactMetadata | None = None
     provenance_present: bool = False
     provenance_valid: bool = True
     provenance_error: str = ""
@@ -447,6 +449,7 @@ def _parse_entries(body: str) -> list[ParsedEntry]:
                 break
         entry_body = body[start:end].strip("\n")
         evidence_refs: list[EvidenceRef] = []
+        fact_metadata: FactMetadata | None = None
         provenance_present = bool(PROVENANCE_MARKER_RE.search(entry_body))
         provenance_valid = True
         provenance_error = ""
@@ -466,10 +469,14 @@ def _parse_entries(body: str) -> list[ParsedEntry]:
                 ):
                     raise ValueError("provenance sources must be an array of objects")
                 evidence_refs = [EvidenceRef.from_dict(item) for item in raw_sources]
+                raw_fact = payload.get("fact")
+                if raw_fact is not None:
+                    fact_metadata = FactMetadata.from_dict(raw_fact)
             except (json.JSONDecodeError, ValueError, TypeError):
                 provenance_valid = False
                 provenance_error = "malformed provenance frame"
                 evidence_refs = []
+                fact_metadata = None
             if provenance_valid:
                 entry_body = entry_body[: provenance_match.start()].rstrip("\n")
         entries.append(
@@ -481,6 +488,7 @@ def _parse_entries(body: str) -> list[ParsedEntry]:
                 body=entry_body,
                 superseded_by=superseded_by,
                 evidence_refs=evidence_refs,
+                fact_metadata=fact_metadata,
                 provenance_present=provenance_present,
                 provenance_valid=provenance_valid,
                 provenance_error=provenance_error,
@@ -515,11 +523,13 @@ def render_file(
         parts.append(e.heading_line)
         if e.body:
             parts.append(e.body)
-        if e.evidence_refs or e.provenance_present:
+        if e.evidence_refs or e.fact_metadata or e.provenance_present:
             payload = {
                 "v": 1,
                 "sources": [source.to_dict() for source in e.evidence_refs],
             }
+            if e.fact_metadata is not None:
+                payload["fact"] = e.fact_metadata.to_dict()
             parts.append(
                 "<!-- oc-provenance: "
                 + json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

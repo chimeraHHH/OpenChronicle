@@ -327,10 +327,14 @@ def tool_propose_memory_candidate(
     evidence_tokens: list[str],
     confidence: float | None,
     conflict_key: str,
+    subject_key: str,
+    assertion_kind: str,
     soft_limit_tokens: int,
     state: CommitState,
     operation: str = "append",
     target_entry_id: str = "",
+    valid_from: str = "",
+    valid_to: str = "",
 ) -> dict[str, Any]:
     proposal_slot = state.next_proposal_slot
     if path.strip().startswith("event-"):
@@ -401,6 +405,10 @@ def tool_propose_memory_candidate(
             claim_evidence=claim_evidence,
             confidence=confidence,
             conflict_key=conflict_key,
+            subject_key=subject_key,
+            assertion_kind=assertion_kind,
+            valid_from=valid_from,
+            valid_to=valid_to,
             producer_run_key=state.producer_run_key,
             proposal_slot=proposal_slot,
             transaction_guard=state.mutation_guard,
@@ -416,6 +424,8 @@ def tool_propose_memory_candidate(
         "status": candidate.status,
         "operation": candidate.operation,
         "target_entry_id": candidate.target_entry_id,
+        "subject_key": candidate.subject_key,
+        "assertion_kind": candidate.assertion_kind,
         "review_required": True,
         "proposal_slot": proposal_slot,
     }
@@ -727,8 +737,36 @@ CLASSIFIER_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "Stable subject/property key used to surface contradictions.",
                     },
+                    "subject_key": {
+                        "type": "string",
+                        "description": (
+                            "Canonical fact slot, for example user.editor.preference or "
+                            "project.openchronicle.database. Reuse it when superseding."
+                        ),
+                    },
+                    "assertion_kind": {
+                        "type": "string",
+                        "enum": ["user_asserted", "observed", "inferred"],
+                        "description": "How directly the cited evidence supports the fact.",
+                    },
+                    "valid_from": {
+                        "type": "string",
+                        "description": "Optional ISO 8601 start of real-world validity.",
+                    },
+                    "valid_to": {
+                        "type": "string",
+                        "description": "Optional exclusive ISO 8601 end of real-world validity.",
+                    },
                 },
-                "required": ["kind", "path", "content", "tags", "evidence_tokens"],
+                "required": [
+                    "kind",
+                    "path",
+                    "content",
+                    "tags",
+                    "evidence_tokens",
+                    "subject_key",
+                    "assertion_kind",
+                ],
             },
         },
     },
@@ -783,6 +821,10 @@ def dispatch_classifier(
             evidence_tokens=[str(token) for token in args.get("evidence_tokens") or []],
             confidence=args.get("confidence"),
             conflict_key=str(args.get("conflict_key") or ""),
+            subject_key=str(args.get("subject_key") or ""),
+            assertion_kind=str(args.get("assertion_kind") or ""),
+            valid_from=str(args.get("valid_from") or ""),
+            valid_to=str(args.get("valid_to") or ""),
             soft_limit_tokens=soft_limit_tokens,
             state=state,
         )

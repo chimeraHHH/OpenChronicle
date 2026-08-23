@@ -38,7 +38,7 @@ export function MemoryPage({ memories, onOpenSource }: MemoryPageProps) {
       memories.filter((memory) => {
         if (!scopeMatches(memory, scope)) return false;
         if (!normalizedQuery) return true;
-        return [memory.content, memory.path, memory.tags.join(" ")]
+        return [memory.content, memory.path, memory.subject_key ?? "", memory.tags.join(" ")]
           .join(" ")
           .toLocaleLowerCase()
           .includes(normalizedQuery);
@@ -142,6 +142,20 @@ export function MemoryPage({ memories, onOpenSource }: MemoryPageProps) {
               <dd><UntrustedText>{selected.path}</UntrustedText></dd>
               <dt>Entry ID</dt>
               <dd><bdi>{selected.id}</bdi></dd>
+              <dt>Fact slot</dt>
+              <dd>
+                {selected.subject_key
+                  ? <UntrustedText>{selected.subject_key}</UntrustedText>
+                  : "Legacy / unspecified"}
+              </dd>
+              <dt>Assertion basis</dt>
+              <dd>{selected.assertion_kind ? titleCase(selected.assertion_kind) : "Unspecified"}</dd>
+              <dt>Valid time</dt>
+              <dd>
+                {selected.valid_from || selected.valid_to
+                  ? `${selected.valid_from || "Open start"} → ${selected.valid_to || "Open end"}`
+                  : "Open-ended"}
+              </dd>
               <dt>Tags</dt>
               <dd>
                 {selected.tags.length > 0

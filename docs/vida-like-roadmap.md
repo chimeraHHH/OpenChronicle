@@ -198,6 +198,10 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
 - [x] Separate explicitly cited claim support from the full classifier input-flow
   closure while keeping both revision-bound; review UX shows the focused source
   set and privacy/purge semantics retain the complete dependency closure.
+- [x] Typed current-fact projection for new reviewed memories: canonical global
+  subject slots, user-asserted/observed/inferred basis, optional valid time,
+  Markdown-authoritative round trips, supersede slot preservation, expired or
+  scheduled recall filtering, and Review/Published Memory visibility.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1
