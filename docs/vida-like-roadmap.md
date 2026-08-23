@@ -186,7 +186,9 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   accessibility, pause-latency, and adversarial source-drawer validation.
 - [x] Provenance-aware leaf compaction with exact evidence-frame preservation
   and byte-frozen bodies for entries cited by downstream memory.
-- [ ] Deterministic reviewed supersede proposals.
+- [x] Deterministic reviewed supersede proposals with target revision binding,
+  approval-time revalidation, provenance-linked history, idempotent publication,
+  and previous-value restoration when the reviewed replacement is purged.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1

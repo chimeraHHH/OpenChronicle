@@ -86,7 +86,7 @@ Both paths then run a bounded, review-first tool-call loop over `writer/tools.py
 |---|---|
 | `read_memory(path, tail_n?)` | Fetch a durable (non-`event-*`) memory file's frontmatter + last 1–20 entries (default 10). |
 | `search_memory(query, top_k?, include_superseded?)` | Local semantic + BM25 RRF when enabled, otherwise BM25, over durable current non-tombstoned memory; `top_k` is 1–20. Enabled backend failures are explicit. |
-| `propose_memory_candidate(kind, path, content, tags, evidence_tokens, confidence?, conflict_key?)` | Persist a pending candidate whose evidence tokens must have been authorized by the current prompt or an actual read/search result. It does not mutate Markdown. |
+| `propose_memory_candidate(kind, operation?, path, target_entry_id?, content, tags, evidence_tokens, confidence?, conflict_key?)` | Persist an append or supersede candidate whose evidence tokens must have been authorized by the current prompt or an actual read/search result. Supersede requires the exact reviewed target and separate replacement evidence. It does not mutate Markdown. |
 | `commit(summary)` | End a model-driven round. Called exactly once; the proven-empty terminal path does not call the provider or this tool. |
 
 Iteration cap: `writer.max_tool_iterations = 12`.
@@ -176,8 +176,11 @@ origin, and exact evidence list. Bodies cited by downstream memory are frozen
 byte-for-byte; only leaf bodies may shrink. Local frontmatter and canonical
 headings remain authoritative, provenance frames are reconstructed from the
 original snapshot, and stale-snapshot writeback is rejected. Deterministic
-reviewed supersede proposals remain later-stage work; see
-[Stage 1 memory and Daily Wrap](stage1-memory-daily-wrap.md).
+reviewed supersede proposals bind the old entry ID and body hash as a revision
+precondition. Approval rechecks that target immediately before publication,
+then writes a deterministic replacement citing the post-strike old entry, the
+candidate, and the replacement evidence. Purging that candidate removes the
+replacement and makes the prior value current again.
 
 ## Sessions table
 

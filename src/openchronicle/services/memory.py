@@ -105,7 +105,9 @@ class MemoryService:
         self,
         *,
         kind: str,
+        operation: str = "append",
         target_path: str,
+        target_entry_id: str = "",
         content: str,
         tags: list[str],
         evidence: list[EvidenceRef],
@@ -121,7 +123,9 @@ class MemoryService:
         with _review_operation_lock(), capture_store.capture_store_lock():
             return self._propose_candidate_locked(
                 kind=kind,
+                operation=operation,
                 target_path=target_path,
+                target_entry_id=target_entry_id,
                 content=content,
                 tags=tags,
                 evidence=evidence,
@@ -136,7 +140,9 @@ class MemoryService:
         self,
         *,
         kind: str,
+        operation: str,
         target_path: str,
+        target_entry_id: str,
         content: str,
         tags: list[str],
         evidence: list[EvidenceRef],
@@ -152,6 +158,14 @@ class MemoryService:
         clean_kind = kind.strip().lower()
         if not clean_kind:
             raise ValueError("candidate kind is required")
+        clean_operation = operation.strip().lower()
+        if clean_operation not in {"append", "supersede"}:
+            raise ValueError("candidate operation must be append or supersede")
+        clean_target_entry_id = target_entry_id.strip()
+        if clean_operation == "append" and clean_target_entry_id:
+            raise ValueError("append candidates cannot target an existing entry")
+        if clean_operation == "supersede" and not clean_target_entry_id:
+            raise ValueError("supersede candidates require target_entry_id")
         if not evidence:
             raise ValueError("memory candidates require at least one evidence reference")
         if any(not ref.content_hash for ref in evidence):
@@ -160,9 +174,25 @@ class MemoryService:
             raise ValueError("confidence must be between 0 and 1")
         conflict_key = conflict_key.strip().casefold()
         digest = content_digest(normalized_content)
+        target_entry_hash = ""
+        if clean_operation == "supersede":
+            target = _current_supersede_target(target_path, clean_target_entry_id)
+            target_entry_hash = content_digest(target.body)
+            if any(
+                source.kind == "memory_entry"
+                and source.path == target_path
+                and source.id == clean_target_entry_id
+                for source in evidence
+            ):
+                raise ValueError(
+                    "supersede target is a revision precondition, not proposal evidence"
+                )
         proposal_digest = candidate_store.proposal_digest(
             kind=clean_kind,
+            operation=clean_operation,
             target_path=target_path,
+            target_entry_id=clean_target_entry_id,
+            target_entry_hash=target_entry_hash,
             content_hash=digest,
             tags=clean_tags,
             evidence=evidence,
@@ -209,8 +239,10 @@ class MemoryService:
                 producer_run_key=clean_run_key,
                 proposal_slot=proposal_slot,
                 kind=clean_kind,
-                operation="append",
+                operation=clean_operation,
                 target_path=target_path,
+                target_entry_id=clean_target_entry_id,
+                target_entry_hash=target_entry_hash,
                 content=normalized_content,
                 content_hash=digest,
                 tags=clean_tags,
@@ -271,7 +303,10 @@ class MemoryService:
                 )
             next_proposal_digest = candidate_store.proposal_digest(
                 kind=current.kind,
+                operation=current.operation,
                 target_path=current.target_path,
+                target_entry_id=current.target_entry_id,
+                target_entry_hash=current.target_entry_hash,
                 content_hash=digest,
                 tags=clean_tags,
                 evidence=sources,
@@ -327,6 +362,28 @@ class MemoryService:
                 raise candidate_store.CandidateConflict("candidate version changed")
             if current.status != "pending":
                 raise candidate_store.CandidateConflict("candidate must be pending before approval")
+
+        if (
+            current.operation == "supersede"
+            and current.status != "accepted"
+            and not _markdown_entry_exists(
+                current.target_path,
+                _candidate_entry_id(candidate_id),
+            )
+        ):
+            try:
+                _require_current_supersede_target(current)
+            except (FileNotFoundError, ValueError) as exc:
+                detail = f"supersede target changed: {exc}"
+                candidate_store.transition(
+                    self.conn,
+                    candidate_id=candidate_id,
+                    expected_version=current.version,
+                    from_statuses=(current.status,),
+                    to_status="conflict",
+                    error=detail,
+                )
+                raise candidate_store.CandidateConflict(detail) from exc
 
         sources = provenance_store.direct_sources(
             self.conn, _candidate_ref(candidate_id)
@@ -421,6 +478,26 @@ class MemoryService:
                     raise candidate_store.CandidateConflict(
                         "candidate evidence changed or was excluded before publication"
                     )
+                if (
+                    applying.operation == "supersede"
+                    and not _markdown_entry_exists(applying.target_path, entry_id)
+                ):
+                    try:
+                        _require_current_supersede_target(applying)
+                    except (FileNotFoundError, ValueError) as exc:
+                        latest = self._required(candidate_id)
+                        if latest.status == "applying":
+                            candidate_store.transition(
+                                self.conn,
+                                candidate_id=candidate_id,
+                                expected_version=latest.version,
+                                from_statuses=("applying",),
+                                to_status="conflict",
+                                error=f"supersede target changed: {exc}",
+                            )
+                        raise candidate_store.CandidateConflict(
+                            f"supersede target changed: {exc}"
+                        ) from exc
                 if not files_store.memory_path(applying.target_path).exists():
                     with contextlib.suppress(FileExistsError):
                         entries_store.create_file(
@@ -430,15 +507,27 @@ class MemoryService:
                             tags=applying.tags,
                             owner_candidate_id=applying.id,
                         )
-                entries_store.append_entry_once(
-                    self.conn,
-                    name=applying.target_path,
-                    content=applying.content,
-                    tags=applying.tags,
-                    entry_id=entry_id,
-                    evidence_refs=entry_sources,
-                    soft_limit_tokens=self.soft_limit_tokens,
-                )
+                if applying.operation == "supersede":
+                    entries_store.supersede_entry(
+                        self.conn,
+                        name=applying.target_path,
+                        old_entry_id=applying.target_entry_id,
+                        new_content=applying.content,
+                        reason=f"reviewed candidate {candidate_id}",
+                        tags=applying.tags,
+                        new_entry_id=entry_id,
+                        additional_evidence_refs=entry_sources,
+                    )
+                else:
+                    entries_store.append_entry_once(
+                        self.conn,
+                        name=applying.target_path,
+                        content=applying.content,
+                        tags=applying.tags,
+                        entry_id=entry_id,
+                        evidence_refs=entry_sources,
+                        soft_limit_tokens=self.soft_limit_tokens,
+                    )
         except BaseException as exc:
             latest = self._required(candidate_id)
             if latest.status == "applying":
@@ -950,6 +1039,40 @@ def _markdown_entry_exists(path: str, entry_id: str) -> bool:
     except (OSError, ValueError):
         return False
     return any(entry.id == entry_id for entry in parsed.entries)
+
+
+def _current_supersede_target(
+    target_path: str,
+    target_entry_id: str,
+) -> files_store.ParsedEntry:
+    path = files_store.memory_path(target_path)
+    if not path.exists():
+        raise FileNotFoundError(path.name)
+    parsed = files_store.read_file(path)
+    target = next(
+        (entry for entry in parsed.entries if entry.id == target_entry_id),
+        None,
+    )
+    if target is None:
+        raise ValueError(f"entry {target_entry_id} not found in {path.name}")
+    if not target.provenance_valid:
+        raise ValueError(f"entry {target_entry_id} has an invalid provenance frame")
+    if target.superseded_by:
+        raise ValueError(
+            f"entry {target_entry_id} is already superseded by {target.superseded_by}"
+        )
+    return target
+
+
+def _require_current_supersede_target(candidate: MemoryCandidate) -> None:
+    if candidate.operation != "supersede":
+        return
+    target = _current_supersede_target(
+        candidate.target_path,
+        candidate.target_entry_id,
+    )
+    if content_digest(target.body) != candidate.target_entry_hash:
+        raise ValueError(f"entry {candidate.target_entry_id} content changed")
 
 
 def _candidate_owned_file_purge_record(

@@ -51,6 +51,30 @@ def _ensure_source(conn) -> None:
     )
 
 
+def _ensure_supersede_target(conn) -> EvidenceRef:
+    if not files_store.memory_path("user-preferences.md").exists():
+        entries_store.create_file(
+            conn,
+            name="user-preferences.md",
+            description="reviewed preferences",
+            tags=["preference"],
+        )
+    entries_store.append_entry_once(
+        conn,
+        name="user-preferences.md",
+        content="User currently prefers cloud tools.",
+        tags=["preference"],
+        entry_id="old-tool-preference",
+        origin=files_store.MANUAL_ENTRY_ORIGIN,
+    )
+    return EvidenceRef(
+        kind="memory_entry",
+        id="old-tool-preference",
+        path="user-preferences.md",
+        content_hash=content_digest("User currently prefers cloud tools."),
+    )
+
+
 def _configured_service(
     conn,
     *,
@@ -103,7 +127,13 @@ def test_candidate_store_migrates_pre_stage1_schema(tmp_path: Path) -> None:
     try:
         candidate_store.ensure_schema(conn)
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(memory_candidates)")}
-        assert {"proposal_digest", "producer_run_key", "proposal_slot"} <= columns
+        assert {
+            "proposal_digest",
+            "producer_run_key",
+            "proposal_slot",
+            "target_entry_id",
+            "target_entry_hash",
+        } <= columns
     finally:
         conn.close()
 
@@ -137,6 +167,165 @@ def test_candidate_is_idempotent_review_first_and_approval_is_deterministic(
             (accepted.applied_entry_id,),
         ).fetchone()[0]
         assert indexed == 1
+
+
+def test_reviewed_supersede_is_deterministic_and_preserves_history(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        target_ref = _ensure_supersede_target(conn)
+        _ensure_source(conn)
+
+        candidate = service.propose_candidate(
+            kind="preference",
+            operation="supersede",
+            target_path=target_ref.path,
+            target_entry_id=target_ref.id,
+            content="User currently prefers local tools.",
+            tags=["preference", "local-first"],
+            evidence=[_source()],
+            confidence=0.95,
+            conflict_key="tool-storage-preference",
+        )
+        assert candidate.status == "pending"
+        assert candidate.target_entry_hash == target_ref.content_hash
+        before = files_store.read_file(files_store.memory_path(target_ref.path))
+        assert before.entries[0].superseded_by is None
+
+        accepted = service.approve_candidate(
+            candidate.id,
+            expected_version=candidate.version,
+        )
+        expected_entry_id = (
+            "candidate-" + hashlib.sha256(candidate.id.encode()).hexdigest()[:20]
+        )
+        assert accepted.applied_entry_id == expected_entry_id
+        replay = service.approve_candidate(
+            candidate.id,
+            expected_version=accepted.version,
+        )
+        assert replay.applied_entry_id == expected_entry_id
+
+        parsed = files_store.read_file(files_store.memory_path(target_ref.path))
+        old_entry = next(entry for entry in parsed.entries if entry.id == target_ref.id)
+        replacement = next(
+            entry for entry in parsed.entries if entry.id == expected_entry_id
+        )
+        assert old_entry.superseded_by == expected_entry_id
+        assert old_entry.body == "~~User currently prefers cloud tools.~~"
+        assert replacement.body == "User currently prefers local tools."
+        assert replacement.evidence_refs == [
+            EvidenceRef(
+                kind="memory_entry",
+                id=target_ref.id,
+                path=target_ref.path,
+                timestamp=old_entry.timestamp,
+                content_hash=content_digest(old_entry.body),
+            ),
+            EvidenceRef(kind="memory_candidate", id=candidate.id),
+            _source(),
+        ]
+        assert fts.search(conn, query="cloud tools", top_k=5) == []
+        assert fts.search(conn, query="local tools", top_k=5)
+
+
+def test_supersede_approval_rejects_a_changed_target(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        target_ref = _ensure_supersede_target(conn)
+        _ensure_source(conn)
+        candidate = service.propose_candidate(
+            kind="preference",
+            operation="supersede",
+            target_path=target_ref.path,
+            target_entry_id=target_ref.id,
+            content="User currently prefers local tools.",
+            tags=["preference"],
+            evidence=[_source()],
+        )
+        entries_store.supersede_entry(
+            conn,
+            name=target_ref.path,
+            old_entry_id=target_ref.id,
+            new_content="User currently prefers hosted tools.",
+            reason="external reviewed change",
+        )
+
+        with pytest.raises(candidate_store.CandidateConflict, match="target changed"):
+            service.approve_candidate(candidate.id, expected_version=candidate.version)
+        conflicted = service.get_candidate(candidate.id)
+        assert conflicted is not None
+        assert conflicted.status == "conflict"
+        assert all(
+            entry.body != "User currently prefers local tools."
+            for entry in files_store.read_file(
+                files_store.memory_path(target_ref.path)
+            ).entries
+        )
+
+
+def test_supersede_target_binding_tamper_is_quarantined(ac_root: Path) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        target_ref = _ensure_supersede_target(conn)
+        _ensure_source(conn)
+        candidate = service.propose_candidate(
+            kind="preference",
+            operation="supersede",
+            target_path=target_ref.path,
+            target_entry_id=target_ref.id,
+            content="User currently prefers local tools.",
+            tags=["preference"],
+            evidence=[_source()],
+        )
+        conn.execute(
+            "UPDATE memory_candidates SET target_entry_hash=? WHERE id=?",
+            ("f" * 64, candidate.id),
+        )
+
+        with pytest.raises(candidate_store.CandidateConflict, match="target changed"):
+            service.approve_candidate(candidate.id, expected_version=candidate.version)
+        quarantined = service.get_candidate(candidate.id)
+        assert quarantined is not None
+        assert quarantined.status == "conflict"
+        assert not files_store.read_file(
+            files_store.memory_path(target_ref.path)
+        ).entries[0].superseded_by
+
+
+def test_purging_reviewed_supersede_restores_previous_current_fact(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        service = _configured_service(conn)
+        target_ref = _ensure_supersede_target(conn)
+        _ensure_source(conn)
+        candidate = service.propose_candidate(
+            kind="preference",
+            operation="supersede",
+            target_path=target_ref.path,
+            target_entry_id=target_ref.id,
+            content="User currently prefers local tools.",
+            tags=["preference"],
+            evidence=[_source()],
+        )
+        accepted = service.approve_candidate(
+            candidate.id,
+            expected_version=candidate.version,
+        )
+        assert accepted.applied_entry_id
+
+        service.purge_candidate(candidate.id)
+
+        parsed = files_store.read_file(files_store.memory_path(target_ref.path))
+        assert [(entry.id, entry.body, entry.superseded_by) for entry in parsed.entries] == [
+            (target_ref.id, "User currently prefers cloud tools.", None)
+        ]
+        assert fts.search(conn, query="local tools", top_k=5) == []
+        assert fts.search(conn, query="cloud tools", top_k=5)
+        entries_store.rebuild_index(conn)
+        assert fts.search(conn, query="cloud tools", top_k=5)
 
 
 def test_candidate_row_and_evidence_edges_commit_atomically(

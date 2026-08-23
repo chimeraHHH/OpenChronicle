@@ -255,6 +255,8 @@ def tool_propose_memory_candidate(
     conflict_key: str,
     soft_limit_tokens: int,
     state: CommitState,
+    operation: str = "append",
+    target_entry_id: str = "",
 ) -> dict[str, Any]:
     proposal_slot = state.next_proposal_slot
     if path.strip().startswith("event-"):
@@ -263,24 +265,57 @@ def tool_propose_memory_candidate(
         return {"error": "at least one evidence token is required"}
     if state.evidence_conflicts:
         return {"error": "evidence changed during this classifier run; retry from fresh context"}
-    evidence: list[EvidenceRef] = []
+    cited_evidence: list[EvidenceRef] = []
     for token in evidence_tokens:
         ref = state.allowed_evidence.get(str(token))
         if ref is None:
             return {"error": f"unknown or unobserved evidence token: {token}"}
-        evidence.append(ref)
+        cited_evidence.append(ref)
+    clean_operation = operation.strip().lower()
+    clean_target_entry_id = target_entry_id.strip()
+    target_ref = None
+    if clean_operation == "supersede":
+        target_ref = next(
+            (
+                ref
+                for ref in cited_evidence
+                if ref.kind == "memory_entry"
+                and ref.path == path.strip()
+                and ref.id == clean_target_entry_id
+            ),
+            None,
+        )
+        if target_ref is None:
+            return {
+                "error": (
+                    "supersede target must be read or searched and its evidence token "
+                    "must be cited"
+                )
+            }
+        if not any(ref.key != target_ref.key for ref in cited_evidence):
+            return {"error": "supersede requires evidence for the replacement fact"}
+    elif clean_operation != "append":
+        return {"error": "operation must be append or supersede"}
     # ``evidence_tokens`` remain useful citations, but cannot be trusted as
     # an information-flow declaration from the model.  Persist every source
     # exposed before this proposal so a later policy change on *any* input
     # hides and blocks approval of the derived candidate.
     evidence = sorted(
-        state.allowed_evidence.values(),
+        (
+            ref
+            for ref in state.allowed_evidence.values()
+            if target_ref is None or ref.key != target_ref.key
+        ),
         key=lambda ref: (ref.kind, ref.path, ref.id, ref.content_hash),
     )
+    if not evidence:
+        return {"error": "at least one replacement-fact evidence source is required"}
     try:
         candidate = MemoryService(conn, soft_limit_tokens=soft_limit_tokens).propose_candidate(
             kind=kind,
+            operation=clean_operation,
             target_path=path,
+            target_entry_id=clean_target_entry_id,
             content=content,
             tags=tags,
             evidence=evidence,
@@ -299,6 +334,8 @@ def tool_propose_memory_candidate(
         "ok": True,
         "candidate_id": candidate.id,
         "status": candidate.status,
+        "operation": candidate.operation,
+        "target_entry_id": candidate.target_entry_id,
         "review_required": True,
         "proposal_slot": proposal_slot,
     }
@@ -559,7 +596,20 @@ CLASSIFIER_TOOL_SCHEMAS: list[dict[str, Any]] = [
                         "type": "string",
                         "description": "fact, preference, decision, person, project, tool, or topic",
                     },
+                    "operation": {
+                        "type": "string",
+                        "enum": ["append", "supersede"],
+                        "default": "append",
+                        "description": (
+                            "Use supersede when a reviewed current fact is replaced by "
+                            "new evidence. The old fact remains in history."
+                        ),
+                    },
                     "path": {"type": "string"},
+                    "target_entry_id": {
+                        "type": "string",
+                        "description": "Required for supersede; id returned by read/search.",
+                    },
                     "content": {"type": "string"},
                     "tags": {"type": "array", "items": {"type": "string"}, "maxItems": 3},
                     "evidence_tokens": {
@@ -613,7 +663,9 @@ def dispatch_classifier(
         return tool_propose_memory_candidate(
             conn,
             kind=str(args.get("kind") or "fact"),
+            operation=str(args.get("operation") or "append"),
             path=str(args.get("path") or ""),
+            target_entry_id=str(args.get("target_entry_id") or ""),
             content=str(args.get("content") or ""),
             tags=list(args.get("tags") or []),
             evidence_tokens=[str(token) for token in args.get("evidence_tokens") or []],

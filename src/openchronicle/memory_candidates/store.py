@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS memory_candidates (
     kind TEXT NOT NULL,
     operation TEXT NOT NULL DEFAULT 'append',
     target_path TEXT NOT NULL,
+    target_entry_id TEXT NOT NULL DEFAULT '',
+    target_entry_hash TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL,
     content_hash TEXT NOT NULL,
     tags_json TEXT NOT NULL DEFAULT '[]',
@@ -74,6 +76,8 @@ class MemoryCandidate:
     kind: str
     operation: str
     target_path: str
+    target_entry_id: str
+    target_entry_hash: str
     content: str
     content_hash: str
     tags: list[str]
@@ -97,6 +101,8 @@ class MemoryCandidate:
             "kind": self.kind,
             "operation": self.operation,
             "target_path": self.target_path,
+            "target_entry_id": self.target_entry_id,
+            "target_entry_hash": self.target_entry_hash,
             "content": self.content,
             "content_hash": self.content_hash,
             "tags": self.tags,
@@ -127,6 +133,8 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
             ("projection_digest", "TEXT NOT NULL DEFAULT ''"),
             ("producer_run_key", "TEXT NOT NULL DEFAULT ''"),
             ("proposal_slot", "INTEGER NOT NULL DEFAULT 0"),
+            ("target_entry_id", "TEXT NOT NULL DEFAULT ''"),
+            ("target_entry_hash", "TEXT NOT NULL DEFAULT ''"),
         ):
             if name not in columns:
                 conn.execute(f"ALTER TABLE memory_candidates ADD COLUMN {name} {declaration}")
@@ -160,7 +168,8 @@ def _backfill_projection_migration(conn: sqlite3.Connection) -> None:
     """Bind valid legacy rows once; later startup never repairs blank digests."""
     rows = conn.execute(
         """
-        SELECT id, kind, operation, target_path, content, content_hash,
+        SELECT id, kind, operation, target_path, target_entry_id,
+               target_entry_hash, content, content_hash,
                tags_json, confidence, conflict_key
           FROM memory_candidates
          ORDER BY id
@@ -178,7 +187,10 @@ def _backfill_projection_migration(conn: sqlite3.Connection) -> None:
         current_proposal_digest = (
             proposal_digest(
                 kind=values["kind"],
+                operation=values["operation"],
                 target_path=values["target_path"],
+                target_entry_id=values["target_entry_id"],
+                target_entry_hash=values["target_entry_hash"],
                 content_hash=values["content_hash"],
                 tags=values["tags"],
                 evidence=sources,
@@ -202,6 +214,8 @@ def _legacy_projection_values(row: sqlite3.Row) -> dict[str, object] | None:
         "kind",
         "operation",
         "target_path",
+        "target_entry_id",
+        "target_entry_hash",
         "content",
         "content_hash",
         "tags_json",
@@ -230,6 +244,8 @@ def _legacy_projection_values(row: sqlite3.Row) -> dict[str, object] | None:
         "kind": row["kind"],
         "operation": row["operation"],
         "target_path": row["target_path"],
+        "target_entry_id": row["target_entry_id"],
+        "target_entry_hash": row["target_entry_hash"],
         "content": row["content"],
         "content_hash": row["content_hash"],
         "tags": tags,
@@ -280,6 +296,8 @@ def projection_digest(
     tags: list[str],
     confidence: float | None,
     conflict_key: str,
+    target_entry_id: str = "",
+    target_entry_hash: str = "",
 ) -> str:
     payload = {
         "kind": kind,
@@ -291,6 +309,9 @@ def projection_digest(
         "confidence": confidence,
         "conflict_key": conflict_key,
     }
+    if operation != "append" or target_entry_id or target_entry_hash:
+        payload["target_entry_id"] = target_entry_id
+        payload["target_entry_hash"] = target_entry_hash
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -313,6 +334,8 @@ def projection_is_current(candidate: MemoryCandidate) -> bool:
             tags=candidate.tags,
             confidence=candidate.confidence,
             conflict_key=candidate.conflict_key,
+            target_entry_id=candidate.target_entry_id,
+            target_entry_hash=candidate.target_entry_hash,
         )
     )
 
@@ -324,21 +347,27 @@ def proposal_digest(
     content_hash: str,
     tags: list[str],
     evidence: list[EvidenceRef],
+    operation: str = "append",
+    target_entry_id: str = "",
+    target_entry_hash: str = "",
 ) -> str:
     """Bind a candidate proposal to the exact source revisions it saw."""
     source_keys = sorted(
         f"{ref.kind}\0{ref.path}\0{ref.id}\0{ref.content_hash}" for ref in evidence
     )
-    payload = "\0".join(
-        [
-            "memory-candidate-v1",
+    if operation == "append" and not target_entry_id and not target_entry_hash:
+        fields = ["memory-candidate-v1", kind, target_path, content_hash]
+    else:
+        fields = [
+            "memory-candidate-v2",
             kind,
+            operation,
             target_path,
+            target_entry_id,
+            target_entry_hash,
             content_hash,
-            *sorted(tags),
-            *source_keys,
         ]
-    )
+    payload = "\0".join([*fields, *sorted(tags), *source_keys])
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
@@ -352,7 +381,10 @@ def proposal_is_current(
         and candidate.proposal_digest
         == proposal_digest(
             kind=candidate.kind,
+            operation=candidate.operation,
             target_path=candidate.target_path,
+            target_entry_id=candidate.target_entry_id,
+            target_entry_hash=candidate.target_entry_hash,
             content_hash=candidate.content_hash,
             tags=candidate.tags,
             evidence=evidence,
@@ -371,6 +403,8 @@ def insert(
     kind: str,
     operation: str,
     target_path: str,
+    target_entry_id: str,
+    target_entry_hash: str,
     content: str,
     content_hash: str,
     tags: list[str],
@@ -390,16 +424,19 @@ def insert(
         tags=tags,
         confidence=confidence,
         conflict_key=conflict_key,
+        target_entry_id=target_entry_id,
+        target_entry_hash=target_entry_hash,
     )
     before = conn.total_changes
     conn.execute(
         """
         INSERT OR IGNORE INTO memory_candidates(
             id, idempotency_key, proposal_digest, projection_digest, producer_run_key,
-            proposal_slot, kind, operation, target_path, content,
+            proposal_slot, kind, operation, target_path,
+            target_entry_id, target_entry_hash, content,
             content_hash, tags_json, confidence, conflict_key, status,
             created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             candidate_id,
@@ -411,6 +448,8 @@ def insert(
             kind,
             operation,
             target_path,
+            target_entry_id,
+            target_entry_hash,
             content,
             content_hash,
             json.dumps(tags, ensure_ascii=False),
@@ -559,6 +598,8 @@ def update_content(
         tags=tags,
         confidence=current.confidence,
         conflict_key=conflict_key,
+        target_entry_id=current.target_entry_id,
+        target_entry_hash=current.target_entry_hash,
     )
     result = conn.execute(
         """
@@ -772,6 +813,8 @@ def _to_candidate(row: sqlite3.Row) -> MemoryCandidate:
         kind=row["kind"],
         operation=row["operation"],
         target_path=row["target_path"],
+        target_entry_id=row["target_entry_id"] or "",
+        target_entry_hash=row["target_entry_hash"] or "",
         content=row["content"],
         content_hash=row["content_hash"],
         tags=[str(tag) for tag in tags] if isinstance(tags, list) else [],

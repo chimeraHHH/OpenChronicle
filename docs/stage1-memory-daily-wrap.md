@@ -355,8 +355,9 @@ The Stage 1 suite covers:
 
 - The native macOS permissions/review/source-drawer shell is not built yet;
   trusted CLI commands are the current mutation UI.
-- Candidate operations currently materialize append/create-append behavior.
-  Deterministic reviewed supersede remains pending.
+- Candidate operations support append/create-append and deterministic reviewed
+  supersede. Supersede binds an exact old entry revision, preserves both sides'
+  evidence, and restores the previous current value if the replacement is purged.
 - Provenance-aware leaf compaction is implemented; it deliberately cannot
   rewrite bodies that downstream memory cites. Cross-entry semantic merging is
   not attempted.

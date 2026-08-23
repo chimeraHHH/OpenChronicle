@@ -369,11 +369,33 @@ def delete_entry(conn: sqlite3.Connection, *, name: str, entry_id: str) -> bool:
     require_autocommit(conn)
     path = files_mod.memory_path(name)
     removed = False
+    restored_predecessor = False
     with files_mod.store_write_lock(), files_mod.file_lock(path):
         _require_regular_memory_path(path)
         post = frontmatter.load(path) if path.exists() else None
         if post is not None:
             matches = list(files_mod.ENTRY_HEADING_RE.finditer(post.content))
+            parsed_entries = files_mod._parse_entries(post.content)
+            target_entry = next(
+                (entry for entry in parsed_entries if entry.id == entry_id),
+                None,
+            )
+            predecessor = None
+            if target_entry is not None and target_entry.provenance_valid:
+                predecessors = [
+                    entry
+                    for entry in parsed_entries
+                    if entry.superseded_by == entry_id
+                    and _body_is_striked(entry.body)
+                    and any(
+                        source.kind == "memory_entry"
+                        and source.path == path.name
+                        and source.id == entry.id
+                        and source.content_hash == content_digest(entry.body)
+                        for source in target_entry.evidence_refs
+                    )
+                ]
+                predecessor = predecessors[0] if len(predecessors) == 1 else None
             target_index = next(
                 (index for index, match in enumerate(matches) if match.group("id") == entry_id),
                 None,
@@ -388,6 +410,24 @@ def delete_entry(conn: sqlite3.Connection, *, name: str, entry_id: str) -> bool:
                 before = post.content[:start].rstrip()
                 after = post.content[end:].lstrip()
                 post.content = before + "\n\n" + after if before and after else before or after
+                if predecessor is not None:
+                    supersede_token = f" #superseded-by:{entry_id}"
+                    restored_heading = predecessor.heading_line.replace(
+                        supersede_token,
+                        "",
+                        1,
+                    )
+                    restored_body = predecessor.body.strip()[2:-2]
+                    predecessor_block = (
+                        predecessor.heading_line + "\n" + predecessor.body
+                    )
+                    restored_block = restored_heading + "\n" + restored_body
+                    post.content = post.content.replace(
+                        predecessor_block,
+                        restored_block,
+                        1,
+                    )
+                    restored_predecessor = True
                 post.metadata["entry_count"] = max(0, len(matches) - 1)
                 post.metadata["updated"] = files_mod.today()
                 files_mod.atomic_write_text(path, frontmatter.dumps(post) + "\n")
@@ -404,6 +444,27 @@ def delete_entry(conn: sqlite3.Connection, *, name: str, entry_id: str) -> bool:
                 # candidate-owned container.
                 conn.execute("DELETE FROM files WHERE path=?", (path.name,))
             else:
+                if restored_predecessor:
+                    conn.execute("DELETE FROM entries WHERE path=?", (path.name,))
+                    prefix = _ensure_prefix(path.name)
+                    for entry in files_mod._parse_entries(post.content):
+                        if candidate_store.is_tombstoned(
+                            conn,
+                            kind="memory_entry",
+                            artifact_id=entry.id,
+                            path=path.name,
+                        ):
+                            continue
+                        fts.insert_entry(
+                            conn,
+                            id=entry.id,
+                            path=path.name,
+                            prefix=prefix,
+                            timestamp=entry.timestamp,
+                            tags=" ".join(entry.tags),
+                            content=entry_index_content(entry),
+                            superseded=entry_index_superseded(entry),
+                        )
                 _upsert_file_projection(conn, path=path, post=post)
     return removed
 
@@ -566,9 +627,14 @@ def supersede_entry(
     new_content: str,
     reason: str,
     tags: list[str] | None = None,
+    new_entry_id: str | None = None,
+    additional_evidence_refs: list[EvidenceRef] | None = None,
 ) -> str:
     """Mark old entry superseded and append a provenance-linked replacement."""
+    if new_entry_id is not None and not re.fullmatch(r"[a-zA-Z0-9-]+", new_entry_id):
+        raise ValueError(f"invalid deterministic entry id: {new_entry_id!r}")
     with files_mod.review_operation_lock():
+        _require_live_dependency_sources(conn, additional_evidence_refs or [])
         return _supersede_entry_locked(
             conn,
             name=name,
@@ -576,6 +642,8 @@ def supersede_entry(
             new_content=new_content,
             reason=reason,
             tags=tags,
+            new_entry_id=new_entry_id,
+            additional_evidence_refs=additional_evidence_refs,
         )
 
 
@@ -587,6 +655,8 @@ def _supersede_entry_locked(
     new_content: str,
     reason: str,
     tags: list[str] | None,
+    new_entry_id: str | None,
+    additional_evidence_refs: list[EvidenceRef] | None,
 ) -> str:
     require_autocommit(conn)
     path = files_mod.memory_path(name)
@@ -617,6 +687,70 @@ def _supersede_entry_locked(
             raise ValueError(f"entry {old_entry_id} not found in {path.name}")
         if not target.provenance_valid:
             raise ValueError(f"entry {old_entry_id} has an invalid provenance frame")
+        existing_replacement = (
+            next((entry for entry in parsed.entries if entry.id == new_entry_id), None)
+            if new_entry_id is not None
+            else None
+        )
+        if existing_replacement is not None:
+            if (
+                target.superseded_by != new_entry_id
+                or existing_replacement.body.strip() != body
+                or not existing_replacement.provenance_valid
+            ):
+                raise ValueError(
+                    f"deterministic replacement {new_entry_id} conflicts with Markdown"
+                )
+            expected_sources = _dedupe_evidence_refs(
+                [
+                    EvidenceRef(
+                        kind="memory_entry",
+                        id=old_entry_id,
+                        path=path.name,
+                        timestamp=target.timestamp,
+                        content_hash=content_digest(target.body),
+                    ),
+                    *(additional_evidence_refs or []),
+                ]
+            )
+            if existing_replacement.evidence_refs != expected_sources:
+                raise ValueError(
+                    f"deterministic replacement {new_entry_id} provenance changed"
+                )
+            prefix = _ensure_prefix(name)
+            fts.mark_superseded(
+                conn,
+                old_entry_id,
+                path=path.name,
+                prefix=prefix,
+                timestamp=target.timestamp,
+                tags=" ".join(target.tags),
+                content=entry_index_content(target),
+            )
+            fts.insert_entry(
+                conn,
+                id=existing_replacement.id,
+                path=path.name,
+                prefix=prefix,
+                timestamp=existing_replacement.timestamp,
+                tags=" ".join(existing_replacement.tags),
+                content=entry_index_content(existing_replacement),
+                superseded=entry_index_superseded(existing_replacement),
+            )
+            provenance_store.replace_sources(
+                conn,
+                subject=EvidenceRef(
+                    kind="memory_entry",
+                    id=existing_replacement.id,
+                    path=path.name,
+                ),
+                sources=expected_sources,
+            )
+            return existing_replacement.id
+        if target.superseded_by:
+            raise ValueError(
+                f"entry {old_entry_id} is already superseded by {target.superseded_by}"
+            )
         current_source = EvidenceRef(
             kind="memory_entry",
             id=old_entry_id,
@@ -624,11 +758,14 @@ def _supersede_entry_locked(
             timestamp=target.timestamp,
             content_hash=content_digest(target.body),
         )
-        _require_live_dependency_sources(conn, [current_source])
+        _require_live_dependency_sources(
+            conn,
+            [current_source, *(additional_evidence_refs or [])],
+        )
 
         # Build replacement heading and body in the file
         ts = _now_iso_minute()
-        new_id = make_id(ts)
+        new_id = new_entry_id or make_id(ts)
 
         new_heading = files_mod.render_heading(
             timestamp=ts,
@@ -661,9 +798,12 @@ def _supersede_entry_locked(
         )
         import json
 
+        replacement_sources = _dedupe_evidence_refs(
+            [replacement_source, *(additional_evidence_refs or [])]
+        )
         provenance_payload = {
             "v": 1,
-            "sources": [replacement_source.to_dict()],
+            "sources": [source.to_dict() for source in replacement_sources],
         }
         provenance_comment = (
             "<!-- oc-provenance: "
@@ -723,7 +863,7 @@ def _supersede_entry_locked(
         provenance_store.replace_sources(
             conn,
             subject=EvidenceRef(kind="memory_entry", id=new_id, path=path.name),
-            sources=[replacement_source],
+            sources=replacement_sources,
         )
         fts.upsert_file(
             conn,
@@ -846,6 +986,23 @@ def rebuild_index(conn: sqlite3.Connection) -> tuple[int, int]:
 def _require_live_dependency_sources(conn: sqlite3.Connection, sources: list[EvidenceRef]) -> None:
     if not dependency_sources_are_live(conn, sources):
         raise ValueError("entry provenance dependency is missing or changed")
+
+
+def _dedupe_evidence_refs(sources: list[EvidenceRef]) -> list[EvidenceRef]:
+    result: list[EvidenceRef] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+    for source in sources:
+        key = (
+            source.kind,
+            source.path,
+            source.id,
+            source.timestamp,
+            source.content_hash,
+        )
+        if key not in seen:
+            seen.add(key)
+            result.append(source)
+    return result
 
 
 def dependency_sources_are_live(conn: sqlite3.Connection, sources: list[EvidenceRef]) -> bool:

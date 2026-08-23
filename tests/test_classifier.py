@@ -9,6 +9,7 @@ from typing import Any
 from openchronicle import config as config_mod
 from openchronicle import paths
 from openchronicle.memory_candidates import store as candidate_store
+from openchronicle.provenance import store as provenance_store
 from openchronicle.provenance.models import EvidenceRef, content_digest
 from openchronicle.store import entries as entries_mod
 from openchronicle.store import files as files_mod
@@ -341,3 +342,112 @@ def test_failed_candidate_proposal_does_not_consume_idempotency_slot(
         )
     assert "error" in rejected
     assert accepted["proposal_slot"] == 0
+
+
+def test_classifier_supersede_requires_seen_target_and_replacement_evidence(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn,
+            name="user-preferences.md",
+            description="preferences",
+            tags=["preference"],
+        )
+        entries_mod.append_entry_once(
+            conn,
+            name="user-preferences.md",
+            content="User prefers cloud tools.",
+            tags=["preference"],
+            entry_id="old-preference",
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
+        )
+        entries_mod.create_file(
+            conn,
+            name="project-new-signal.md",
+            description="new reviewed signal",
+            tags=["project"],
+        )
+        entries_mod.append_entry_once(
+            conn,
+            name="project-new-signal.md",
+            content="User explicitly changed the preference to local tools.",
+            tags=["decision"],
+            entry_id="new-signal",
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
+        )
+        state = writer_tools.CommitState(producer_run_key="supersede-run")
+        target_read = writer_tools.tool_read_memory(
+            conn,
+            cfg,
+            path="user-preferences.md",
+            state=state,
+        )
+        signal_read = writer_tools.tool_read_memory(
+            conn,
+            cfg,
+            path="project-new-signal.md",
+            state=state,
+        )
+        target_token = target_read["entries"][0]["evidence_token"]
+        signal_token = signal_read["entries"][0]["evidence_token"]
+
+        missing_target = writer_tools.tool_propose_memory_candidate(
+            conn,
+            kind="preference",
+            operation="supersede",
+            path="user-preferences.md",
+            target_entry_id="old-preference",
+            content="User prefers local tools.",
+            tags=["preference"],
+            evidence_tokens=[signal_token],
+            confidence=0.95,
+            conflict_key="tool-storage-preference",
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+        assert "must be read or searched" in missing_target["error"]
+
+        missing_replacement = writer_tools.tool_propose_memory_candidate(
+            conn,
+            kind="preference",
+            operation="supersede",
+            path="user-preferences.md",
+            target_entry_id="old-preference",
+            content="User prefers local tools.",
+            tags=["preference"],
+            evidence_tokens=[target_token],
+            confidence=0.95,
+            conflict_key="tool-storage-preference",
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+        assert "replacement fact" in missing_replacement["error"]
+
+        proposed = writer_tools.tool_propose_memory_candidate(
+            conn,
+            kind="preference",
+            operation="supersede",
+            path="user-preferences.md",
+            target_entry_id="old-preference",
+            content="User prefers local tools.",
+            tags=["preference"],
+            evidence_tokens=[target_token, signal_token],
+            confidence=0.95,
+            conflict_key="tool-storage-preference",
+            soft_limit_tokens=16_000,
+            state=state,
+        )
+        assert proposed["ok"] is True
+        candidate = candidate_store.get(conn, proposed["candidate_id"])
+        assert candidate is not None
+        assert candidate.operation == "supersede"
+        assert candidate.target_entry_id == "old-preference"
+        sources = provenance_store.direct_sources(
+            conn,
+            EvidenceRef(kind="memory_candidate", id=candidate.id),
+        )
+        assert [(source.path, source.id) for source in sources] == [
+            ("project-new-signal.md", "new-signal")
+        ]

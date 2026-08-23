@@ -95,25 +95,32 @@ provenance frame from silently turning model output into trusted local memory.
 
 ## Supersede semantics
 
-When a fact changes, the writer calls `supersede(path, old_id, new_content, reason)`:
+When a fact changes, the classifier stages a human-reviewed `supersede`
+candidate bound to the old entry ID and body hash. Approval calls the canonical
+supersede operation:
 
 1. Old entry's body is wrapped in `~~...~~`.
 2. A trailing `#superseded-by:{new_id}` tag is appended to the old heading.
 3. The old entry's FTS row gets `superseded = 1` — hidden from default search.
 4. A new entry is appended with the replacement content.
-5. The replacement embeds a provenance reference to the post-strike old entry,
-   allowing source tracing, fixed-point rebuild, and transitive purge.
+5. The replacement embeds provenance references to the post-strike old entry,
+   reviewed candidate, and evidence for the new value, allowing source tracing,
+   fixed-point rebuild, and transitive purge.
 
-Nothing is deleted. The timeline is intact, and `read_memory` / `search` with `include_superseded=true` surfaces the chain.
+Normal supersession deletes nothing. The timeline is intact, and `read_memory`
+/ `search` with `include_superseded=true` surfaces the chain. If the user later
+purges the reviewed replacement candidate, its deterministic replacement is
+deleted and the immediately preceding value becomes current again.
 
 ## Compaction
 
 When a file's entry count gets large, the writer can flag it with `flag_compact`.
-The compact stage accepts only non-empty files made entirely of explicit
-`manual-v1` entries. Automation, unmarked legacy, invalid-origin, and any
-provenance-bearing file is refused before provider egress.
+The compact stage accepts non-empty files made of explicit `manual-v1` roots
+and/or live provenance-bearing derivatives. Automation roots, unmarked legacy
+entries, invalid origins/frames, stale sources, and policy-denied branches are
+refused before provider egress.
 
-For an eligible file, the compact stage may rewrite entry bodies to preserve the
+For an eligible file, the compact stage may rewrite leaf entry bodies to preserve the
 *facts* while reducing tokens. Entry IDs, timestamps, count, order, origin
 markers, and provenance-free status must remain exact. Local frontmatter is
 authoritative and cannot be replaced by model output; only `needs_compact` is
