@@ -17,12 +17,13 @@ from ..privacy import policy as privacy_policy
 from ..privacy.egress import privacy_egress_fenced
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, content_digest, observation_digest
+from ..resume_cues import store as resume_cue_store
 from ..store import entries as entries_store
 from ..store import files as files_store
 from ..timeline import store as timeline_store
 from .context import ContextService
 
-_HASHED_KINDS = {"observation", "timeline_block", "memory_entry"}
+_HASHED_KINDS = {"observation", "timeline_block", "memory_entry", "resume_cue"}
 _WRAP_CATEGORIES = ("completed", "progressed", "open", "blocked", "needs_review")
 _PRIVATE_KEY_RE = re.compile(
     r"-----BEGIN [^-\r\n]{0,80}PRIVATE KEY-----.*?"
@@ -66,7 +67,35 @@ class EvidenceResolver:
                 return self._resolve_wrap(ref)
             if ref.kind == "daily_wrap_item":
                 return self._resolve_wrap_item(ref)
+            if ref.kind == "resume_cue":
+                return self._resolve_resume_cue(ref)
         return _resolution(ref, "unsupported")
+
+    def _resolve_resume_cue(self, ref: EvidenceRef) -> dict[str, Any]:
+        cue = resume_cue_store.get(self.conn, ref.id)
+        if cue is None:
+            physical = self.conn.execute(
+                "SELECT 1 FROM resume_cues WHERE id=? LIMIT 1",
+                (ref.id,),
+            ).fetchone()
+            return _resolution(ref, "changed" if physical else "missing")
+        status = self._hash_status(ref)
+        if status != "current" or not resume_cue_store.ref_is_current(self.conn, ref):
+            return _resolution(ref, "changed" if status == "current" else status)
+        return _resolution(
+            ref,
+            "current",
+            {
+                "type": "resume_cue",
+                "id": cue.id,
+                "status": cue.status,
+                "task_label": cue.task_label,
+                "next_step": cue.next_step,
+                "user_authored": True,
+                "created_at": cue.created_at,
+                "version": cue.version,
+            },
+        )
 
     def _resolve_observation(self, ref: EvidenceRef) -> dict[str, Any]:
         if not ref.path or Path(ref.path).name != ref.path or not ref.path.endswith(".json"):

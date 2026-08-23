@@ -14,6 +14,7 @@ import type {
   PromptRescueJobSummary,
   ReplyRescueJob,
   ReplyRescueJobSummary,
+  ResumeCue,
   ResumeOpportunity,
   ResumeProfileVersion,
   ResumePdfPreview,
@@ -222,6 +223,20 @@ export function suggestion(overrides: Partial<Suggestion> = {}): Suggestion {
     version: 1,
     detected_at: "2026-08-08T09:31:00+08:00",
     expires_at: "2026-08-08T11:31:00+08:00",
+    ...overrides,
+  };
+}
+
+export function resumeCue(overrides: Partial<ResumeCue> = {}): ResumeCue {
+  return {
+    id: "rc-1",
+    status: "parked",
+    task_label: "Migration guide",
+    next_step: "Run the example against an empty database.",
+    user_authored: true,
+    created_at: "2026-08-08T09:05:00+08:00",
+    updated_at: "2026-08-08T09:05:00+08:00",
+    version: 1,
     ...overrides,
   };
 }
@@ -760,6 +775,7 @@ export function snapshot(overrides: Partial<DesktopSnapshot> = {}): DesktopSnaps
     daily_wraps: [wrapSummary()],
     suggestions_enabled: true,
     suggestions: [suggestion()],
+    resume_cues: [resumeCue()],
     suggestion_feedback: {
       schema_version: 1,
       sample_limit: 1_000,
@@ -965,6 +981,7 @@ export function bridgeSnapshot(value: DesktopSnapshot = snapshot()) {
     suggestions_enabled: value.suggestions_enabled,
     suggestion_feedback: value.suggestion_feedback,
     suggestions: value.suggestions,
+    resume_cues: value.resume_cues,
     prompt_rescue: value.prompt_rescue,
     reply_rescue: value.reply_rescue,
     generated_at: value.generated_at,
@@ -979,6 +996,10 @@ export function bridgeCandidateGet(value: Candidate = candidateDetail()) {
 export function bridgeCandidateMutation(value: Candidate = candidateDetail()) {
   const { evidence: _evidence, content_preview: _preview, evidence_count: _count, ...candidate } = value;
   return { candidate };
+}
+
+export function bridgeResumeCueMutation(value: ResumeCue = resumeCue()) {
+  return { resume_cue: value };
 }
 
 export function bridgeSuggestionMutation(value: Suggestion = suggestion()) {

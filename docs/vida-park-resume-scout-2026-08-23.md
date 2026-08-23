@@ -142,3 +142,13 @@ The slice is accepted only if tests show:
 The slice is instrumentation-ready, not quality-complete. Field evaluation must
 separately label whether the reminder was for the intended task and whether it
 reduced recovery effort; suggestion acknowledgement alone is not that label.
+
+## Implementation update
+
+The first slice is implemented on 2026-08-23. The local store, cue evidence
+resolver, Work Resumption artifact v2, snapshot, protocol-v22 Python/Rust
+bridge, desktop form/review, structured terminal transitions, and regression
+tests follow the frozen contract above. Generic v1 Work Resumption artifacts
+remain unchanged when no eligible cue exists. Representative field evaluation,
+multiple concurrent cues, editing, and complete cue-history deletion remain
+open and are not claimed by this implementation milestone.

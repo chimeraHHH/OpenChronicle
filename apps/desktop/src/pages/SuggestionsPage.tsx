@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type { DesktopApi } from "../api";
 import type {
+  ResumeCue,
   SourceSubject,
   Suggestion,
   SuggestionDismissalReason,
@@ -15,6 +16,7 @@ interface SuggestionsPageProps {
   api: DesktopApi;
   enabled: boolean;
   feedback: SuggestionFeedbackSummary;
+  resumeCues: ResumeCue[];
   suggestions: Suggestion[];
   onChanged: () => Promise<void>;
   onOpenSource: (subject: SourceSubject) => void;
@@ -39,6 +41,7 @@ export function SuggestionsPage({
   api,
   enabled,
   feedback,
+  resumeCues,
   suggestions,
   onChanged,
   onOpenSource,
@@ -49,6 +52,8 @@ export function SuggestionsPage({
   const [dismissReason, setDismissReason] = useState<
     Exclude<SuggestionDismissalReason, "legacy_or_unspecified">
   >("not_relevant");
+  const [taskLabel, setTaskLabel] = useState("");
+  const [nextStep, setNextStep] = useState("");
 
   async function transition(
     suggestion: Suggestion,
@@ -73,6 +78,34 @@ export function SuggestionsPage({
     }
   }
 
+  async function createResumeCue() {
+    setBusyId("resume-cue-create");
+    setError("");
+    try {
+      await api.createResumeCue(taskLabel, nextStep);
+      setTaskLabel("");
+      setNextStep("");
+      await onChanged();
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  async function closeResumeCue(cue: ResumeCue, status: "resumed" | "dismissed") {
+    setBusyId(cue.id);
+    setError("");
+    try {
+      await api.transitionResumeCue(cue.id, cue.version, status);
+      await onChanged();
+    } catch (reason: unknown) {
+      setError(displayError(reason));
+    } finally {
+      setBusyId("");
+    }
+  }
+
   return (
     <main className="page" id="main-content" tabIndex={-1}>
       <header className="page-header">
@@ -89,6 +122,75 @@ export function SuggestionsPage({
       </header>
 
       {error ? <div className="global-error" role="alert"><UntrustedText>{error}</UntrustedText></div> : null}
+
+      <section className="summary-card" aria-labelledby="park-task-heading">
+        <p className="eyebrow">Explicit resumption cue</p>
+        <h2 id="park-task-heading">Park the current task</h2>
+        {resumeCues[0] ? (
+          <>
+            <p><strong><UntrustedText>{resumeCues[0].task_label}</UntrustedText></strong></p>
+            <p><UntrustedText>{resumeCues[0].next_step}</UntrustedText></p>
+            <p className="muted">
+              User-authored locally at {formatDateTime(resumeCues[0].created_at)}. It will be
+              shown only after a later verified activity gap; no same-task match is claimed.
+            </p>
+            <div className="button-row">
+              <button
+                className="button button--primary"
+                disabled={busyId === resumeCues[0].id}
+                onClick={() => void closeResumeCue(resumeCues[0]!, "resumed")}
+                type="button"
+              >
+                Mark resumed
+              </button>
+              <button
+                className="button button--ghost"
+                disabled={busyId === resumeCues[0].id}
+                onClick={() => void closeResumeCue(resumeCues[0]!, "dismissed")}
+                type="button"
+              >
+                Dismiss cue
+              </button>
+            </div>
+          </>
+        ) : (
+          <form
+            className="edit-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createResumeCue();
+            }}
+          >
+            <label>
+              Task label
+              <input
+                maxLength={120}
+                onChange={(event) => setTaskLabel(event.target.value)}
+                required
+                value={taskLabel}
+              />
+            </label>
+            <label>
+              Exact next step
+              <textarea
+                maxLength={1000}
+                onChange={(event) => setNextStep(event.target.value)}
+                required
+                rows={3}
+                value={nextStep}
+              />
+            </label>
+            <p className="muted">Stored locally as written. No model or network is used.</p>
+            <button
+              className="button button--primary"
+              disabled={busyId === "resume-cue-create"}
+              type="submit"
+            >
+              Park task
+            </button>
+          </form>
+        )}
+      </section>
 
       {enabled ? (
         <section className="summary-card" aria-labelledby="suggestion-feedback-heading">
@@ -141,6 +243,13 @@ export function SuggestionsPage({
                 <p className="muted">
                   Verified gap: {suggestion.artifact.interruption.gap_minutes} minutes
                 </p>
+                {suggestion.artifact.schema_version === 2 ? (
+                  <div className="warning-panel">
+                    <h3>User-authored parked cue</h3>
+                    <p><strong><UntrustedText>{suggestion.artifact.parked_cue.task_label}</UntrustedText></strong></p>
+                    <p><UntrustedText>{suggestion.artifact.parked_cue.next_step}</UntrustedText></p>
+                  </div>
+                ) : null}
                 <div className="warning-panel">
                   <h3>Last verified activity (untrusted text)</h3>
                   {suggestion.artifact.last_verified_state.entries.map((entry, index) => (
@@ -178,7 +287,7 @@ export function SuggestionsPage({
                     onClick={() => void transition(suggestion, "accepted", "helpful")}
                     type="button"
                   >
-                    Acknowledge only
+                    Helpful — acknowledge
                   </button>
                 </div>
                 {dismissId === suggestion.id ? (

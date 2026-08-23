@@ -21,6 +21,7 @@ import {
   bridgePromptRescueJob,
   bridgePromptRescueQueue,
   bridgeReplyRescueJob,
+  bridgeResumeCueMutation,
   bridgeReplyRescueQueue,
   bridgeSuggestionMutation,
   bridgeWrapGet,
@@ -36,12 +37,14 @@ import {
   promptRescueJob,
   replyRescueJob,
   resumeOpportunity,
+  resumeCue,
   resumePdfPreview,
   resumeProfileVersion,
   resumePreview,
   resumeProjection,
   resumeRescueState,
   resumeRewriteJob,
+  snapshot,
   suggestion,
   wrapDetail,
 } from "./fixtures";
@@ -51,8 +54,8 @@ beforeEach(() => {
 });
 
 describe("desktop bridge adapters", () => {
-  it("tracks structured suggestion feedback as bridge protocol v21", () => {
-    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(21);
+  it("tracks explicit resume cues as bridge protocol v22", () => {
+    expect(DESKTOP_BRIDGE_PROTOCOL_VERSION).toBe(22);
   });
 
   it("previews and commits revision-bound Published Memory forget", async () => {
@@ -186,6 +189,7 @@ describe("desktop bridge adapters", () => {
       acceptance_rate: 0.25,
       action_capability: "none",
     });
+    expect(result.resume_cues).toEqual([resumeCue()]);
     expect(result.timeline[0]).toMatchObject({
       id: "block-1",
       timezone: "Asia/Shanghai",
@@ -1023,6 +1027,66 @@ describe("desktop bridge adapters", () => {
       },
     });
     expect(result).toMatchObject({ status: "accepted", version: 2 });
+  });
+
+  it("creates and closes one exact user-authored resume cue", async () => {
+    const parked = resumeCue();
+    const resumed = resumeCue({ status: "resumed", version: 2 });
+    tauri.invoke
+      .mockResolvedValueOnce(bridgeResumeCueMutation(parked))
+      .mockResolvedValueOnce(bridgeResumeCueMutation(resumed));
+
+    expect(
+      await desktopApi.createResumeCue(parked.task_label, parked.next_step),
+    ).toEqual(parked);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("create_resume_cue", {
+      request: {
+        task_label: parked.task_label,
+        next_step: parked.next_step,
+      },
+    });
+
+    expect(
+      await desktopApi.transitionResumeCue(parked.id, parked.version, "resumed"),
+    ).toEqual(resumed);
+    expect(tauri.invoke).toHaveBeenLastCalledWith("transition_resume_cue", {
+      request: {
+        cue_id: parked.id,
+        expected_version: parked.version,
+        status: "resumed",
+      },
+    });
+  });
+
+  it("accepts only the closed cue-bound Work Resumption artifact", () => {
+    const base = suggestion();
+    const cue = resumeCue();
+    const cueBound = suggestion({
+      title: `Resume: ${cue.task_label}`,
+      artifact: {
+        ...base.artifact,
+        schema_version: 2,
+        recommended_next_step: cue.next_step,
+        parked_cue: {
+          id: cue.id,
+          task_label: cue.task_label,
+          next_step: cue.next_step,
+          parked_at: cue.created_at,
+          user_authored: true,
+        },
+      },
+    });
+    const raw = bridgeSnapshot(snapshot({ suggestions: [cueBound] }));
+
+    expect(normalizeSnapshot(raw).suggestions[0]?.artifact).toEqual(cueBound.artifact);
+
+    const malformed = structuredClone(raw);
+    const malformedArtifact = malformed.suggestions[0]?.artifact as unknown as Record<
+      string,
+      unknown
+    >;
+    malformedArtifact.unknown = true;
+    expect(() => normalizeSnapshot(malformed)).toThrowError(DesktopApiError);
   });
 
   it("unwraps candidate reads and keeps their direct evidence", async () => {

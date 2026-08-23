@@ -2007,6 +2007,87 @@ def test_suggestion_snapshot_transition_and_provenance_are_exact_and_cas_bound(
     assert conflict["error"]["code"] == "VERSION_CONFLICT"
 
 
+def test_resume_cue_create_snapshot_and_terminal_transition_are_cas_bound(
+    ac_root: Path,
+) -> None:
+    created, created_code = _request(
+        "resume_cue.create",
+        {
+            "task_label": "Migration guide",
+            "next_step": "Run the example against an empty database.",
+        },
+    )
+
+    assert created_code == 0
+    cue = created["result"]["resume_cue"]
+    assert cue == {
+        "id": cue["id"],
+        "status": "parked",
+        "task_label": "Migration guide",
+        "next_step": "Run the example against an empty database.",
+        "user_authored": True,
+        "created_at": cue["created_at"],
+        "updated_at": cue["created_at"],
+        "version": 1,
+    }
+
+    duplicate, duplicate_code = _request(
+        "resume_cue.create",
+        {"task_label": "Second task", "next_step": "This active slot is occupied."},
+    )
+    assert duplicate_code == 2
+    assert duplicate["error"]["code"] == "VERSION_CONFLICT"
+
+    snapshot, snapshot_code = _request(
+        "snapshot",
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "memory_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 0,
+            "prompt_rescue_limit": 0,
+            "reply_rescue_limit": 0,
+        },
+    )
+    assert snapshot_code == 0
+    assert snapshot["result"]["resume_cues"] == [cue]
+
+    resumed, resumed_code = _request(
+        "resume_cue.transition",
+        {"cue_id": cue["id"], "expected_version": 1, "status": "resumed"},
+    )
+    assert resumed_code == 0
+    assert resumed["result"]["resume_cue"] == {
+        **cue,
+        "status": "resumed",
+        "updated_at": resumed["result"]["resume_cue"]["updated_at"],
+        "version": 2,
+    }
+
+    conflict, conflict_code = _request(
+        "resume_cue.transition",
+        {"cue_id": cue["id"], "expected_version": 1, "status": "dismissed"},
+    )
+    assert conflict_code == 2
+    assert conflict["error"]["code"] == "VERSION_CONFLICT"
+
+    after, after_code = _request(
+        "snapshot",
+        {
+            "timeline_limit": 0,
+            "candidate_limit": 0,
+            "memory_limit": 0,
+            "wrap_limit": 0,
+            "suggestion_limit": 0,
+            "prompt_rescue_limit": 0,
+            "reply_rescue_limit": 0,
+        },
+    )
+    assert after_code == 0
+    assert after["result"]["resume_cues"] == []
+
+
 @pytest.mark.parametrize("invalidate", ["policy", "disabled"])
 def test_suggestion_endpoints_fail_closed_when_authority_is_revoked(
     ac_root: Path,

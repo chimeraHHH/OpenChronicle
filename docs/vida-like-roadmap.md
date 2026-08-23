@@ -226,6 +226,13 @@ privacy UX is validated on a signed macOS build.
   breakpoint gate and invalidates a prepared card after any newer durable
   capture. This is a timing safety milestone, not proof that the active-
   conversation quality failure is solved.
+- [x] Explicit park/resume cue: one immutable user-authored task label and next
+  step, local projection digest, single-active-cue constraint, CAS
+  resumed/dismissed transitions, strict protocol-v22 desktop review, and exact
+  cue-plus-timeline suggestion evidence. It uses no model or network and does
+  not infer that later activity belongs to the parked task. The research and
+  falsification contract are recorded in
+  [vida-park-resume-scout-2026-08-23.md](vida-park-resume-scout-2026-08-23.md).
 - [ ] Privacy-filtered real-time detector path independent of the minute
   timeline. The first Work Resumption slice intentionally consumes verified
   timeline blocks and therefore does not satisfy this item.
@@ -431,9 +438,10 @@ action needs a verified postcondition.
 7. Native review inbox, permissions shell, and source drawer. **Source slice
    implemented; signed macOS release validation remains.**
 8. Side-effect-free Suggestion Kernel and Work Resumption. **The first local,
-   opt-in vertical slice is implemented and cross-stack tested; proactive
-   fixture baselines, the independent real-time path, packaged UX acceptance,
-   and the remaining Vida workflows are still open.**
+   opt-in vertical slice and explicit user-authored park/resume cue are
+   implemented and cross-stack tested; proactive fixture baselines, the
+   independent real-time path, packaged UX acceptance, and the remaining Vida
+   workflows are still open.**
 
 Generic planning, connectors, and action execution intentionally start only
 after the earlier gates pass.

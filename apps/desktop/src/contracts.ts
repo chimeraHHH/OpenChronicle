@@ -11,9 +11,9 @@ export type PageId =
   | "privacy";
 
 // Rust owns the sidecar envelope, while these types own the corresponding
-// WebView result projection. Version 21 adds structured suggestion feedback
-// and a content-free local outcome summary.
-export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 21 as const;
+// WebView result projection. Version 22 adds explicit user-authored task
+// parking cues and cue-bound Work Resumption artifacts.
+export const DESKTOP_BRIDGE_PROTOCOL_VERSION = 22 as const;
 
 export type PromptRescueStatus = "queued" | "leased" | "ready" | "failed";
 export type PromptRescueProviderLocation = "local" | "remote_or_unknown";
@@ -622,8 +622,7 @@ export type SuggestionStatus =
   | "dismissed"
   | "expired";
 
-export interface WorkResumptionArtifact {
-  schema_version: 1;
+interface WorkResumptionArtifactBase {
   workflow: "work_resumption";
   action_capability: "none";
   interruption: {
@@ -642,6 +641,38 @@ export interface WorkResumptionArtifact {
     apps: string[];
   };
   recommended_next_step: string;
+}
+
+export interface GenericWorkResumptionArtifact extends WorkResumptionArtifactBase {
+  schema_version: 1;
+}
+
+export interface CueBoundWorkResumptionArtifact extends WorkResumptionArtifactBase {
+  schema_version: 2;
+  parked_cue: {
+    id: string;
+    task_label: string;
+    next_step: string;
+    parked_at: string;
+    user_authored: true;
+  };
+}
+
+export type WorkResumptionArtifact =
+  | GenericWorkResumptionArtifact
+  | CueBoundWorkResumptionArtifact;
+
+export type ResumeCueStatus = "parked" | "resumed" | "dismissed";
+
+export interface ResumeCue {
+  id: string;
+  status: ResumeCueStatus;
+  task_label: string;
+  next_step: string;
+  user_authored: true;
+  created_at: string;
+  updated_at: string;
+  version: number;
 }
 
 export interface Suggestion {
@@ -925,6 +956,7 @@ export interface DesktopSnapshot {
   daily_wraps: DailyWrapSummary[];
   suggestions_enabled: boolean;
   suggestions: Suggestion[];
+  resume_cues: ResumeCue[];
   suggestion_feedback: SuggestionFeedbackSummary;
   prompt_rescue: PromptRescueSnapshot;
   reply_rescue: ReplyRescueSnapshot;

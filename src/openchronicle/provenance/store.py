@@ -286,6 +286,10 @@ def availability(conn: sqlite3.Connection, ref: EvidenceRef) -> str:
         from ..resume_rescue import review_store
 
         return "available" if review_store.get(conn, ref.id) else "missing"
+    if ref.kind == "resume_cue":
+        from ..resume_cues import store as resume_cue_store
+
+        return "available" if resume_cue_store.get(conn, ref.id) else "missing"
     return "unknown"
 
 
@@ -382,6 +386,11 @@ def current_content_hash(conn: sqlite3.Connection, ref: EvidenceRef) -> str | No
 
         row = review_store.get(conn, ref.id)
         return row.artifact_digest if row is not None else None
+    if ref.kind == "resume_cue":
+        from ..resume_cues import store as resume_cue_store
+
+        row = resume_cue_store.get(conn, ref.id)
+        return row.projection_digest if row is not None else None
     return None
 
 

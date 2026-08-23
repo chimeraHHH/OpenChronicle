@@ -15,6 +15,7 @@ from ..local_time import local_timezone
 from ..privacy import policy as privacy_policy
 from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef, canonical_digest
+from ..resume_cues import store as resume_cue_store
 from ..services.context import ContextService
 from . import store
 
@@ -231,7 +232,12 @@ class SuggestionKernel:
 
     def _evidence_allowed(self, evidence: list[EvidenceRef]) -> bool:
         context = ContextService(self.conn, self.cfg)
-        return bool(evidence) and all(context.evidence_allowed(source) for source in evidence)
+        return bool(evidence) and all(
+            resume_cue_store.ref_is_current(self.conn, source)
+            if source.kind == "resume_cue"
+            else context.evidence_allowed(source)
+            for source in evidence
+        )
 
     def _expire_if_active(self, suggestion: store.Suggestion, reason: str) -> None:
         if suggestion.status not in store.ACTIVE_STATUSES:
@@ -339,13 +345,27 @@ def _validate_proposal(proposal: SuggestionProposal, *, now: datetime) -> None:
     ):
         raise ValueError("invalid suggestion proposal")
     _validate_work_resumption_artifact(proposal.artifact)
+    cue_sources = [source for source in proposal.evidence if source.kind == "resume_cue"]
+    if proposal.artifact["schema_version"] == 1:
+        if cue_sources:
+            raise ValueError("generic work resumption cannot bind a resume cue")
+    else:
+        parked = proposal.artifact["parked_cue"]
+        if (
+            len(cue_sources) != 1
+            or cue_sources[0].path
+            or cue_sources[0].id != parked["id"]
+            or cue_sources[0].timestamp != parked["parked_at"]
+            or not cue_sources[0].content_hash
+        ):
+            raise ValueError("parked resume cue evidence does not match artifact")
     expires = _aware(proposal.expires_at)
     if expires <= now or expires - now > timedelta(days=1):
         raise ValueError("suggestion expiry is invalid")
 
 
 def _validate_work_resumption_artifact(artifact: dict[str, Any]) -> None:
-    if set(artifact) != {
+    base_fields = {
         "schema_version",
         "workflow",
         "action_capability",
@@ -353,16 +373,48 @@ def _validate_work_resumption_artifact(artifact: dict[str, Any]) -> None:
         "last_verified_state",
         "resumption_signal",
         "recommended_next_step",
-    }:
+    }
+    version = artifact.get("schema_version")
+    if type(version) is not int or version not in {1, 2}:
         raise ValueError("invalid work resumption artifact")
-    if (
-        type(artifact["schema_version"]) is not int
-        or artifact["schema_version"] != 1
-        or artifact["workflow"] != "work_resumption"
-        or artifact["action_capability"] != "none"
-        or artifact["recommended_next_step"] != WORK_RESUMPTION_NEXT_STEP
-    ):
+    expected_fields = base_fields | ({"parked_cue"} if version == 2 else set())
+    if set(artifact) != expected_fields:
         raise ValueError("invalid work resumption artifact")
+    if artifact["workflow"] != "work_resumption" or artifact["action_capability"] != "none":
+        raise ValueError("invalid work resumption artifact")
+    if version == 1:
+        if artifact["recommended_next_step"] != WORK_RESUMPTION_NEXT_STEP:
+            raise ValueError("invalid work resumption artifact")
+    else:
+        parked = artifact["parked_cue"]
+        if not isinstance(parked, dict) or set(parked) != {
+            "id",
+            "task_label",
+            "next_step",
+            "parked_at",
+            "user_authored",
+        }:
+            raise ValueError("invalid parked resume cue artifact")
+        if (
+            not isinstance(parked["id"], str)
+            or not parked["id"].startswith("rc-")
+            or len(parked["id"]) > 128
+            or not isinstance(parked["task_label"], str)
+            or not parked["task_label"].strip()
+            or len(parked["task_label"]) > 120
+            or not isinstance(parked["next_step"], str)
+            or not parked["next_step"].strip()
+            or len(parked["next_step"]) > 1_000
+            or artifact["recommended_next_step"] != parked["next_step"]
+            or parked["user_authored"] is not True
+            or not isinstance(parked["parked_at"], str)
+            or any(
+                "\x00" in value
+                for value in (parked["id"], parked["task_label"], parked["next_step"])
+            )
+        ):
+            raise ValueError("invalid parked resume cue artifact")
+        _aware(datetime.fromisoformat(parked["parked_at"]))
 
     interruption = artifact["interruption"]
     if not isinstance(interruption, dict) or set(interruption) != {

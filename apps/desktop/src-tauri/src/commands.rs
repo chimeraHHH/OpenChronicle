@@ -30,6 +30,7 @@ const MAX_CANDIDATE_ITEMS: usize = 100;
 const MAX_MEMORY_ITEMS: usize = 250;
 const MAX_WRAP_ITEMS: usize = 30;
 const MAX_SUGGESTION_ITEMS: usize = 50;
+const MAX_RESUME_CUE_LABEL_CHARS: usize = 120;
 const MAX_PROMPT_RESCUE_ITEMS: usize = 50;
 const MAX_PROMPT_RESCUE_INPUT_CHARS: usize = 20_000;
 const MAX_PROMPT_RESCUE_OUTPUT_CHARS: usize = 30_000;
@@ -362,6 +363,21 @@ pub(crate) struct SuggestionTransitionRequest {
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeCueCreateRequest {
+    pub task_label: String,
+    pub next_step: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ResumeCueTransitionRequest {
+    pub cue_id: String,
+    pub expected_version: u64,
+    pub status: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1047,6 +1063,26 @@ pub async fn transition_suggestion(
         validate_multiline_text(reason, MAX_REASON_CHARS, true)?;
     }
     invoke(Operation::SuggestionTransition, &request).await
+}
+
+#[tauri::command]
+pub async fn create_resume_cue(request: ResumeCueCreateRequest) -> Result<Value, DesktopError> {
+    validate_bounded_text(&request.task_label, MAX_RESUME_CUE_LABEL_CHARS, false)?;
+    validate_multiline_text(&request.next_step, MAX_REASON_CHARS, false)?;
+    invoke(Operation::ResumeCueCreate, &request).await
+}
+
+#[tauri::command]
+pub async fn transition_resume_cue(
+    request: ResumeCueTransitionRequest,
+) -> Result<Value, DesktopError> {
+    validate_candidate_id(&request.cue_id)?;
+    if !matches!(request.status.as_str(), "resumed" | "dismissed") {
+        return Err(DesktopError::invalid_request(
+            "The parked task transition is unavailable.",
+        ));
+    }
+    invoke(Operation::ResumeCueTransition, &request).await
 }
 
 #[tauri::command]

@@ -14,6 +14,8 @@ from openchronicle.provenance.models import (
     observation_digest,
     timeline_block_digest,
 )
+from openchronicle.resume_cues import store as resume_cue_store
+from openchronicle.services.evidence import EvidenceResolver
 from openchronicle.store import fts
 from openchronicle.suggestions import service as suggestion_service
 from openchronicle.suggestions import store as suggestion_store
@@ -203,6 +205,147 @@ def test_work_resumption_emits_one_evidence_bound_side_effect_free_card(
         assert not replay.emitted and replay.reason == "replay"
         assert replay.suggestion == first.suggestion
         assert len(suggestion_store.list_suggestions(conn)) == 1
+
+
+def test_user_parked_cue_is_exact_evidence_for_the_next_return(ac_root: Path) -> None:
+    cfg = _config()
+    previous_start = datetime(2026, 8, 23, 10, 0, tzinfo=UTC)
+    current_start = datetime(2026, 8, 23, 10, 31, tzinfo=UTC)
+    now = datetime(2026, 8, 23, 10, 33, tzinfo=UTC)
+    with fts.cursor() as conn:
+        previous, _previous_ref = _live_block(
+            conn,
+            cfg,
+            block_id="tlb-cue-before-gap",
+            start=previous_start,
+            text="State before the interruption",
+        )
+        current, current_ref = _live_block(
+            conn,
+            cfg,
+            block_id="tlb-cue-after-gap",
+            start=current_start,
+            text="New activity after returning",
+        )
+        cue = resume_cue_store.create(
+            conn,
+            task_label="Migration guide",
+            next_step="Run the example against an empty database.",
+            now=previous_start + timedelta(minutes=5),
+        )
+
+        decision = WorkResumptionService(conn, cfg).scan(now=now)
+
+        assert decision.emitted
+        assert decision.suggestion is not None
+        assert decision.suggestion.title == "Resume: Migration guide"
+        assert decision.suggestion.score == 1.0
+        assert decision.suggestion.artifact == {
+            "schema_version": 2,
+            "workflow": "work_resumption",
+            "action_capability": "none",
+            "interruption": {
+                "previous_end": previous.end_time.isoformat(),
+                "current_start": current.start_time.isoformat(),
+                "gap_minutes": 30.0,
+            },
+            "last_verified_state": {
+                "untrusted_activity_quote": True,
+                "entries": ["State before the interruption"],
+                "apps": ["Editor"],
+            },
+            "resumption_signal": {
+                "untrusted_activity_quote": True,
+                "entries": ["New activity after returning"],
+                "apps": ["Editor"],
+            },
+            "recommended_next_step": "Run the example against an empty database.",
+            "parked_cue": {
+                "id": cue.id,
+                "task_label": "Migration guide",
+                "next_step": "Run the example against an empty database.",
+                "parked_at": cue.created_at,
+                "user_authored": True,
+            },
+        }
+        sources = provenance_store.direct_sources(
+            conn,
+            EvidenceRef(kind="suggestion", id=decision.suggestion.id),
+        )
+        assert [(source.kind, source.id) for source in sources] == [
+            ("timeline_block", previous.id),
+            ("timeline_block", current.id),
+            ("resume_cue", cue.id),
+        ]
+        resolved = EvidenceResolver(conn, cfg).resolve(resume_cue_store.evidence_ref(cue))
+        assert resolved["status"] == "current"
+        assert resolved["content"]["next_step"] == cue.next_step
+        assert resolved["content"]["user_authored"] is True
+
+        with pytest.raises(ValueError, match="evidence does not match"):
+            SuggestionKernel(conn, cfg).emit(
+                SuggestionProposal(
+                    semantic_key="invalid-unbound-cue",
+                    workflow="work_resumption",
+                    title=decision.suggestion.title,
+                    summary=decision.suggestion.summary,
+                    artifact=decision.suggestion.artifact,
+                    evidence=(current_ref,),
+                    score=1.0,
+                    expires_at=now + timedelta(hours=1),
+                ),
+                now=now,
+            )
+
+        resume_cue_store.transition(
+            conn,
+            cue_id=cue.id,
+            expected_version=cue.version,
+            to_status="resumed",
+            now=now,
+        )
+        assert SuggestionKernel(conn, cfg).list_visible(now=now) == []
+        expired = suggestion_store.get(conn, decision.suggestion.id)
+        assert expired is not None
+        assert expired.status == "expired"
+        assert expired.feedback_reason == "evidence_invalidated"
+
+
+def test_cue_parked_after_return_started_is_not_retroactively_attached(
+    ac_root: Path,
+) -> None:
+    cfg = _config()
+    previous_start = datetime(2026, 8, 23, 11, 0, tzinfo=UTC)
+    current_start = datetime(2026, 8, 23, 11, 31, tzinfo=UTC)
+    now = datetime(2026, 8, 23, 11, 33, tzinfo=UTC)
+    with fts.cursor() as conn:
+        _live_block(
+            conn,
+            cfg,
+            block_id="tlb-late-cue-before-gap",
+            start=previous_start,
+            text="Work before leaving",
+        )
+        _live_block(
+            conn,
+            cfg,
+            block_id="tlb-late-cue-after-gap",
+            start=current_start,
+            text="Work after returning",
+        )
+        resume_cue_store.create(
+            conn,
+            task_label="Too late",
+            next_step="Do not attach this to an earlier return.",
+            now=current_start + timedelta(minutes=1),
+        )
+
+        decision = WorkResumptionService(conn, cfg).scan(now=now)
+
+        assert decision.suggestion is not None
+        assert decision.suggestion.title == "Resume your recent work"
+        assert decision.suggestion.artifact["schema_version"] == 1
+        assert "parked_cue" not in decision.suggestion.artifact
 
 
 def test_no_work_resumption_card_is_emitted_while_user_is_still_away(

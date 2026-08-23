@@ -39,6 +39,8 @@ pub fn run() {
             commands::forget_candidate,
             commands::get_daily_wrap,
             commands::transition_suggestion,
+            commands::create_resume_cue,
+            commands::transition_resume_cue,
             commands::get_prompt_rescue,
             commands::queue_prompt_rescue,
             commands::edit_prompt_rescue,

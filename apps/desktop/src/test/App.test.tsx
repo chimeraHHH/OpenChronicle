@@ -22,6 +22,7 @@ import {
   bridgePromptRescueQueue,
   bridgeReplyRescueJob,
   bridgeReplyRescueQueue,
+  bridgeResumeCueMutation,
   bridgeSnapshot,
   bridgeSuggestionMutation,
   bridgeWrapGet,
@@ -40,6 +41,7 @@ import {
   replyRescueJob,
   replyRescueSummary,
   resumeOpportunity,
+  resumeCue,
   resumePdfPreview,
   resumeProfileVersion,
   resumePreview,
@@ -77,6 +79,10 @@ function commandResult(command: string) {
         revision: "f".repeat(64),
       }),
     };
+  }
+  if (command === "create_resume_cue") return bridgeResumeCueMutation();
+  if (command === "transition_resume_cue") {
+    return bridgeResumeCueMutation(resumeCue({ status: "resumed", version: 2 }));
   }
   if (command === "preview_forget_published_memory") return memoryForgetPreview();
   if (command === "forget_published_memory") {
@@ -883,7 +889,7 @@ describe("trusted console", () => {
     expect(screen.getByText(/cannot type, paste, send, or run tools/i)).toBeInTheDocument();
     expect(screen.getByText("Reviewed the trusted console implementation.").closest("bdi")).not.toBeNull();
 
-    await user.click(screen.getByRole("button", { name: "Acknowledge only" }));
+    await user.click(screen.getByRole("button", { name: "Helpful — acknowledge" }));
     await waitFor(() =>
       expect(tauri.invoke).toHaveBeenCalledWith("transition_suggestion", {
         request: {
@@ -897,6 +903,62 @@ describe("trusted console", () => {
     expect(
       tauri.invoke.mock.calls.some(([command]) =>
         ["approve_candidate", "set_capture_paused"].includes(command),
+      ),
+    ).toBe(false);
+  });
+
+  it("shows the exact parked cue and closes it only through an explicit CAS", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Suggestions" }));
+    expect(screen.getByRole("heading", { name: "Park the current task" })).toBeInTheDocument();
+    expect(screen.getByText("Migration guide")).toBeInTheDocument();
+    expect(screen.getByText("Run the example against an empty database.")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Mark resumed" }));
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("transition_resume_cue", {
+        request: {
+          cue_id: "rc-1",
+          expected_version: 1,
+          status: "resumed",
+        },
+      }),
+    );
+  });
+
+  it("parks one exact next step without invoking a model", async () => {
+    const user = userEvent.setup();
+    tauri.invoke.mockImplementation(async (command: string) => {
+      if (command === "get_snapshot") {
+        return bridgeSnapshot(snapshot({ resume_cues: [] }));
+      }
+      return commandResult(command);
+    });
+    render(<App />);
+
+    await user.click(await screen.findByRole("button", { name: "Suggestions" }));
+    await user.type(screen.getByRole("textbox", { name: "Task label" }), "Release notes");
+    await user.type(
+      screen.getByRole("textbox", { name: "Exact next step" }),
+      "Verify the migration example.",
+    );
+    await user.click(screen.getByRole("button", { name: "Park task" }));
+
+    await waitFor(() =>
+      expect(tauri.invoke).toHaveBeenCalledWith("create_resume_cue", {
+        request: {
+          task_label: "Release notes",
+          next_step: "Verify the migration example.",
+        },
+      }),
+    );
+    expect(
+      tauri.invoke.mock.calls.some(([command]) =>
+        ["queue_prompt_rescue", "queue_reply_rescue", "queue_resume_rescue_rewrite"].includes(
+          command,
+        ),
       ),
     ).toBe(false);
   });

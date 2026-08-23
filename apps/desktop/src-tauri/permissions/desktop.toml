@@ -33,6 +33,8 @@ permissions = [
   "allow-forget-candidate",
   "allow-set-capture-paused",
   "allow-transition-suggestion",
+  "allow-create-resume-cue",
+  "allow-transition-resume-cue",
   "allow-queue-prompt-rescue",
   "allow-edit-prompt-rescue",
   "allow-retry-prompt-rescue",

@@ -34,14 +34,14 @@ Depending on a GUI user's shell `PATH`, Python, or `uv` is not a release path.
 
 ## Exposed product operations
 
-The bridge protocol is versioned and allowlisted. Protocol **v21** cumulatively
+The bridge protocol is versioned and allowlisted. Protocol **v22** cumulatively
 includes immutable Daily Wrap reads, side-effect-free suggestions, Prompt and
 Reply Rescue review, exact-selection receipts, reviewed résumé source/import
 flows, deterministic preview/export, supervised résumé proposal review, a
 bounded typed current-fact snapshot, explicit local current-memory export, and
 revision-bound direct correction with retained history, plus two-phase complete
-fact-lineage forget, structured suggestion feedback, and a content-free local
-outcome summary.
+fact-lineage forget, structured suggestion feedback, a content-free local
+outcome summary, and exact user-authored task parking cues.
 Older requests or
 responses fail closed as unsupported protocol envelopes. The shell exposes
 only:
@@ -59,6 +59,9 @@ only:
   Published Memory fact, with a version- and closure-bound plan digest;
 - exact Daily Wrap reads;
 - bounded Work Resumption cards with acknowledgement/dismissal only;
+- one immutable user-authored parked-task cue with explicit resumed/dismissed
+  CAS transitions; an eligible cue is exact evidence for a later gap-based
+  reminder and does not claim the later activity is the same task;
 - structured helpful/not-relevant/wrong-timing/already-resolved/too-vague/other
   feedback and deterministic local aggregation; the summary is not treated as
   an independent quality score;

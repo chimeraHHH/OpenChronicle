@@ -35,6 +35,8 @@ import type {
   ReplyRescueSource,
   ReplyRescueSourceKind,
   ReplyRescueStatus,
+  ResumeCue,
+  ResumeCueStatus,
   ResumeConfidentiality,
   ResumeConflict,
   ResumeDocxExportResult,
@@ -102,6 +104,7 @@ const suggestionStatuses = new Set<SuggestionStatus>([
   "dismissed",
   "expired",
 ]);
+const resumeCueStatuses = new Set<ResumeCueStatus>(["parked", "resumed", "dismissed"]);
 const promptRescueStatuses = new Set<PromptRescueStatus>([
   "queued",
   "leased",
@@ -460,20 +463,49 @@ function memorySummary(value: unknown): MemorySummary {
 
 function workResumptionSuggestion(value: unknown): Suggestion {
   const raw = objectValue(value, "suggestion payload");
-  const artifact = objectValue(raw.artifact, "suggestion artifact");
+  const artifactValue = objectValue(raw.artifact, "suggestion artifact");
+  const schemaVersion = numberValue(
+    artifactValue.schema_version,
+    "suggestion artifact version",
+  );
+  if (schemaVersion !== 1 && schemaVersion !== 2) {
+    return protocolError("suggestion artifact contract");
+  }
+  const artifact = closedObject(
+    artifactValue,
+    [
+      "schema_version",
+      "workflow",
+      "action_capability",
+      "interruption",
+      "last_verified_state",
+      "resumption_signal",
+      "recommended_next_step",
+      ...(schemaVersion === 2 ? ["parked_cue"] : []),
+    ],
+    "suggestion artifact contract",
+  );
   if (
-    numberValue(artifact.schema_version, "suggestion artifact version") !== 1 ||
     stringValue(artifact.workflow, "suggestion artifact workflow") !== "work_resumption" ||
     stringValue(artifact.action_capability, "suggestion action capability") !== "none"
   ) {
     return protocolError("suggestion artifact contract");
   }
-  const interruption = objectValue(artifact.interruption, "suggestion interruption");
-  const previous = objectValue(
+  const interruption = closedObject(
+    artifact.interruption,
+    ["previous_end", "current_start", "gap_minutes"],
+    "suggestion interruption",
+  );
+  const previous = closedObject(
     artifact.last_verified_state,
+    ["untrusted_activity_quote", "entries", "apps"],
     "suggestion last verified state",
   );
-  const current = objectValue(artifact.resumption_signal, "suggestion resumption signal");
+  const current = closedObject(
+    artifact.resumption_signal,
+    ["untrusted_activity_quote", "entries", "apps"],
+    "suggestion resumption signal",
+  );
   if (
     booleanValue(previous.untrusted_activity_quote, "suggestion previous trust marker") !== true ||
     booleanValue(current.untrusted_activity_quote, "suggestion current trust marker") !== true
@@ -483,41 +515,130 @@ function workResumptionSuggestion(value: unknown): Suggestion {
   const workflow = stringValue(raw.workflow, "suggestion workflow");
   if (workflow !== "work_resumption") return protocolError("suggestion workflow");
   const feedbackReason = optionalString(raw.feedback_reason, "suggestion feedback");
+  const recommendedNextStep = stringValue(
+    artifact.recommended_next_step,
+    "suggestion next step",
+  );
+  const baseArtifact = {
+    workflow: "work_resumption" as const,
+    action_capability: "none" as const,
+    interruption: {
+      previous_end: stringValue(interruption.previous_end, "suggestion previous end"),
+      current_start: stringValue(interruption.current_start, "suggestion current start"),
+      gap_minutes: numberValue(interruption.gap_minutes, "suggestion gap"),
+    },
+    last_verified_state: {
+      untrusted_activity_quote: true as const,
+      entries: stringArray(previous.entries, "suggestion previous entries"),
+      apps: stringArray(previous.apps, "suggestion previous apps"),
+    },
+    resumption_signal: {
+      untrusted_activity_quote: true as const,
+      entries: stringArray(current.entries, "suggestion current entries"),
+      apps: stringArray(current.apps, "suggestion current apps"),
+    },
+    recommended_next_step: recommendedNextStep,
+  };
+  let normalizedArtifact: Suggestion["artifact"];
+  if (schemaVersion === 1) {
+    normalizedArtifact = { schema_version: 1, ...baseArtifact };
+  } else {
+    const parked = closedObject(
+      artifact.parked_cue,
+      ["id", "task_label", "next_step", "parked_at", "user_authored"],
+      "parked resume cue artifact",
+    );
+    const nextStep = stringValue(parked.next_step, "parked resume cue next step");
+    const cueId = stringValue(parked.id, "parked resume cue id");
+    const taskLabel = stringValue(parked.task_label, "parked resume cue task label");
+    const parkedAt = stringValue(parked.parked_at, "parked resume cue time");
+    if (
+      booleanValue(parked.user_authored, "parked resume cue authorship") !== true ||
+      nextStep !== recommendedNextStep ||
+      !cueId.startsWith("rc-") ||
+      cueId.length > 128 ||
+      !taskLabel.trim() ||
+      taskLabel.length > 120 ||
+      !nextStep.trim() ||
+      nextStep.length > 1_000 ||
+      !parkedAt
+    ) {
+      return protocolError("parked resume cue artifact");
+    }
+    normalizedArtifact = {
+      schema_version: 2,
+      ...baseArtifact,
+      parked_cue: {
+        id: cueId,
+        task_label: taskLabel,
+        next_step: nextStep,
+        parked_at: parkedAt,
+        user_authored: true,
+      },
+    };
+  }
   return {
     id: stringValue(raw.id, "suggestion id"),
     workflow,
     status: allowedString(raw.status, suggestionStatuses, "suggestion status"),
     title: stringValue(raw.title, "suggestion title"),
     summary: stringValue(raw.summary, "suggestion summary"),
-    artifact: {
-      schema_version: 1,
-      workflow: "work_resumption",
-      action_capability: "none",
-      interruption: {
-        previous_end: stringValue(interruption.previous_end, "suggestion previous end"),
-        current_start: stringValue(interruption.current_start, "suggestion current start"),
-        gap_minutes: numberValue(interruption.gap_minutes, "suggestion gap"),
-      },
-      last_verified_state: {
-        untrusted_activity_quote: true,
-        entries: stringArray(previous.entries, "suggestion previous entries"),
-        apps: stringArray(previous.apps, "suggestion previous apps"),
-      },
-      resumption_signal: {
-        untrusted_activity_quote: true,
-        entries: stringArray(current.entries, "suggestion current entries"),
-        apps: stringArray(current.apps, "suggestion current apps"),
-      },
-      recommended_next_step: stringValue(
-        artifact.recommended_next_step,
-        "suggestion next step",
-      ),
-    },
+    artifact: normalizedArtifact,
     score: numberValue(raw.score, "suggestion score"),
     version: numberValue(raw.version, "suggestion version"),
     detected_at: stringValue(raw.detected_at, "suggestion detected time"),
     expires_at: stringValue(raw.expires_at, "suggestion expiry"),
     ...(feedbackReason === undefined ? {} : { feedback_reason: feedbackReason }),
+  };
+}
+
+function resumeCue(value: unknown): ResumeCue {
+  const raw = closedObject(
+    value,
+    [
+      "id",
+      "status",
+      "task_label",
+      "next_step",
+      "user_authored",
+      "created_at",
+      "updated_at",
+      "version",
+    ],
+    "resume cue",
+  );
+  if (booleanValue(raw.user_authored, "resume cue authorship") !== true) {
+    return protocolError("resume cue authorship");
+  }
+  const id = stringValue(raw.id, "resume cue id");
+  const taskLabel = stringValue(raw.task_label, "resume cue task label");
+  const nextStep = stringValue(raw.next_step, "resume cue next step");
+  const createdAt = stringValue(raw.created_at, "resume cue creation time");
+  const updatedAt = stringValue(raw.updated_at, "resume cue update time");
+  const version = numberValue(raw.version, "resume cue version");
+  if (
+    !id.startsWith("rc-") ||
+    id.length > 128 ||
+    !taskLabel.trim() ||
+    taskLabel.length > 120 ||
+    !nextStep.trim() ||
+    nextStep.length > 1_000 ||
+    !createdAt ||
+    !updatedAt ||
+    !Number.isInteger(version) ||
+    version < 1
+  ) {
+    return protocolError("resume cue contract");
+  }
+  return {
+    id,
+    status: allowedString(raw.status, resumeCueStatuses, "resume cue status"),
+    task_label: taskLabel,
+    next_step: nextStep,
+    user_authored: true,
+    created_at: createdAt,
+    updated_at: updatedAt,
+    version,
   };
 }
 
@@ -2760,6 +2881,10 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
   const suggestions = arrayValue(raw.suggestions, "suggestion summaries").map(
     workResumptionSuggestion,
   );
+  const resumeCues = arrayValue(raw.resume_cues, "resume cues").map(resumeCue);
+  if (resumeCues.length > 1 || resumeCues.some((cue) => cue.status !== "parked")) {
+    return protocolError("active resume cues");
+  }
   const suggestionFeedback = suggestionFeedbackSummary(raw.suggestion_feedback);
   const running = booleanValue(daemon.running, "daemon running state");
   const paused = booleanValue(capture.paused, "capture paused state");
@@ -2846,6 +2971,7 @@ export function normalizeSnapshot(value: unknown): DesktopSnapshot {
       "suggestions enabled state",
     ),
     suggestions,
+    resume_cues: resumeCues,
     suggestion_feedback: suggestionFeedback,
     prompt_rescue: {
       enabled: booleanValue(promptRescue.enabled, "Prompt Rescue enabled state"),
@@ -3130,6 +3256,11 @@ export function normalizePauseResult(value: unknown): { paused: boolean; changed
 export function normalizeSuggestionMutation(value: unknown): Suggestion {
   const raw = objectValue(value, "suggestion response");
   return workResumptionSuggestion(raw.suggestion);
+}
+
+export function normalizeResumeCueMutation(value: unknown): ResumeCue {
+  const raw = closedObject(value, ["resume_cue"], "resume cue response");
+  return resumeCue(raw.resume_cue);
 }
 
 export function normalizePromptRescueJob(value: unknown): PromptRescueJob {
@@ -3460,6 +3591,43 @@ export const desktopApi = {
           return protocolError("suggestion mutation identity");
         }
         return suggestion;
+      },
+    ),
+  createResumeCue: (taskLabel: string, nextStep: string) =>
+    request(
+      "create_resume_cue",
+      { task_label: taskLabel, next_step: nextStep },
+      (value) => {
+        const cue = normalizeResumeCueMutation(value);
+        if (
+          cue.status !== "parked" ||
+          cue.task_label !== taskLabel ||
+          cue.next_step !== nextStep ||
+          cue.version !== 1
+        ) {
+          return protocolError("resume cue creation identity");
+        }
+        return cue;
+      },
+    ),
+  transitionResumeCue: (
+    cueId: string,
+    expectedVersion: number,
+    status: "resumed" | "dismissed",
+  ) =>
+    request(
+      "transition_resume_cue",
+      { cue_id: cueId, expected_version: expectedVersion, status },
+      (value) => {
+        const cue = normalizeResumeCueMutation(value);
+        if (
+          cue.id !== cueId ||
+          cue.status !== status ||
+          cue.version !== expectedVersion + 1
+        ) {
+          return protocolError("resume cue mutation identity");
+        }
+        return cue;
       },
     ),
   getPromptRescue: (jobId: string) =>

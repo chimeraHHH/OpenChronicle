@@ -27,6 +27,7 @@ from .provenance.models import EvidenceRef
 from .reply_rescue import store as reply_rescue_store
 from .reply_rescue.service import ReplyRescueService
 from .reply_rescue.service import validate_config as validate_reply_rescue
+from .resume_cues import store as resume_cue_store
 from .resume_rescue import review_store as resume_review_store
 from .resume_rescue import rewrite_store as resume_rewrite_store
 from .resume_rescue import store as resume_rescue_store
@@ -47,7 +48,7 @@ from .suggestions import store as suggestion_store
 from .suggestions.feedback import valid_feedback_reason
 from .suggestions.service import SuggestionKernel
 
-PROTOCOL_VERSION = 21
+PROTOCOL_VERSION = 22
 MAX_REQUEST_BYTES = 12 * 1024 * 1024
 MAX_RESUME_DOCUMENT_BYTES = 8 * 1024 * 1024
 
@@ -93,6 +94,8 @@ def _handle_request_unfenced(payload: bytes) -> tuple[dict[str, Any], int]:
         return _error("VERSION_CONFLICT", "The reviewed candidate changed."), 2
     except suggestion_store.SuggestionConflict:
         return _error("VERSION_CONFLICT", "The suggestion changed."), 2
+    except resume_cue_store.ResumeCueConflict:
+        return _error("VERSION_CONFLICT", "The parked task cue changed."), 2
     except prompt_rescue_store.PromptRescueConflict:
         return _error("VERSION_CONFLICT", "The Prompt Rescue job changed."), 2
     except reply_rescue_store.ReplyRescueConflict:
@@ -185,6 +188,8 @@ def _dispatch(operation: str, params: dict[str, Any]) -> dict[str, Any]:
         "memory.forget_commit": _memory_forget_commit,
         "wrap.get": _wrap_get,
         "suggestion.transition": _suggestion_transition,
+        "resume_cue.create": _resume_cue_create,
+        "resume_cue.transition": _resume_cue_transition,
         "prompt_rescue.get": _prompt_rescue_get,
         "prompt_rescue.queue": _prompt_rescue_queue,
         "prompt_rescue.queue_selection": _prompt_rescue_queue_selection,
@@ -953,6 +958,29 @@ def _suggestion_transition(params: dict[str, Any]) -> dict[str, Any]:
         return {"suggestion": _suggestion_payload(updated)}
 
 
+def _resume_cue_create(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"task_label", "next_step"})
+    with fts.cursor() as conn:
+        cue = resume_cue_store.create(
+            conn,
+            task_label=_bounded_string(params["task_label"], 120, nonempty=True),
+            next_step=_bounded_string(params["next_step"], 1_000, nonempty=True),
+        )
+        return {"resume_cue": _resume_cue_payload(cue)}
+
+
+def _resume_cue_transition(params: dict[str, Any]) -> dict[str, Any]:
+    _fields(params, required={"cue_id", "expected_version", "status"})
+    with fts.cursor() as conn:
+        cue = resume_cue_store.transition(
+            conn,
+            cue_id=_bounded_string(params["cue_id"], 128, nonempty=True),
+            expected_version=_bounded_int(params["expected_version"], 1, 2_147_483_647),
+            to_status=_bounded_string(params["status"], 50, nonempty=True),
+        )
+        return {"resume_cue": _resume_cue_payload(cue)}
+
+
 def _candidate_get(params: dict[str, Any]) -> dict[str, Any]:
     _fields(params, required={"candidate_id"})
     candidate_id = _bounded_string(params["candidate_id"], 128, nonempty=True)
@@ -1302,6 +1330,19 @@ def _suggestion_payload(suggestion) -> dict[str, Any]:
     }
 
 
+def _resume_cue_payload(cue) -> dict[str, Any]:
+    return {
+        "id": str(cue.id)[:128],
+        "status": str(cue.status)[:50],
+        "task_label": str(cue.task_label)[:120],
+        "next_step": str(cue.next_step)[:1_000],
+        "user_authored": True,
+        "created_at": str(cue.created_at)[:100],
+        "updated_at": str(cue.updated_at)[:100],
+        "version": int(cue.version),
+    }
+
+
 def _prompt_rescue_payload(job) -> dict[str, Any]:
     output = job.output if isinstance(job.output, dict) else None
     return {
@@ -1625,6 +1666,7 @@ def _reference_summary(conn, ref: EvidenceRef) -> dict[str, Any]:
         "timeline_block",
         "session",
         "memory_entry",
+        "resume_cue",
     }:
         integrity = "current" if provenance_store.is_current(conn, ref) else "changed"
     return {

@@ -20,6 +20,7 @@ from ..provenance import store as provenance_store
 from ..provenance.models import EvidenceRef
 from ..reply_rescue.service import ReplyRescueService
 from ..reply_rescue.service import validate_config as validate_reply_rescue
+from ..resume_cues import store as resume_cue_store
 from ..services.context import ContextService
 from ..services.current_facts import list_current_facts
 from ..services.evidence import EvidenceResolver
@@ -180,6 +181,7 @@ def build_snapshot(
             if suggestion_limit
             else []
         )
+        resume_cues = resume_cue_store.list_cues(conn, statuses=["parked"], limit=1)
         validate_prompt_rescue(cfg)
         prompt_rescue_service = PromptRescueService(conn, cfg)
         prompt_rescue_jobs = (
@@ -296,6 +298,19 @@ def build_snapshot(
             for item in suggestions
         ],
         "suggestions_enabled": cfg.suggestions.enabled,
+        "resume_cues": [
+            {
+                "id": cue.id,
+                "status": cue.status,
+                "task_label": cue.task_label,
+                "next_step": cue.next_step,
+                "user_authored": True,
+                "created_at": cue.created_at,
+                "updated_at": cue.updated_at,
+                "version": cue.version,
+            }
+            for cue in resume_cues
+        ],
         "suggestion_feedback": summarize_feedback(conn),
         "prompt_rescue": {
             "enabled": cfg.prompt_rescue.enabled,

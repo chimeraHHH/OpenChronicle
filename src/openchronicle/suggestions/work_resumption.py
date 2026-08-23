@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 
 from ..config import Config
 from ..provenance.models import EvidenceRef, timeline_block_digest
+from ..resume_cues import store as resume_cue_store
 from ..timeline import store as timeline_store
 from .activity import CaptureActivityGate
 from .service import (
@@ -89,8 +90,9 @@ class WorkResumptionService:
         previous, current, gap = boundary.previous, boundary.current, boundary.gap
         previous_ref = _block_ref(previous)
         current_ref = _block_ref(current)
+        parked_cue = resume_cue_store.parked_before(self.conn, current.start_time)
         artifact = {
-            "schema_version": 1,
+            "schema_version": 2 if parked_cue is not None else 1,
             "workflow": "work_resumption",
             "action_capability": "none",
             "interruption": {
@@ -110,18 +112,42 @@ class WorkResumptionService:
             },
             "recommended_next_step": WORK_RESUMPTION_NEXT_STEP,
         }
+        if parked_cue is not None:
+            artifact["parked_cue"] = {
+                "id": parked_cue.id,
+                "task_label": parked_cue.task_label,
+                "next_step": parked_cue.next_step,
+                "parked_at": parked_cue.created_at,
+                "user_authored": True,
+            }
+            artifact["recommended_next_step"] = parked_cue.next_step
         return self.kernel.emit(
             SuggestionProposal(
-                semantic_key=f"work-resumption:{previous.id}:{current.id}",
+                semantic_key=(
+                    f"work-resumption-cue:{parked_cue.id}"
+                    if parked_cue is not None
+                    else f"work-resumption:{previous.id}:{current.id}"
+                ),
                 workflow="work_resumption",
-                title="Resume your recent work",
+                title=(
+                    f"Resume: {parked_cue.task_label}"
+                    if parked_cue is not None
+                    else "Resume your recent work"
+                ),
                 summary=(
-                    "A verified activity gap was followed by new local activity. "
+                    "A user-authored cue was parked before this verified return. "
+                    "Review the exact next step before continuing."
+                    if parked_cue is not None
+                    else "A verified activity gap was followed by new local activity. "
                     "Review the evidence-backed state before continuing."
                 ),
                 artifact=artifact,
-                evidence=(previous_ref, current_ref),
-                score=0.9,
+                evidence=(
+                    (previous_ref, current_ref, resume_cue_store.evidence_ref(parked_cue))
+                    if parked_cue is not None
+                    else (previous_ref, current_ref)
+                ),
+                score=1.0 if parked_cue is not None else 0.9,
                 expires_at=now + timedelta(minutes=self.cfg.suggestions.expiry_minutes),
             ),
             now=now,

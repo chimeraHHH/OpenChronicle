@@ -12,6 +12,8 @@ const COMMANDS: &[&str] = &[
     "forget_candidate",
     "get_daily_wrap",
     "transition_suggestion",
+    "create_resume_cue",
+    "transition_resume_cue",
     "get_prompt_rescue",
     "queue_prompt_rescue",
     "edit_prompt_rescue",

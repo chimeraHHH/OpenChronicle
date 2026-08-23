@@ -195,6 +195,7 @@ export function App({ api = desktopApi }: AppProps) {
               feedback={snapshot.suggestion_feedback}
               onChanged={refresh}
               onOpenSource={setSourceSubject}
+              resumeCues={snapshot.resume_cues}
               suggestions={snapshot.suggestions}
             />
           ) : null}
