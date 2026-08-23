@@ -232,6 +232,12 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   operation agreement and 0.750 exact evidence-set agreement; complete
   free-text output agreement remains the original 0.250 diagnostic. Reflect
   evidence calibration and the full official pipeline remain open.
+- [x] Frozen MemoryAgentBench `Conflict_Resolution / factconsolidation_sh_6k`
+  gate over the pinned Parquet SHA and all 100 QA IDs. The adapter sends all 455
+  ordered facts through isolated production proposal/approval/supersede paths,
+  preserves 455 history entries across 294 current slots, and passes no-memory,
+  current-only BM25, typed-current, parser-coverage, and stale-value gates. It
+  also regression-tests more than one supersede on the same typed subject.
 - [x] Explicit MCP `search(as_of=...)` historical snapshot over recorded and
   typed valid time, kept separate from ordinary current-only recall.
 - [x] On-demand Published Memory revision-history inspection, bound to the

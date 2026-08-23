@@ -211,11 +211,19 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
     that memory path. Generic lexical text can no longer suppress a correct
     vector-only hit from another file. The existing entity-isolation behavior
     remains intact.
+16. **Frozen FactConsolidation conflict gate.** The fixed MemoryAgentBench
+    `factconsolidation_sh_6k` row now runs all 455 ordered facts and all 100 QA
+    IDs through an isolated production review lifecycle. It exposed and fixed
+    a repeated-update defect: accepted historical candidates no longer occupy
+    the active typed-subject conflict slot after their published entry has been
+    superseded. The first frozen run retained 455 history entries, resolved all
+    294 current slots correctly, and scored 1.000 for both current-only BM25 and
+    typed-slot lookup with zero stale values.
 
 ## 2026-08-24 benchmark selection
 
 The paper agent compared six public suites at pinned revisions instead of
-choosing a benchmark by popularity. The next deterministic gate should be
+choosing a benchmark by popularity. The first deterministic gate is now
 [`MemoryAgentBench`](https://github.com/HUST-AI-HYZ/MemoryAgentBench/tree/fe1735de8cf8b9908e1e3d3b5612afc815698062)
 `Conflict_Resolution / factconsolidation_sh_6k`, with its Hugging Face data
 pinned to `7ea066982b140a19337e17e60d45d4076e042faf`. It is MIT-licensed,
@@ -224,6 +232,11 @@ substring exact match instead of an LLM judge. The adapter must run every
 `qa_pair_id` belonging to that source rather than the repository's global
 first-N query ablation, and must additionally freeze the downloaded file hash
 because the upstream loader currently requests the moving `main` revision.
+The implemented manifest additionally freezes the Parquet SHA-256, component
+hashes, exact row count, 455 fact count, 294 subject slots, and ordered list of
+100 QA IDs. The adapter imports no upstream runtime and redistributes no source
+data. See
+[`memoryagentbench-factconsolidation-v1`](../benchmarks/memoryagentbench-factconsolidation-v1/README.md).
 
 The follow-up order is:
 
@@ -399,8 +412,8 @@ corruption, hallucination, latency, and cost.
 
 ## Immediate decision
 
-The native lifecycle harness, inert model-decision adapter, fixed official
-MemOps adjacent smoke, repeated layered stability gate, deterministic
+The native lifecycle harness, frozen MemoryAgentBench FactConsolidation gate,
+inert model-decision adapter, fixed official MemOps adjacent smoke, repeated layered stability gate, deterministic
 event/adjacency projection, same-case retrieval-unit comparison, and first
 reviewed procedural-memory slice are now implemented. The next evaluation
 slices are a fixed LongMemEval-V2 tier and held-out/real retrieval-unit traces;

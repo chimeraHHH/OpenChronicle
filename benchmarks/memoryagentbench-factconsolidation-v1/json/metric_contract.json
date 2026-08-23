@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "benchmark_id": "mab-cr-factconsolidation-sh-6k-v1",
+  "primary_metric": "typed_current_fact_accuracy",
+  "official_metric": "substring_exact_match",
+  "gates": {
+    "accepted_count": 455,
+    "current_fact_count": 294,
+    "history_entry_count": 455,
+    "current_slot_consistency_min": 1.0,
+    "parser_coverage_min": 1.0,
+    "no_memory_accuracy_max": 0.0,
+    "bm25_accuracy_min": 0.8,
+    "typed_accuracy_min": 1.0,
+    "typed_stale_value_rate_max": 0.0
+  }
+}
