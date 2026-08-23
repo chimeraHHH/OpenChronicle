@@ -96,6 +96,44 @@ def test_call_llm_passes_default_timeout(monkeypatch: pytest.MonkeyPatch) -> Non
     assert kwargs["num_retries"] == 0
 
 
+def test_call_llm_routes_codex_cli_without_api_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENCHRONICLE_LLM_MOCK", raising=False)
+    calls: list[dict[str, Any]] = []
+    expected = object()
+
+    def provider_attempt(kwargs, *, timeout_seconds):  # noqa: ARG001
+        calls.append(kwargs)
+        return expected
+
+    monkeypatch.setattr(llm_mod, "_run_provider_attempt", provider_attempt)
+    cfg = Config(
+        models={
+            "default": ModelConfig(
+                provider="codex_cli",
+                model="gpt-5.6-sol",
+                reasoning_effort="low",
+                api_key="must-not-cross",
+            )
+        }
+    )
+
+    response = llm_mod.call_llm(
+        cfg,
+        "reducer",
+        messages=[{"role": "user", "content": "summarize"}],
+        json_mode=True,
+    )
+
+    assert response is expected
+    assert calls[0]["_openchronicle_provider"] == "codex_cli"
+    assert calls[0]["model"] == "gpt-5.6-sol"
+    assert calls[0]["reasoning_effort"] == "low"
+    assert calls[0]["json_mode"] is True
+    assert "api_key" not in calls[0]
+
+
 def test_parent_call_and_decode_paths_never_import_litellm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

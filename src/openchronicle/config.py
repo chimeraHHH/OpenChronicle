@@ -13,7 +13,9 @@ from . import paths
 
 @dataclass
 class ModelConfig:
-    model: str = "gpt-5.4-nano"
+    provider: str = "litellm"
+    model: str = "gpt-5.6-sol"
+    reasoning_effort: str = "none"
     base_url: str = ""
     api_key: str = ""
     api_key_env: str = "OPENAI_API_KEY"
@@ -324,11 +326,14 @@ def load(path: Path | None = None) -> Config:
 
 
 DEFAULT_CONFIG_TEMPLATE = """# OpenChronicle configuration
-# All LLM stages go through litellm. Each stage inherits from [models.default].
+# Each stage inherits from [models.default]. `codex_cli` uses the signed-in
+# local Codex CLI as a text-only backend; `litellm` uses an API provider.
 
 [models.default]
-model = "gpt-5.4-nano"
-api_key_env = "OPENAI_API_KEY"
+provider = "codex_cli"
+model = "gpt-5.6-sol"
+reasoning_effort = "none"
+api_key_env = ""
 # base_url = ""
 # api_key = ""          # overrides api_key_env if set
 # timeout_seconds = 120  # per-attempt provider I/O timeout; max 1800
@@ -338,6 +343,7 @@ api_key_env = "OPENAI_API_KEY"
 # Accuracy-sensitive — match or exceed the default.
 
 [models.timeline]
+model = "gpt-5.6-luna"
 # 1-minute activity normalisation (verbatim-preserving). The reducer,
 # which runs every flush_minutes ≥ 5m, is the stage that does real
 # compression — timeline only cleans up, de-duplicates, and separates

@@ -379,7 +379,7 @@ def status() -> None:
         for stage in stages:
             m = cfg.model_for(stage)
             ping = _format_ping(ping_results.get(stage))
-            table.add_row(f"Model ({stage})", f"{m.model}   {ping}")
+            table.add_row(f"Model ({stage})", f"{m.provider}:{m.model}   {ping}")
 
         console.print(table)
 
@@ -396,12 +396,18 @@ def _ping_stages(cfg: config_mod.Config, stages: tuple[str, ...]) -> dict:
 
     from .writer.llm import PingResult, ping_stage
 
-    # Dedup by (model, base_url, resolved api key) — common case is one model
-    # for all stages, which should hit the network once.
-    dedup: dict[tuple[str, str, str], list[str]] = {}
+    # Dedup identical provider configurations so the common single-model case
+    # performs one probe, while a Codex CLI model never aliases a LiteLLM one.
+    dedup: dict[tuple[str, str, str, str, str], list[str]] = {}
     for stage in stages:
         m = cfg.model_for(stage)
-        key = (m.model, m.base_url, config_mod.resolve_api_key(m) or "")
+        key = (
+            m.provider,
+            m.model,
+            m.reasoning_effort,
+            m.base_url,
+            config_mod.resolve_api_key(m) or "",
+        )
         dedup.setdefault(key, []).append(stage)
 
     results: dict = {}

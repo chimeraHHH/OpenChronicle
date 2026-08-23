@@ -213,10 +213,10 @@ next startup recovery pass.
 
 Defaults inherit from `[models.default]`. Override in `config.toml`:
 
-- **`[models.reducer]`** — prompt is short (timeline blocks are already compressed), but output precision matters (time ranges, per-app attribution). A mid-tier model is usually the right trade-off.
-- **`[models.classifier]`** — accuracy-sensitive. The classifier decides what becomes long-term memory; a weak model here means either missed facts or poisoned dedup.
+- **`[models.reducer]`** — prompt is short (timeline blocks are already compressed), but output precision matters (time ranges, per-app attribution). The default is `codex_cli:gpt-5.6-sol`.
+- **`[models.classifier]`** — accuracy-sensitive. The classifier decides what becomes long-term memory; a weak model here means either missed facts or poisoned dedup. The default is `codex_cli:gpt-5.6-sol`; Codex only returns declarative tool requests, which the bounded local loop validates and executes.
 - **`[models.daily_wrap]`** — grounds a one-day progress/open/blocked digest against bounded, policy-filtered evidence. It may inherit the default model or use a stronger summarizer.
-- **`[models.timeline]`** — runs every minute of activity as a verbatim-preserving normalizer. Keep it cheap, but don't go too weak — a too-weak model will summarize instead of normalizing and drop authored text.
+- **`[models.timeline]`** — runs every minute of activity as a verbatim-preserving normalizer. It defaults to `codex_cli:gpt-5.6-luna`; a direct LiteLLM/API Luna override avoids Codex CLI's fixed startup context in high-volume deployments.
 - **`[models.compact]`** — runs only when files fatten. Match reducer or stronger.
 
 ## Logs

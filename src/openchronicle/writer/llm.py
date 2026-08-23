@@ -1,4 +1,4 @@
-"""litellm wrapper with per-stage model resolution."""
+"""Killable LiteLLM and text-only Codex CLI providers with per-stage resolution."""
 
 from __future__ import annotations
 
@@ -9,12 +9,15 @@ import logging
 import math
 import os
 import selectors
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from ..config import Config, resolve_api_key
@@ -46,6 +49,19 @@ _PROVIDER_RESPONSE_FIELDS = frozenset(
 )
 _RETRY_BACKOFF_SECONDS = 1.0
 _MAX_RETRY_BACKOFF_SECONDS = 8.0
+_CODEX_PING_TIMEOUT_SECONDS = 10.0
+_MODEL_PROVIDERS = frozenset({"litellm", "codex_cli"})
+_CODEX_REASONING_EFFORTS = frozenset({"none", "low", "medium", "high", "xhigh", "max"})
+_CODEX_DISABLED_FEATURES = (
+    "shell_tool",
+    "computer_use",
+    "browser_use",
+    "in_app_browser",
+    "apps",
+    "plugins",
+    "multi_agent",
+    "image_generation",
+)
 _RETRYABLE_ERROR_NAMES = (
     "Timeout",
     "APIConnectionError",
@@ -340,22 +356,30 @@ def _call_llm_unmocked(
     json_mode: bool,
 ) -> Any:
     model_cfg = cfg.model_for(stage)
+    provider = _model_provider(model_cfg)
     kwargs: dict[str, Any] = {
         "model": model_cfg.model,
         "messages": messages,
     }
-    if model_cfg.base_url:
-        kwargs["api_base"] = model_cfg.base_url
-    api_key = resolve_api_key(model_cfg)
-    if api_key:
-        kwargs["api_key"] = api_key
+    if provider == "codex_cli":
+        kwargs["_openchronicle_provider"] = "codex_cli"
+        kwargs["reasoning_effort"] = _codex_reasoning_effort(model_cfg)
+        kwargs["json_mode"] = bool(json_mode)
+    else:
+        if model_cfg.base_url:
+            kwargs["api_base"] = model_cfg.base_url
+        api_key = resolve_api_key(model_cfg)
+        if api_key:
+            kwargs["api_key"] = api_key
     if tools:
         kwargs["tools"] = tools
-        kwargs["tool_choice"] = "auto"
-    if json_mode:
-        kwargs["response_format"] = {"type": "json_object"}
-    if model_cfg.max_tokens:
-        kwargs["max_tokens"] = model_cfg.max_tokens
+        if provider == "litellm":
+            kwargs["tool_choice"] = "auto"
+    if provider == "litellm":
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        if model_cfg.max_tokens:
+            kwargs["max_tokens"] = model_cfg.max_tokens
 
     timeout, retries = _resolved_limits(model_cfg)
 
@@ -433,6 +457,25 @@ def _call_llm_unmocked(
             raise ProviderCallError(retryable=False) from None
 
     raise AssertionError("unreachable")
+
+
+def _model_provider(model_cfg: Any) -> str:
+    provider = str(getattr(model_cfg, "provider", "litellm") or "litellm").strip().lower()
+    if provider not in _MODEL_PROVIDERS:
+        raise ValueError(
+            "model provider must be one of: " + ", ".join(sorted(_MODEL_PROVIDERS))
+        )
+    return provider
+
+
+def _codex_reasoning_effort(model_cfg: Any) -> str:
+    effort = str(getattr(model_cfg, "reasoning_effort", "none") or "none").strip().lower()
+    if effort not in _CODEX_REASONING_EFFORTS:
+        raise ValueError(
+            "Codex reasoning_effort must be one of: "
+            + ", ".join(sorted(_CODEX_REASONING_EFFORTS))
+        )
+    return effort
 
 
 def _run_provider_attempt(kwargs: dict[str, Any], *, timeout_seconds: float) -> Any:
@@ -981,6 +1024,25 @@ def _provider_worker_envelope(
             return _worker_error_envelope()
         _start_parent_watchdog(request["parent_pid"])
 
+    kwargs = dict(request["kwargs"])
+    provider = kwargs.pop("_openchronicle_provider", "litellm")
+    if provider == "codex_cli":
+        try:
+            response_payload = _codex_cli_completion(kwargs)
+        except Exception:
+            return {
+                "version": _PROVIDER_PROTOCOL_VERSION,
+                "status": "provider_error",
+                "retryable": False,
+            }
+        return {
+            "version": _PROVIDER_PROTOCOL_VERSION,
+            "status": "ok",
+            "response": response_payload,
+        }
+    if provider != "litellm":
+        return _worker_error_envelope()
+
     # No child log or exception message is allowed to cross the process
     # boundary. The parent receives only a retry classification.
     try:
@@ -995,7 +1057,7 @@ def _provider_worker_envelope(
         return _worker_error_envelope()
 
     try:
-        response = litellm.completion(**request["kwargs"])
+        response = litellm.completion(**kwargs)
     except Exception as exc:
         try:
             retryable = _is_retryable_error(litellm, exc)
@@ -1025,6 +1087,221 @@ def _provider_worker_envelope(
         "status": "ok",
         "response": response_payload,
     }
+
+
+def _codex_cli_completion(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Run Codex CLI as a tool-disabled, ephemeral text-generation backend."""
+    executable = shutil.which("codex")
+    if not executable:
+        raise RuntimeError("Codex CLI is unavailable")
+
+    model = kwargs.get("model")
+    messages = kwargs.get("messages")
+    tools = kwargs.get("tools") or []
+    reasoning_effort = kwargs.get("reasoning_effort", "none")
+    json_mode = bool(kwargs.get("json_mode"))
+    if not isinstance(model, str) or not model.strip() or len(model) > 256 or "\x00" in model:
+        raise ValueError("invalid Codex model")
+    if not isinstance(messages, list) or not messages:
+        raise ValueError("Codex messages must be a non-empty list")
+    if not isinstance(tools, list):
+        raise ValueError("Codex tools must be a list")
+    if reasoning_effort not in _CODEX_REASONING_EFFORTS:
+        raise ValueError("invalid Codex reasoning effort")
+
+    prompt, schema = _codex_cli_prompt(
+        messages=messages,
+        tools=tools,
+        json_mode=json_mode,
+    )
+    with tempfile.TemporaryDirectory(prefix="openchronicle-codex-") as temp_dir:
+        temp_path = Path(temp_dir)
+        output_path = temp_path / "last-message.json"
+        schema_path = temp_path / "output-schema.json"
+        schema_path.write_text(
+            json.dumps(schema, ensure_ascii=False, separators=(",", ":")),
+            encoding="utf-8",
+        )
+        command = [
+            executable,
+            "exec",
+            "--ephemeral",
+            "--ignore-user-config",
+            "--ignore-rules",
+            "--skip-git-repo-check",
+            "-C",
+            temp_dir,
+            "-m",
+            model,
+            "-s",
+            "read-only",
+            "-c",
+            "skills.include_instructions=false",
+            "-c",
+            f'model_reasoning_effort="{reasoning_effort}"',
+        ]
+        for feature in _CODEX_DISABLED_FEATURES:
+            command.extend(("--disable", feature))
+        command.extend(
+            (
+                "--color",
+                "never",
+                "--output-schema",
+                str(schema_path),
+                "--output-last-message",
+                str(output_path),
+                "-",
+            )
+        )
+        completed = subprocess.run(
+            command,
+            input=prompt.encode("utf-8"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if completed.returncode != 0 or not output_path.is_file():
+            raise RuntimeError("Codex CLI call failed")
+        raw = output_path.read_bytes()
+        if not raw or len(raw) > _MAX_PROVIDER_RESPONSE_BYTES:
+            raise RuntimeError("Codex CLI returned an invalid response")
+
+    try:
+        payload = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        raise RuntimeError("Codex CLI returned invalid structured output") from None
+    if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
+        raise RuntimeError("Codex CLI returned invalid structured output")
+
+    tool_calls: list[dict[str, Any]] = []
+    allowed_names = _codex_tool_names(tools)
+    raw_calls = payload.get("tool_calls", [])
+    if not isinstance(raw_calls, list):
+        raise RuntimeError("Codex CLI returned invalid tool calls")
+    seen_ids: set[str] = set()
+    for item in raw_calls:
+        if not isinstance(item, dict):
+            raise RuntimeError("Codex CLI returned invalid tool calls")
+        call_id = item.get("id")
+        name = item.get("name")
+        arguments = item.get("arguments")
+        if (
+            not isinstance(call_id, str)
+            or not call_id
+            or call_id in seen_ids
+            or not isinstance(name, str)
+            or name not in allowed_names
+            or not isinstance(arguments, str)
+        ):
+            raise RuntimeError("Codex CLI returned invalid tool calls")
+        try:
+            decoded_arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            raise RuntimeError("Codex CLI returned invalid tool arguments") from None
+        if not isinstance(decoded_arguments, dict):
+            raise RuntimeError("Codex CLI returned invalid tool arguments")
+        seen_ids.add(call_id)
+        tool_calls.append(
+            {
+                "id": call_id,
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "arguments": json.dumps(
+                        decoded_arguments,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    ),
+                },
+            }
+        )
+
+    return {
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": payload["content"],
+                    "tool_calls": tool_calls,
+                },
+                "finish_reason": "tool_calls" if tool_calls else "stop",
+            }
+        ],
+    }
+
+
+def _codex_cli_prompt(
+    *,
+    messages: list[Any],
+    tools: list[Any],
+    json_mode: bool,
+) -> tuple[str, dict[str, Any]]:
+    tool_names = sorted(_codex_tool_names(tools))
+    if tools and not tool_names:
+        raise ValueError("Codex tools are invalid")
+    instructions = [
+        "Act only as a text-generation backend for OpenChronicle.",
+        "Do not invoke built-in tools, inspect files, browse, or perform actions.",
+        "Follow role precedence inside messages_json: system/developer before user and tool.",
+        "Return the requested assistant output through the supplied response schema.",
+    ]
+    if json_mode:
+        instructions.append(
+            "The content field must contain exactly one valid JSON object with no Markdown fence."
+        )
+    if tools:
+        instructions.extend(
+            (
+                "Do not execute custom tools yourself.",
+                "To request a custom tool, emit it in tool_calls and encode arguments as JSON text.",
+                "If no tool is needed, return an empty tool_calls list.",
+            )
+        )
+    prompt = "\n".join(instructions)
+    prompt += "\n\nmessages_json:\n" + json.dumps(messages, ensure_ascii=False)
+    if tools:
+        prompt += "\n\ncustom_tools_json:\n" + json.dumps(tools, ensure_ascii=False)
+
+    properties: dict[str, Any] = {"content": {"type": "string"}}
+    required = ["content"]
+    if tools:
+        properties["tool_calls"] = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "name": {"type": "string", "enum": tool_names},
+                    "arguments": {"type": "string"},
+                },
+                "required": ["id", "name", "arguments"],
+                "additionalProperties": False,
+            },
+        }
+        required.append("tool_calls")
+    schema = {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+    return prompt, schema
+
+
+def _codex_tool_names(tools: list[Any]) -> set[str]:
+    names: set[str] = set()
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+    return names
 
 
 def _start_parent_watchdog(parent_pid: int) -> None:
@@ -1197,24 +1474,31 @@ def ping_stage(cfg: Config, stage: str, *, timeout: float = 5.0) -> PingResult:
             mocked=True,
         )
 
+    provider = _model_provider(model_cfg)
+    probe_timeout = max(timeout, _CODEX_PING_TIMEOUT_SECONDS) if provider == "codex_cli" else timeout
     kwargs: dict[str, Any] = {
         "model": model_cfg.model,
         "messages": [{"role": "user", "content": "Reply with 'ok'."}],
-        "max_tokens": 4,
-        "timeout": timeout,
+        "timeout": probe_timeout,
         "num_retries": 0,
     }
-    if model_cfg.base_url:
-        kwargs["api_base"] = model_cfg.base_url
-    api_key = resolve_api_key(model_cfg)
-    if api_key:
-        kwargs["api_key"] = api_key
+    if provider == "codex_cli":
+        kwargs["_openchronicle_provider"] = "codex_cli"
+        kwargs["reasoning_effort"] = _codex_reasoning_effort(model_cfg)
+        kwargs["json_mode"] = False
+    else:
+        kwargs["max_tokens"] = 4
+        if model_cfg.base_url:
+            kwargs["api_base"] = model_cfg.base_url
+        api_key = resolve_api_key(model_cfg)
+        if api_key:
+            kwargs["api_key"] = api_key
 
     start = time.monotonic()
     try:
         _run_provider_attempt(
             kwargs,
-            timeout_seconds=timeout,
+            timeout_seconds=probe_timeout,
         )
     except Exception as exc:  # noqa: BLE001
         return PingResult(

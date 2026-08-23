@@ -536,7 +536,7 @@ def _reduce_window_locked(
             session_store.mark_failed(
                 conn,
                 session_id,
-                error="reducer LLM call failed or returned invalid JSON output",
+                error="reducer LLM call failed or returned unparseable JSON",
                 next_retry_at=next_retry_at,
             )
         logger.warning(

@@ -66,6 +66,36 @@ def test_ping_stage_success_records_latency(monkeypatch: pytest.MonkeyPatch) -> 
     assert calls[0]["num_retries"] == 0
 
 
+def test_ping_stage_allows_codex_cli_startup_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENCHRONICLE_LLM_MOCK", raising=False)
+    calls: list[tuple[dict, float]] = []
+
+    def fake_attempt(kwargs, *, timeout_seconds):
+        calls.append((kwargs, timeout_seconds))
+        return object()
+
+    monkeypatch.setattr(llm_mod, "_run_provider_attempt", fake_attempt)
+    cfg = Config(
+        models={
+            "default": ModelConfig(
+                provider="codex_cli",
+                model="gpt-5.6-luna",
+                reasoning_effort="none",
+            )
+        }
+    )
+
+    result = llm_mod.ping_stage(cfg, "timeline", timeout=5.0)
+
+    assert result.ok is True
+    kwargs, outer_timeout = calls[0]
+    assert outer_timeout == llm_mod._CODEX_PING_TIMEOUT_SECONDS
+    assert kwargs["timeout"] == llm_mod._CODEX_PING_TIMEOUT_SECONDS
+    assert kwargs["_openchronicle_provider"] == "codex_cli"
+
+
 def test_ping_stage_failure_label_excludes_provider_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

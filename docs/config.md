@@ -10,24 +10,26 @@ openchronicle config
 
 ## `[models.*]` — LLM per stage
 
-Every LLM stage goes through [litellm](https://github.com/BerriAI/litellm), so anything litellm speaks will work: OpenAI, Anthropic, Azure, Bedrock, Gemini, Mistral, Ollama, DeepSeek, any OpenAI-compatible gateway…
+Each stage selects `codex_cli` or `litellm`. The default uses the signed-in
+Codex CLI as a text-only backend; LiteLLM remains available for direct API,
+gateway, and local-model deployments.
 
 ```toml
 [models.default]
-model = "gpt-5.4-nano"
-api_key_env = "OPENAI_API_KEY"
+provider = "codex_cli"
+model = "gpt-5.6-sol"
+reasoning_effort = "none"
+api_key_env = ""
 # base_url = "https://your-gateway/v1"
 # api_key  = "sk-..."        # overrides api_key_env if set
 # timeout_seconds = 120       # per-attempt provider I/O timeout; max 1800
 # num_retries = 2             # transient failures only; max 5; 3 total attempts
 
 [models.timeline]     # short-window normalizer — runs constantly, keep cheap but not weak
-# inherits from default
+model = "gpt-5.6-luna"
 
 [models.reducer]      # session → event-daily entry
-# Consider a stronger model:
-# model = "claude-haiku-4-5"
-# api_key_env = "ANTHROPIC_API_KEY"
+# inherits gpt-5.6-sol
 
 [models.classifier]   # durable-fact extraction via tool calls
 # Accuracy-sensitive; a weak model here poisons dedup.
@@ -44,8 +46,27 @@ api_key_env = "OPENAI_API_KEY"
 
 Each stage section **inherits every field** from `[models.default]` and overrides only what it sets. If you want a single model everywhere, set `[models.default]` and leave the rest empty.
 
-`timeout_seconds` is passed to LiteLLM as the provider transport timeout and is
-also enforced by a parent-owned outer deadline. Every non-mock attempt runs in
+`codex_cli` starts an ephemeral, read-only invocation with shell, computer use,
+browser, plugins, skills instructions, image generation, and multi-agent
+features disabled. OpenChronicle supplies a strict output schema and receives
+only the final text or a declarative request for one of the classifier's own
+bounded memory tools. Codex never executes those tools itself. Provider failure
+leaves timeline/session work pending for retry; it does not trigger a local
+rules summary.
+
+Codex CLI carries a fixed agent-context startup cost. For high-volume timeline
+deployments with an API key, use LiteLLM to call Luna directly:
+
+```toml
+[models.timeline]
+provider = "litellm"
+model = "gpt-5.6-luna"
+api_key_env = "OPENAI_API_KEY"
+reasoning_effort = "none"
+```
+
+`timeout_seconds` is passed to LiteLLM where applicable and is always enforced
+by a parent-owned outer deadline. Every non-mock attempt runs in
 a fresh process group; its byte-bounded JSON request travels over stdin (never
 argv), and its response must be one complete byte-bounded JSON envelope. If the
 SDK hangs past the configured timeout plus a one-second scheduling grace, the
@@ -504,7 +525,7 @@ openchronicle status
 
 `status` prints the resolved model for each stage **and probes each stage's provider** with a tiny round-trip (`max_tokens=4`, ~5s timeout). Each row shows one of:
 
-- `gpt-5.4-nano   ✓ 234 ms` — provider answered.
+- `codex_cli:gpt-5.6-luna   ✓ 234 ms` — provider answered.
 - `claude-haiku-4-5   ✗ AuthenticationError: …` — provider rejected the request. Typos in `model`, missing `api_key_env`, wrong `base_url`, or expired keys all show up here on the first `status` call instead of silently failing inside the writer hours later.
 
 Probes for stages that share an identical `(model, base_url, api_key)` are deduplicated, so the common case (one model for all stages) makes one network call. They run in parallel and the whole status command stays under ~5s even if one provider is slow. Provider I/O runs outside the capture-store lock; after probes finish, `status` takes only a short cleanup/capture fence to rebuild, authorize, and serialize its final local snapshot.

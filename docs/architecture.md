@@ -430,7 +430,7 @@ src/openchronicle/
 │   ├── classifier.py         # Proposes grounded durable facts for review
 │   ├── tools.py              # classifier read/search/propose/commit boundary
 │   ├── compact.py            # Per-file compaction with fact-preservation check
-│   └── llm.py                # litellm wrapper; per-stage config
+│   └── llm.py                # LiteLLM/Codex CLI text providers; per-stage config
 ├── provenance/               # Typed evidence refs and rebuildable edge graph
 ├── memory_candidates/        # Review-inbox rows and purge tombstones
 ├── daily_wrap/               # Canonical job store, service, scheduler

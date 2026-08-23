@@ -16,7 +16,9 @@ def test_defaults_when_no_file(tmp_path: Path) -> None:
     assert cfg.reducer.enabled is True
     assert cfg.resume_rescue.enabled is False
     default = cfg.model_for("reducer")
-    assert default.model == "gpt-5.4-nano"
+    assert default.provider == "litellm"
+    assert default.model == "gpt-5.6-sol"
+    assert default.reasoning_effort == "none"
     assert default.timeout_seconds is None
     assert default.num_retries is None
 
@@ -26,10 +28,13 @@ def test_stage_override_merges(tmp_path: Path) -> None:
     path.write_text(
         """
 [models.default]
+provider = "codex_cli"
 model = "gpt-5.4-nano"
+reasoning_effort = "low"
 api_key_env = "OPENAI_API_KEY"
 
 [models.classifier]
+provider = "litellm"
 model = "claude-haiku-4-5"
 api_key_env = "ANTHROPIC_API_KEY"
 """
@@ -37,9 +42,13 @@ api_key_env = "ANTHROPIC_API_KEY"
     cfg = config.load(path)
     default = cfg.model_for("default")
     classifier = cfg.model_for("classifier")
+    assert default.provider == "codex_cli"
     assert default.model == "gpt-5.4-nano"
+    assert default.reasoning_effort == "low"
     assert default.api_key_env == "OPENAI_API_KEY"
+    assert classifier.provider == "litellm"
     assert classifier.model == "claude-haiku-4-5"
+    assert classifier.reasoning_effort == "low"
     assert classifier.api_key_env == "ANTHROPIC_API_KEY"
 
 
@@ -90,6 +99,9 @@ def test_write_default_creates_file(tmp_path: Path) -> None:
     assert config.write_default_if_missing(p)
     assert p.exists()
     assert "[models.default]" in p.read_text()
+    assert 'provider = "codex_cli"' in p.read_text()
+    assert 'model = "gpt-5.6-sol"' in p.read_text()
+    assert '[models.timeline]\nmodel = "gpt-5.6-luna"' in p.read_text()
     assert "# timeout_seconds = 120" in p.read_text()
     assert "# num_retries = 2" in p.read_text()
     assert "include_screenshot = false" in p.read_text()
