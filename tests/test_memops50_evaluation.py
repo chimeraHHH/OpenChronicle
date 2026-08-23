@@ -103,6 +103,10 @@ def test_frozen_memops50_manifest_is_self_consistent() -> None:
             )
         )
 
+    decision_manifest = json.loads((BENCHMARK / "decision_manifest.json").read_bytes())
+    assert decision_manifest == memops50.build_decision_manifest(manifest)
+    assert len(decision_manifest["samples"]) == 50
+
 
 def test_memops50_json_loader_rejects_ambiguous_json() -> None:
     with pytest.raises(ValueError, match="duplicate JSON key"):

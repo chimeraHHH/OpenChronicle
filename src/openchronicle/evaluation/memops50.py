@@ -159,6 +159,33 @@ def verify_manifest(*, manifest_path: Path, memops_root: Path) -> dict[str, int]
     return {"logical_pairs": len(expected["items"]), "rows_per_method": 100}
 
 
+def build_decision_manifest(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Project the frozen tier into the existing inert decision-eval schema."""
+    items = manifest.get("items")
+    if not isinstance(items, list) or len(items) != 50:
+        raise ValueError("MemOps-50 manifest items are invalid")
+    samples = [
+        {
+            "id": item["source_file"].removesuffix(".json"),
+            "file": item["source_file"],
+            "sha256": item["stage2_sha256"],
+        }
+        for item in items
+        if isinstance(item, dict)
+    ]
+    if len(samples) != 50 or len({sample["id"] for sample in samples}) != 50:
+        raise ValueError("MemOps-50 decision samples are invalid")
+    return {
+        "schema_version": 1,
+        "dataset_id": "MemOps-50-Official-Adjacent-Decisions-v1",
+        "split": "official-adjacent-balanced-50",
+        "repository": UPSTREAM_REPOSITORY,
+        "commit": UPSTREAM_COMMIT,
+        "data_root": STAGE2_ROOT,
+        "samples": samples,
+    }
+
+
 def _build_item(
     *,
     source_file: str,

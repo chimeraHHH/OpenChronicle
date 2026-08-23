@@ -84,3 +84,26 @@ The first clean production-lifecycle result is recorded in
 [analysis/openchronicle-4bb887f.md](analysis/openchronicle-4bb887f.md). Its raw,
 machine-readable report is
 [`results/openchronicle-4bb887f.json`](results/openchronicle-4bb887f.json).
+
+## Operation-inference tier
+
+The same 50 verified Stage 2 files are projected into the existing inert
+memory-decision evaluator by `json/decision_manifest.json`. With the configured
+classifier set to `codex_cli:gpt-5.6-sol`, run:
+
+```bash
+uv run python scripts/run_vida_memory_decisions.py \
+  --memops-root /path/to/MemOps \
+  --dataset benchmarks/memops50-lifecycle-v1/json/decision_manifest.json \
+  --contract benchmarks/memops50-lifecycle-v1/json/decision_metric_contract.json \
+  --output /tmp/memops50-decisions.json
+```
+
+This tier emits text-only JSON decisions and cannot publish or delete memory.
+It evaluates 274 state-changing confirmed operations: 219 remember, 33 update,
+10 forget, and 12 reflect. Thirty tentative operations are excluded. Seven
+confirmed statements that only reaffirm the already-current value after a
+tentative branch are also treated as evidence-only confirmations rather than
+fake state changes. This normalization is specific to OpenChronicle's
+state-changing decision contract and is not presented as the official MemOps
+operation score.

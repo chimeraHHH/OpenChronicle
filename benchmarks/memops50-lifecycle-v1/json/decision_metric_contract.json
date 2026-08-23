@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "baseline_id": "memops50-operation-decisions-v1",
+  "acceptance_target": "balanced-external-operation-inference-ready",
+  "dataset": {
+    "id": "MemOps-50-Official-Adjacent-Decisions-v1",
+    "split": "official-adjacent-balanced-50",
+    "path": "benchmarks/memops50-lifecycle-v1/json/decision_manifest.json"
+  },
+  "evaluation_path": "uv run python scripts/run_vida_memory_decisions.py --memops-root /path/to/MemOps --dataset benchmarks/memops50-lifecycle-v1/json/decision_manifest.json --contract benchmarks/memops50-lifecycle-v1/json/decision_metric_contract.json",
+  "primary_metric": "operation_f1",
+  "gates": {
+    "parse_success_rate_min": 1.0,
+    "operation_precision_min": 0.7,
+    "operation_recall_min": 0.7,
+    "target_binding_accuracy_min": 0.8,
+    "value_accuracy_min": 0.0,
+    "provenance_support_rate_min": 0.7,
+    "noop_accuracy_min": 1.0
+  },
+  "known_deviations": [
+    "This is a balanced fixed external subset, not the full MemOps leaderboard pipeline.",
+    "Tentative operations and seven confirmed state-neutral reaffirmations are not state-changing gold decisions.",
+    "Exact full-string generated values remain diagnostic and are not gated without a separate semantic judge.",
+    "No-operation accuracy is vacuously one because every selected scenario has at least one state-changing confirmed operation."
+  ]
+}

@@ -180,19 +180,25 @@ def adapt_memops_sample(payload: object, *, case_id: str) -> DecisionCase:
                 raise ValueError("MemOps evidence span does not resolve")
             if evidence_id not in operation_evidence:
                 operation_evidence.append(evidence_id)
+        if operation_type in {"update", "forget"} and target_id not in evolving_state:
+            initial_current[target_id] = CurrentMemory(target_id=target_id, value=old_value)
+            evolving_state[target_id] = old_value
+        effective_old_value = evolving_state.get(target_id, old_value)
+        # MemOps includes confirmed statements that merely reaffirm the current
+        # value after a tentative branch. OpenChronicle's decision artifact is
+        # state-changing, so these are evidence-only confirmations, not updates.
+        if operation_type == "update" and _same_value(effective_old_value, new_value):
+            continue
         operation = Operation(
             type=operation_type,  # type: ignore[arg-type]
             target_id=target_id,
-            old_value=old_value,
+            old_value=effective_old_value,
             new_value=new_value,
             evidence_ids=tuple(operation_evidence),
             new_value_anchors=(new_value,) if new_value else (),
         )
         _validate_operation_shape(operation)
         operations.append(operation)
-        if operation_type in {"update", "forget"} and target_id not in evolving_state:
-            initial_current[target_id] = CurrentMemory(target_id=target_id, value=old_value)
-            evolving_state[target_id] = old_value
         if operation_type in {"remember", "reflect", "update"}:
             evolving_state[target_id] = new_value
         else:

@@ -153,6 +153,52 @@ def test_memops_adapter_maps_confirmed_operations_and_exact_spans() -> None:
     ]
 
 
+def test_memops_adapter_treats_post_tentative_reaffirmation_as_state_neutral() -> None:
+    sample = {
+        "conversations": [
+            {
+                "segment_index": 1,
+                "dialogue": [
+                    {"role": "user", "content": "My preferred editor is Zed."},
+                    {"role": "user", "content": "I might switch to Nova."},
+                    {"role": "user", "content": "I am staying with Zed."},
+                ],
+            }
+        ],
+        "operations": [
+            {
+                "type": "remember",
+                "validity": "confirmed",
+                "target": {"target_id": "user_editor", "target_name": "preferred editor"},
+                "old_value": None,
+                "new_value": "Zed",
+                "evidence_spans": [{"segment_index": 1, "turn_index": 1}],
+            },
+            {
+                "type": "update",
+                "validity": "tentative",
+                "target": {"target_id": "user_editor", "target_name": "preferred editor"},
+                "old_value": "Zed",
+                "new_value": "Nova",
+                "evidence_spans": [{"segment_index": 1, "turn_index": 2}],
+            },
+            {
+                "type": "update",
+                "validity": "confirmed",
+                "target": {"target_id": "user_editor", "target_name": "preferred editor"},
+                "old_value": "Nova",
+                "new_value": "Zed",
+                "evidence_spans": [{"segment_index": 1, "turn_index": 3}],
+            },
+        ],
+    }
+
+    case = vida_memory_decisions.adapt_memops_sample(sample, case_id="reaffirmation")
+
+    assert [operation.type for operation in case.gold_operations] == ["remember"]
+    assert case.gold_operations[0].new_value == "Zed"
+
+
 def test_memops_manifest_pins_external_clone_and_preserves_update_chain(tmp_path: Path) -> None:
     repository, _, _ = _paths()
     clone = tmp_path / "MemOps"
