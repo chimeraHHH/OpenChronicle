@@ -390,11 +390,21 @@ Return confirmed user-authored operations only. Assistant claims alone are never
 remember creates a new target; update replaces a current value; forget records an explicit
 user request to remove one current target; reflect derives a bounded pattern only from at
 least two independent sessions. Tentative, hypothetical, third-party, negated, retracted,
-or explicitly do-not-store statements produce no operation. A forget decision is an audit
-label only and must not perform deletion. Return exactly one JSON object with schema_version
-1 and operations. Each operation has exactly type, target_id, old_value, new_value, and
-evidence_ids. Use only listed target and evidence ids. Use empty old_value for remember and
-reflect; empty new_value for forget."""
+or explicitly do-not-store statements produce no operation. Walk the evidence chronologically
+and return the complete transition trace, not only the final state. If a target is first
+established and then changed, emit the initial remember followed by every confirmed update in
+order. If a target is established and later forgotten, emit both the remember and the forget.
+An update requires an explicit correction or replacement of the target's prior value. A later
+confirmation, elaboration, consequence, stronger rationale, downstream plan, or repeated mention
+is not an update. Do not emit a new operation merely because a target appears again. When a
+candidate target describes a cross-session pattern or inference, emit one reflect supported by
+the independent sessions; do not decompose that pattern into remember/update operations.
+For each operation, evidence_ids must contain only the exact user turn or turns that trigger
+that operation; do not add later confirmations, downstream uses, or summary restatements.
+A forget decision is an audit label only and must not perform deletion. Return exactly one JSON
+object with schema_version 1 and operations in chronological order. Each operation has exactly
+type, target_id, old_value, new_value, and evidence_ids. Use only listed target and evidence ids.
+Use empty old_value for remember and reflect; empty new_value for forget."""
 
 
 def _case_prompt(case: DecisionCase) -> str:
