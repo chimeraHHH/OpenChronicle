@@ -1,0 +1,1005 @@
+{
+  "dataset": {
+    "case_count": 4,
+    "gold_operation_count": 27,
+    "id": "MemOps-Official-Adjacent-Smoke-v1",
+    "path": "benchmarks/vida-memory-decisions-v1/json/official_memops_manifest.json",
+    "sha256": "8ccf9ba5d4a1faf583dad8ab3fa19b60e53443381fe0fc6ebc57764540d79b43",
+    "source": "official_memops_external",
+    "source_files": [
+      {
+        "file": "B02_remember.json",
+        "sha256": "71b10a3d9cf57fc43520a234a3244e54744e71d279d72115bb6c8e0bd09aa15f"
+      },
+      {
+        "file": "C26_update.json",
+        "sha256": "490097629cee90daa883df4b1e74a5632e4ba0e5df055d3c54a600d6d2324da6"
+      },
+      {
+        "file": "C29_forget.json",
+        "sha256": "c058892375d2e233fd7e7bda92dd46131487df51d94fbc5c0815a19fc9a12296"
+      },
+      {
+        "file": "E12_reflect.json",
+        "sha256": "e91a20977f5dace17c0ec33876b403725dfa45c9848158a3f955977113406185"
+      }
+    ],
+    "source_revision": "312af65e2c7b6d1b70f062ffa8b4cde32aaf6f35",
+    "split": "official-adjacent-fixed-4"
+  },
+  "environment": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.11.15"
+  },
+  "evaluation_id": "vida-memory-decisions-v1",
+  "metric_contract": {
+    "path": "benchmarks/vida-memory-decisions-v1/json/official_memops_metric_contract.json",
+    "sha256": "ff18101d8c88ab88b4d29c7e71838665fa3c517705f0dbac1efa046aa9345ce5"
+  },
+  "repository": {
+    "commit": "da13513ab4021339204dae4fa3f93c1a95aa5e26",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "schema_version": 1,
+  "variant": {
+    "action_capability": "none",
+    "cases": [
+      {
+        "binding_errors": 0,
+        "case_id": "B02-remember",
+        "failure_stage": "value_error",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "segment-1-turn-1"
+            ],
+            "new_value": "2731 North Kedzie Avenue, Apartment 4B, Logan Square, Chicago",
+            "new_value_anchors": [
+              "2731 North Kedzie Avenue, Apartment 4B, Logan Square, Chicago"
+            ],
+            "old_value": "",
+            "target_id": "danny_address",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-3"
+            ],
+            "new_value": "773-505-8241",
+            "new_value_anchors": [
+              "773-505-8241"
+            ],
+            "old_value": "",
+            "target_id": "danny_phone",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5"
+            ],
+            "new_value": "d.kowalski@protonmail.com",
+            "new_value_anchors": [
+              "d.kowalski@protonmail.com"
+            ],
+            "old_value": "",
+            "target_id": "danny_email",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-1"
+            ],
+            "new_value": "October 17th",
+            "new_value_anchors": [
+              "October 17th"
+            ],
+            "old_value": "",
+            "target_id": "danny_birthday",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-5"
+            ],
+            "new_value": "312-477-6600, extension 309",
+            "new_value_anchors": [
+              "312-477-6600, extension 309"
+            ],
+            "old_value": "",
+            "target_id": "danny_work_number",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-3"
+            ],
+            "new_value": "Mail birthday package to Danny approximately two weeks before October 17th",
+            "new_value_anchors": [
+              "Mail birthday package to Danny approximately two weeks before October 17th"
+            ],
+            "old_value": "",
+            "target_id": "danny_birthday_mailing_plan",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-3-turn-1"
+            ],
+            "new_value": "Strongly prefers texts over phone calls",
+            "new_value_anchors": [
+              "Strongly prefers texts over phone calls"
+            ],
+            "old_value": "",
+            "target_id": "danny_communication_preference",
+            "type": "remember"
+          }
+        ],
+        "latency_ms": 18178.015209,
+        "matched_keys": [
+          [
+            "remember",
+            "danny_address"
+          ],
+          [
+            "remember",
+            "danny_phone"
+          ],
+          [
+            "remember",
+            "danny_email"
+          ],
+          [
+            "remember",
+            "danny_birthday"
+          ],
+          [
+            "remember",
+            "danny_birthday_mailing_plan"
+          ],
+          [
+            "remember",
+            "danny_work_number"
+          ],
+          [
+            "remember",
+            "danny_communication_preference"
+          ]
+        ],
+        "passed": false,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "segment-1-turn-1"
+            ],
+            "new_value": "2731 North Kedzie Avenue, Apartment 4B, Logan Square, Chicago",
+            "old_value": "",
+            "target_id": "danny_address",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-3"
+            ],
+            "new_value": "773-505-8241",
+            "old_value": "",
+            "target_id": "danny_phone",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5"
+            ],
+            "new_value": "d.kowalski@protonmail.com",
+            "old_value": "",
+            "target_id": "danny_email",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-1"
+            ],
+            "new_value": "October 17th",
+            "old_value": "",
+            "target_id": "danny_birthday",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-3"
+            ],
+            "new_value": "Mail Danny a birthday package around two weeks before October 17th, in early October, to allow for shipping delays",
+            "old_value": "",
+            "target_id": "danny_birthday_mailing_plan",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-5"
+            ],
+            "new_value": "312-477-6600, extension 309",
+            "old_value": "",
+            "target_id": "danny_work_number",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-3-turn-1"
+            ],
+            "new_value": "Strongly prefers texts over phone calls, especially for time-sensitive contact",
+            "old_value": "",
+            "target_id": "danny_communication_preference",
+            "type": "remember"
+          }
+        ],
+        "provenance_error_keys": [],
+        "response_chars": 1194,
+        "response_sha256": "6225cd96625aea10964bd75a76271a13436c1942c26afded201c43b1379fd01a",
+        "tp": 7,
+        "value_error_keys": [
+          [
+            "remember",
+            "danny_birthday_mailing_plan"
+          ]
+        ]
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "C26-update-chain",
+        "failure_stage": "value_error",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "segment-1-turn-1"
+            ],
+            "new_value": "March 12, 2:30 PM",
+            "new_value_anchors": [
+              "March 12, 2:30 PM"
+            ],
+            "old_value": "",
+            "target_id": "c26_interview_time",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5"
+            ],
+            "new_value": "March 12, 2:00 PM",
+            "new_value_anchors": [
+              "March 12, 2:00 PM"
+            ],
+            "old_value": "March 12, 2:30 PM",
+            "target_id": "c26_interview_time",
+            "type": "update"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-3"
+            ],
+            "new_value": "March 12, 3:00 PM",
+            "new_value_anchors": [
+              "March 12, 3:00 PM"
+            ],
+            "old_value": "March 12, 2:00 PM",
+            "target_id": "c26_interview_time",
+            "type": "update"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-3"
+            ],
+            "new_value": "15 Clarke Road, satellite office",
+            "new_value_anchors": [
+              "15 Clarke Road, satellite office"
+            ],
+            "old_value": "",
+            "target_id": "c26_interview_location",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-1"
+            ],
+            "new_value": "$72,000 to $85,000",
+            "new_value_anchors": [
+              "$72,000 to $85,000"
+            ],
+            "old_value": "",
+            "target_id": "c26_salary_range",
+            "type": "remember"
+          }
+        ],
+        "latency_ms": 12007.538583,
+        "matched_keys": [
+          [
+            "remember",
+            "c26_interview_time"
+          ],
+          [
+            "remember",
+            "c26_interview_location"
+          ],
+          [
+            "update",
+            "c26_interview_time"
+          ],
+          [
+            "remember",
+            "c26_salary_range"
+          ],
+          [
+            "update",
+            "c26_interview_time"
+          ]
+        ],
+        "passed": false,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "segment-1-turn-1"
+            ],
+            "new_value": "March 12 at 2:30 PM",
+            "old_value": "",
+            "target_id": "c26_interview_time",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-3"
+            ],
+            "new_value": "15 Clarke Road, satellite office",
+            "old_value": "",
+            "target_id": "c26_interview_location",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5"
+            ],
+            "new_value": "March 12 at 2:00 PM",
+            "old_value": "March 12 at 2:30 PM",
+            "target_id": "c26_interview_time",
+            "type": "update"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-1"
+            ],
+            "new_value": "$72,000 to $85,000",
+            "old_value": "",
+            "target_id": "c26_salary_range",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-3"
+            ],
+            "new_value": "March 12 at 3:00 PM",
+            "old_value": "March 12 at 2:00 PM",
+            "target_id": "c26_interview_time",
+            "type": "update"
+          }
+        ],
+        "provenance_error_keys": [],
+        "response_chars": 773,
+        "response_sha256": "038ad5f69d0913dac5469533de44a616a04ff116720512572cec815e1c485096",
+        "tp": 5,
+        "value_error_keys": [
+          [
+            "remember",
+            "c26_interview_time"
+          ],
+          [
+            "update",
+            "c26_interview_time"
+          ],
+          [
+            "update",
+            "c26_interview_time"
+          ]
+        ]
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "C29-forget",
+        "failure_stage": "detection_error",
+        "false_negative_keys": [],
+        "false_positive_keys": [
+          [
+            "update",
+            "marco_ring_help"
+          ]
+        ],
+        "fn": 0,
+        "fp": 1,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "segment-1-turn-1"
+            ],
+            "new_value": "April 18th",
+            "new_value_anchors": [
+              "April 18th"
+            ],
+            "old_value": "",
+            "target_id": "mom_birthday_date",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-3"
+            ],
+            "new_value": "cashmere wrap",
+            "new_value_anchors": [
+              "cashmere wrap"
+            ],
+            "old_value": "",
+            "target_id": "sister_emily_gift",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5"
+            ],
+            "new_value": "Personalized wooden recipe box from TimberCraft Co. on Etsy, $65",
+            "new_value_anchors": [
+              "Personalized wooden recipe box from TimberCraft Co. on Etsy, $65"
+            ],
+            "old_value": "",
+            "target_id": "recipe_box_candidate",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-7"
+            ],
+            "new_value": "Small potted olive tree from Cedar Avenue nursery, $45",
+            "new_value_anchors": [
+              "Small potted olive tree from Cedar Avenue nursery, $45"
+            ],
+            "old_value": "",
+            "target_id": "olive_tree_candidate",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-1"
+            ],
+            "new_value": "Help Marco pick an engagement ring, proposal planned end of April, budget $2,000-$3,000, vintage feel",
+            "new_value_anchors": [
+              "Help Marco pick an engagement ring, proposal planned end of April, budget $2,000-$3,000, vintage feel"
+            ],
+            "old_value": "",
+            "target_id": "marco_ring_help",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-5"
+            ],
+            "new_value": "Photo book of family pictures from the past year; progress lost when website crashed; not yet redone",
+            "new_value_anchors": [
+              "Photo book of family pictures from the past year; progress lost when website crashed; not yet redone"
+            ],
+            "old_value": "",
+            "target_id": "photo_book_project",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-3-turn-5"
+            ],
+            "new_value": "",
+            "new_value_anchors": [],
+            "old_value": "Photo book of family pictures from the past year; progress lost when website crashed; not yet redone",
+            "target_id": "photo_book_project",
+            "type": "forget"
+          }
+        ],
+        "latency_ms": 18347.213375,
+        "matched_keys": [
+          [
+            "remember",
+            "mom_birthday_date"
+          ],
+          [
+            "remember",
+            "sister_emily_gift"
+          ],
+          [
+            "remember",
+            "recipe_box_candidate"
+          ],
+          [
+            "remember",
+            "olive_tree_candidate"
+          ],
+          [
+            "remember",
+            "marco_ring_help"
+          ],
+          [
+            "remember",
+            "photo_book_project"
+          ],
+          [
+            "forget",
+            "photo_book_project"
+          ]
+        ],
+        "passed": false,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "segment-1-turn-1"
+            ],
+            "new_value": "April 18th",
+            "old_value": "",
+            "target_id": "mom_birthday_date",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-3"
+            ],
+            "new_value": "Cashmere wrap for Mom, purchased online and already shipped",
+            "old_value": "",
+            "target_id": "sister_emily_gift",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5"
+            ],
+            "new_value": "Personalized wooden recipe box from TimberCraft Co. on Etsy for $65",
+            "old_value": "",
+            "target_id": "recipe_box_candidate",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-7"
+            ],
+            "new_value": "Small potted olive tree from a nursery on Cedar Avenue for $45",
+            "old_value": "",
+            "target_id": "olive_tree_candidate",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-1"
+            ],
+            "new_value": "Help Marco choose an engagement ring for an end-of-April proposal and coordinate shopping schedules",
+            "old_value": "",
+            "target_id": "marco_ring_help",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-3"
+            ],
+            "new_value": "Help Marco shop a couple of weekends before his end-of-April proposal for a vintage-style engagement ring with a $2,000–$3,000 budget",
+            "old_value": "Help Marco choose an engagement ring for an end-of-April proposal and coordinate shopping schedules",
+            "target_id": "marco_ring_help",
+            "type": "update"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-5"
+            ],
+            "new_value": "Family photo book for Mom's birthday; initial work was lost after the website crashed and it has not been restarted",
+            "old_value": "",
+            "target_id": "photo_book_project",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-3-turn-5"
+            ],
+            "new_value": "",
+            "old_value": "Family photo book for Mom's birthday; initial work was lost after the website crashed and it has not been restarted",
+            "target_id": "photo_book_project",
+            "type": "forget"
+          }
+        ],
+        "provenance_error_keys": [],
+        "response_chars": 1738,
+        "response_sha256": "21af510ea55588a59639ab798d14dfc4c4dc6235118397ae8a0100fbe369f401",
+        "tp": 7,
+        "value_error_keys": [
+          [
+            "forget",
+            "photo_book_project"
+          ],
+          [
+            "remember",
+            "marco_ring_help"
+          ],
+          [
+            "remember",
+            "olive_tree_candidate"
+          ],
+          [
+            "remember",
+            "photo_book_project"
+          ],
+          [
+            "remember",
+            "recipe_box_candidate"
+          ]
+        ]
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "E12-reflect",
+        "failure_stage": "detection_error",
+        "false_negative_keys": [],
+        "false_positive_keys": [
+          [
+            "update",
+            "elaine_relationship_status"
+          ]
+        ],
+        "fn": 0,
+        "fp": 1,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "segment-1-turn-1"
+            ],
+            "new_value": "long-term partner, together since June 2022",
+            "new_value_anchors": [
+              "long-term partner, together since June 2022"
+            ],
+            "old_value": "",
+            "target_id": "elaine_relationship_status",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-3"
+            ],
+            "new_value": "User wrote 'wife' on dentist emergency contact form, had to correct it to 'partner'",
+            "new_value_anchors": [
+              "User wrote 'wife' on dentist emergency contact form, had to correct it to 'partner'"
+            ],
+            "old_value": "",
+            "target_id": "dentist_mislabel_incident",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5"
+            ],
+            "new_value": "felt embarrassed and genuinely bothered the rest of the day after mislabeling Elaine on the form",
+            "new_value_anchors": [
+              "felt embarrassed and genuinely bothered the rest of the day after mislabeling Elaine on the form"
+            ],
+            "old_value": "",
+            "target_id": "emotional_reaction_dentist",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-1"
+            ],
+            "new_value": "Host toasted 'married couples' and gestured at user and Elaine; user did not correct him publicly",
+            "new_value_anchors": [
+              "Host toasted 'married couples' and gestured at user and Elaine; user did not correct him publicly"
+            ],
+            "old_value": "",
+            "target_id": "dinner_party_incident",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-3"
+            ],
+            "new_value": "felt low-key guilt for a couple of days after not correcting the dinner party host, felt dishonest by staying silent",
+            "new_value_anchors": [
+              "felt low-key guilt for a couple of days after not correcting the dinner party host, felt dishonest by staying silent"
+            ],
+            "old_value": "",
+            "target_id": "emotional_reaction_dinner",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-5"
+            ],
+            "new_value": "User and Elaine wrote 'co-tenant' on lease renewal; user found it satisfying to get terminology exactly right",
+            "new_value_anchors": [
+              "User and Elaine wrote 'co-tenant' on lease renewal; user found it satisfying to get terminology exactly right"
+            ],
+            "old_value": "",
+            "target_id": "lease_renewal_precision",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-7"
+            ],
+            "new_value": "User appreciates Marco's neutral phrasing 'your person' because it avoids assumptions and takes pressure off",
+            "new_value_anchors": [
+              "User appreciates Marco's neutral phrasing 'your person' because it avoids assumptions and takes pressure off"
+            ],
+            "old_value": "",
+            "target_id": "marco_phrasing_preference",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5",
+              "segment-2-turn-3",
+              "segment-2-turn-5",
+              "segment-3-turn-1"
+            ],
+            "new_value": "User feels uneasy and self-conscious when relationship status is misrepresented, even in minor social situations, because precision in relationship labels is a core personal value",
+            "new_value_anchors": [
+              "User feels uneasy and self-conscious when relationship status is misrepresented, even in minor social situations, because precision in relationship labels is a core personal value"
+            ],
+            "old_value": "",
+            "target_id": "relationship_label_sensitivity",
+            "type": "reflect"
+          }
+        ],
+        "latency_ms": 22213.968583,
+        "matched_keys": [
+          [
+            "remember",
+            "elaine_relationship_status"
+          ],
+          [
+            "remember",
+            "dentist_mislabel_incident"
+          ],
+          [
+            "remember",
+            "emotional_reaction_dentist"
+          ],
+          [
+            "remember",
+            "dinner_party_incident"
+          ],
+          [
+            "remember",
+            "emotional_reaction_dinner"
+          ],
+          [
+            "remember",
+            "lease_renewal_precision"
+          ],
+          [
+            "remember",
+            "marco_phrasing_preference"
+          ],
+          [
+            "reflect",
+            "relationship_label_sensitivity"
+          ]
+        ],
+        "passed": false,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "segment-1-turn-1"
+            ],
+            "new_value": "Elaine is the user's long-term partner; they began dating in June 2022 and are not married or engaged.",
+            "old_value": "",
+            "target_id": "elaine_relationship_status",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-3"
+            ],
+            "new_value": "On a dentist emergency-contact form, the user mistakenly wrote that Elaine was their wife and then corrected it to partner in front of the receptionist.",
+            "old_value": "",
+            "target_id": "dentist_mislabel_incident",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-5"
+            ],
+            "new_value": "The dentist-form mistake caused embarrassment for the rest of the day and repeated worry about misrepresenting an important relationship status.",
+            "old_value": "",
+            "target_id": "emotional_reaction_dentist",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-1"
+            ],
+            "new_value": "At a dinner party, the host included the user and Elaine in a toast to married couples; the user smiled and did not correct him publicly.",
+            "old_value": "",
+            "target_id": "dinner_party_incident",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-3"
+            ],
+            "new_value": "The user felt low-key guilt for a couple of days after the dinner party, interpreting their silence as dishonesty despite being proud to be Elaine's partner.",
+            "old_value": "",
+            "target_id": "emotional_reaction_dinner",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-5"
+            ],
+            "new_value": "Using the accurate term 'co-tenant' on an apartment lease renewal felt clean, honest, and genuinely satisfying to the user.",
+            "old_value": "",
+            "target_id": "lease_renewal_precision",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-2-turn-7"
+            ],
+            "new_value": "The user genuinely appreciates Marco's neutral phrase 'your person' because it respectfully acknowledges relationships without assuming marriage or engagement.",
+            "old_value": "",
+            "target_id": "marco_phrasing_preference",
+            "type": "remember"
+          },
+          {
+            "evidence_ids": [
+              "segment-1-turn-1",
+              "segment-1-turn-3",
+              "segment-1-turn-5",
+              "segment-1-turn-7",
+              "segment-2-turn-1",
+              "segment-2-turn-3",
+              "segment-2-turn-5",
+              "segment-2-turn-7",
+              "segment-3-turn-1",
+              "segment-3-turn-7"
+            ],
+            "new_value": "Across independent sessions, the user shows a strong sensitivity to inaccurate romantic-relationship labels: mismatches evoke embarrassment, guilt, or discomfort, while exact or neutral terminology supports honesty and self-respect; the user prefers people to ask rather than assume.",
+            "old_value": "",
+            "target_id": "relationship_label_sensitivity",
+            "type": "reflect"
+          },
+          {
+            "evidence_ids": [
+              "segment-3-turn-5"
+            ],
+            "new_value": "Elaine is currently the user's partner; they have decided to get engaged in summer but are not yet engaged, and the user wants 'partner' used until it becomes official.",
+            "old_value": "Elaine is the user's long-term partner; they began dating in June 2022 and are not married or engaged.",
+            "target_id": "elaine_relationship_status",
+            "type": "update"
+          }
+        ],
+        "provenance_error_keys": [
+          [
+            "reflect",
+            "relationship_label_sensitivity"
+          ]
+        ],
+        "response_chars": 2866,
+        "response_sha256": "a5654e2faa507a4c6f686e2a48e5a6012c206f7e3e803a0f54b564cbf3579172",
+        "tp": 8,
+        "value_error_keys": [
+          [
+            "reflect",
+            "relationship_label_sensitivity"
+          ],
+          [
+            "remember",
+            "dentist_mislabel_incident"
+          ],
+          [
+            "remember",
+            "dinner_party_incident"
+          ],
+          [
+            "remember",
+            "elaine_relationship_status"
+          ],
+          [
+            "remember",
+            "emotional_reaction_dentist"
+          ],
+          [
+            "remember",
+            "emotional_reaction_dinner"
+          ],
+          [
+            "remember",
+            "lease_renewal_precision"
+          ],
+          [
+            "remember",
+            "marco_phrasing_preference"
+          ]
+        ]
+      }
+    ],
+    "gate_verdict": {
+      "checks": {
+        "noop_accuracy": true,
+        "operation_precision": true,
+        "operation_recall": true,
+        "parse_success_rate": true,
+        "provenance_support_rate": true,
+        "target_binding_accuracy": true,
+        "value_accuracy": true
+      },
+      "passed": true
+    },
+    "id": "configured_model_memory_decision_json_v1",
+    "metrics": {
+      "by_operation_type": {
+        "forget": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        },
+        "reflect": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        },
+        "remember": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 23
+        },
+        "update": {
+          "f1": 0.666667,
+          "fn": 0,
+          "fp": 2,
+          "precision": 0.5,
+          "recall": 1.0,
+          "tp": 2
+        }
+      },
+      "case_pass_rate": 0.0,
+      "failure_stage_counts": {
+        "binding_error": 0,
+        "detection_error": 2,
+        "parse_error": 0,
+        "provenance_error": 0,
+        "provider_error": 0,
+        "value_error": 2
+      },
+      "noop_accuracy": 1.0,
+      "operation_f1": 0.964285,
+      "operation_fn": 0,
+      "operation_fp": 2,
+      "operation_precision": 0.931034,
+      "operation_recall": 1.0,
+      "operation_tp": 27,
+      "parse_success_rate": 1.0,
+      "provenance_support_rate": 0.962963,
+      "target_binding_accuracy": 1.0,
+      "value_accuracy": 0.37037
+    },
+    "provider": {
+      "model": "gpt-5.6-sol",
+      "provider": "codex_cli",
+      "reasoning_effort": "none",
+      "stage": "classifier"
+    }
+  }
+}

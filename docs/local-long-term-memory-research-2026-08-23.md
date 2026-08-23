@@ -198,7 +198,11 @@ model. Its native development split must now be followed by a fixed official
 MemOps tier; neither result should be hidden behind one aggregate score. The
 external-data runner now pins the official clone commit and four adjacent
 sample digests, supports repeated update operations on one target, and keeps
-all upstream generated conversations outside this repository.
+all upstream generated conversations outside this repository. Its first clean
+run recalled all 27 gold operations with 0.931 precision, 1.000 recall, 0.964
+F1, and 0.963 exact provenance support. Two elaborations were still
+misclassified as updates, and repeat stability remains unmeasured. This is an
+official-data adapter smoke, not the full MemOps evaluation.
 
 In parallel, finish a fixed official LongMemEval-V2 small-tier run and preserve
 the adapter version, dataset revision, model, latency, and retrieved evidence.

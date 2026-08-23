@@ -47,3 +47,6 @@ The runner verifies the clone commit plus every selected file's SHA-256 before
 model egress. The repository stores only the manifest, not the upstream
 generated conversations. This smoke exercises the official evidence shape and
 update chains, but is not the full MemOps question/judge pipeline.
+
+The first clean official-data smoke result is recorded in
+[analysis/official-memops-smoke-2026-08-23.md](analysis/official-memops-smoke-2026-08-23.md).
