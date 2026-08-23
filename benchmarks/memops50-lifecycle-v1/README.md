@@ -121,3 +121,52 @@ with its
 [`machine-readable report`](results/decisions-c941895-rescored-3a70dfa.json).
 The rescore made zero model calls and preserves the original response hashes,
 sizes, and latencies.
+
+## Longitudinal evidence-retrieval tier
+
+Run the frozen Stage 2 / Stage 4 paired retrieval diagnostic:
+
+```bash
+uv run python scripts/run_memops50_retrieval.py \
+  --memops-root /path/to/MemOps \
+  --output /tmp/memops50-retrieval.json
+```
+
+The verifier maps each Stage 2 provenance coordinate to its exact Stage 4
+carrier using the pinned injection metadata, then proves that the complete
+inserted dialogue slice is byte-for-byte equal. It also verifies these fixed
+structural counts before retrieval starts:
+
+```text
+adjacent segments                 150
+longitudinal segments            2500
+longitudinal evidence carriers    150
+longitudinal distractor segments  285
+gold provenance items             165
+unique gold turns                 164
+gold segments                     110
+```
+
+Each source conversation segment is serialized as one isolated synthetic
+activity event, containing only its dialogue text in original order. The query
+is only the selected question. Answers, rubrics, gold state, provenance quotes,
+target metadata, evidence flags, and distractor metadata are never indexed.
+The evaluator then calls the production activity SQLite FTS5/BM25 search
+primitive with the pre-registered `top_k=10`, strict-AND followed by relaxed-OR
+only after zero hits, and no adjacent-event expansion.
+
+This unit is a **dataset-native conversation-segment proxy**, not a claim that
+MemOps segments equal OpenChronicle reducer events. Production events are
+usually narrower semantic sub-tasks, and the writer's full tool can optionally
+expand adjacent events. This tier deliberately holds both features out so it
+can measure the lexical ranker against the external distractor corpus without
+silently introducing a layout shortcut.
+
+Primary metrics separately report macro and micro gold-turn/segment recall,
+complete-case recall, first-gold MRR, injected-distractor contamination and
+top-one rate, context size, query-mode counts, and adjacent-to-longitudinal
+degradation. Turn recall is carrier-weighted—retrieving a carrier recovers all
+gold turns within it—so it is not presented as independent turn-level ranking.
+Injected distractors are an upstream label and are not necessarily relevant to
+the selected question; their contamination rate is a context-purity diagnostic,
+not a query-target error rate.

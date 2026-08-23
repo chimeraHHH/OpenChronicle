@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "tier_id": "memops50-stage4-retrieval-v1",
+  "retrieval": {
+    "ranker": "production_activity_sqlite_fts5_bm25",
+    "unit": "conversation_segment",
+    "top_k": 10,
+    "adjacency_radius": 0
+  },
+  "gates": {
+    "adjacent_provenance_segment_recall_at_k_min": 0.9,
+    "longitudinal_provenance_turn_recall_at_k_min": 0.8,
+    "longitudinal_provenance_segment_recall_at_k_min": 0.8,
+    "longitudinal_complete_case_recall_rate_min": 0.6,
+    "longitudinal_mean_reciprocal_rank_min": 0.7,
+    "provenance_segment_recall_drop_max": 0.2,
+    "mean_reciprocal_rank_drop_max": 0.25,
+    "longitudinal_injected_distractor_contamination_at_k_max": 0.2,
+    "longitudinal_injected_distractor_at_1_rate_max": 0.1,
+    "longitudinal_empty_hit_rate_max": 0.0,
+    "repository_clean_required": true
+  }
+}
