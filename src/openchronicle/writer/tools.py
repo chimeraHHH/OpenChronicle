@@ -243,6 +243,80 @@ def tool_search_memory(
     }
 
 
+@privacy_egress_fenced
+def tool_search_activity_evidence(
+    conn: sqlite3.Connection,
+    cfg: Config,
+    *,
+    query: str,
+    top_k: int = 10,
+    state: CommitState | None = None,
+) -> dict[str, Any]:
+    """Recall reducer-owned session evidence without treating it as memory.
+
+    Event entries stay out of durable-memory semantic indexing. This bounded
+    BM25 path exists only so the classifier can verify that an observed
+    behavior recurs across independent sessions before proposing a pattern.
+    """
+    if isinstance(top_k, bool) or not isinstance(top_k, int) or not 1 <= top_k <= 20:
+        return {"error": "top_k must be an integer in [1, 20]"}
+    with files_mod.store_write_lock():
+        results: list[dict[str, Any]] = []
+        offset = 0
+        while len(results) < top_k:
+            hits = fts.search(
+                conn,
+                query=query,
+                path_patterns=["event-*"],
+                top_k=_POLICY_SEARCH_RECALL_LIMIT,
+                offset=offset,
+                include_superseded=False,
+            )
+            if not hits:
+                break
+            offset += len(hits)
+            for hit in canonical_entry_hits_locked(conn, cfg, hits):
+                if "heuristic" in hit.tags:
+                    continue
+                ref = EvidenceRef(
+                    kind="memory_entry",
+                    id=hit.id,
+                    path=hit.path,
+                    timestamp=hit.timestamp,
+                    content_hash=content_digest(hit.content),
+                )
+                if state is not None:
+                    state.expose_evidence(ref)
+                session_id = next(
+                    (
+                        tag.removeprefix("sid:")
+                        for tag in hit.tags
+                        if tag.startswith("sid:")
+                    ),
+                    "",
+                )
+                results.append(
+                    {
+                        "id": hit.id,
+                        "path": hit.path,
+                        "timestamp": hit.timestamp,
+                        "session_id": session_id,
+                        "content": hit.content,
+                        "rank": hit.rank,
+                        "evidence_token": ref.key,
+                    }
+                )
+                if len(results) >= top_k:
+                    break
+            if len(hits) < _POLICY_SEARCH_RECALL_LIMIT:
+                break
+    return {
+        "query": query,
+        "retrieval_mode": "bm25_activity_evidence",
+        "results": results,
+    }
+
+
 def tool_propose_memory_candidate(
     conn: sqlite3.Connection,
     *,
@@ -584,6 +658,30 @@ CLASSIFIER_TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "search_activity_evidence",
+            "description": (
+                "Search reducer-owned historical session evidence to verify a "
+                "behavior across independent sessions. Results are evidence, not "
+                "already accepted durable facts."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "default": 10,
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "propose_memory_candidate",
             "description": (
                 "Stage one grounded durable-memory proposal for human review. "
@@ -657,6 +755,14 @@ def dispatch_classifier(
             query=args["query"],
             top_k=args.get("top_k", 5),
             include_superseded=args.get("include_superseded", False),
+            state=state,
+        )
+    if name == "search_activity_evidence":
+        return tool_search_activity_evidence(
+            conn,
+            cfg,
+            query=args["query"],
+            top_k=args.get("top_k", 10),
             state=state,
         )
     if name == "propose_memory_candidate":

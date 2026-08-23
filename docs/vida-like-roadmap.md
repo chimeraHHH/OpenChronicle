@@ -189,6 +189,9 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
 - [x] Deterministic reviewed supersede proposals with target revision binding,
   approval-time revalidation, provenance-linked history, idempotent publication,
   and previous-value restoration when the reviewed replacement is purged.
+- [x] Authorized historical activity-evidence search for classifier-side
+  cross-session pattern confirmation, kept separate from accepted-memory search
+  and from the durable semantic index.
 
 The implemented backend contract, threat boundaries, and known limitations are
 documented in [stage1-memory-daily-wrap.md](stage1-memory-daily-wrap.md). Stage 1

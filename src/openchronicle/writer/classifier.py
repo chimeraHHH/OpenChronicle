@@ -694,7 +694,7 @@ def _assemble_context(
         parts.append("")
     parts.append(
         "If you need earlier history or adjacent entity files, call "
-        "`search_memory` or `read_memory` — don't guess."
+        "`search_activity_evidence`, `search_memory`, or `read_memory` — don't guess."
     )
     return "\n".join(parts).strip()
 

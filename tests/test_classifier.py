@@ -103,6 +103,7 @@ def test_classifier_stages_grounded_preference_for_review(ac_root: Path, monkeyp
         assert names == {
             "read_memory",
             "search_memory",
+            "search_activity_evidence",
             "propose_memory_candidate",
             "commit",
         }
@@ -451,3 +452,70 @@ def test_classifier_supersede_requires_seen_target_and_replacement_evidence(
         assert [(source.path, source.id) for source in sources] == [
             ("project-new-signal.md", "new-signal")
         ]
+
+
+def test_activity_search_returns_distinct_grounded_sessions_only(
+    ac_root: Path,
+) -> None:
+    cfg = config_mod.Config()
+    with fts.cursor() as conn:
+        for day, entry_id, session_id in (
+            ("2026-04-19", "event-pattern-a", "sess_a"),
+            ("2026-04-20", "event-pattern-b", "sess_b"),
+        ):
+            name = f"event-{day}.md"
+            entries_mod.create_file(
+                conn,
+                name=name,
+                description="session evidence",
+                tags=["event"],
+            )
+            entries_mod.append_entry_once(
+                conn,
+                name=name,
+                content="Writes commit messages in present tense.",
+                tags=["session", f"sid:{session_id}"],
+                entry_id=entry_id,
+                origin=files_mod.MANUAL_ENTRY_ORIGIN,
+            )
+        entries_mod.append_entry_once(
+            conn,
+            name="event-2026-04-20.md",
+            content="Writes commit messages in present tense.",
+            tags=["session", "sid:sess_heuristic", "heuristic"],
+            entry_id="event-pattern-heuristic",
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
+        )
+        entries_mod.create_file(
+            conn,
+            name="project-decoy.md",
+            description="durable decoy",
+            tags=["project"],
+        )
+        entries_mod.append_entry_once(
+            conn,
+            name="project-decoy.md",
+            content="Writes commit messages in present tense.",
+            tags=["project"],
+            entry_id="durable-decoy",
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
+        )
+        state = writer_tools.CommitState()
+
+        result = writer_tools.tool_search_activity_evidence(
+            conn,
+            cfg,
+            query="commit messages present tense",
+            top_k=10,
+            state=state,
+        )
+
+        assert result["retrieval_mode"] == "bm25_activity_evidence"
+        assert {
+            (item["path"], item["id"], item["session_id"])
+            for item in result["results"]
+        } == {
+            ("event-2026-04-19.md", "event-pattern-a", "sess_a"),
+            ("event-2026-04-20.md", "event-pattern-b", "sess_b"),
+        }
+        assert len(state.allowed_evidence) == 2

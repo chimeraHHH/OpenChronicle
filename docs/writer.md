@@ -86,6 +86,7 @@ Both paths then run a bounded, review-first tool-call loop over `writer/tools.py
 |---|---|
 | `read_memory(path, tail_n?)` | Fetch a durable (non-`event-*`) memory file's frontmatter + last 1–20 entries (default 10). |
 | `search_memory(query, top_k?, include_superseded?)` | Local semantic + BM25 RRF when enabled, otherwise BM25, over durable current non-tombstoned memory; `top_k` is 1–20. Enabled backend failures are explicit. |
+| `search_activity_evidence(query, top_k?)` | Bounded BM25 recall over current, authorized, non-heuristic `event-*` session entries. It returns session IDs and evidence tokens for cross-session pattern confirmation; event entries remain outside the durable semantic index. |
 | `propose_memory_candidate(kind, operation?, path, target_entry_id?, content, tags, evidence_tokens, confidence?, conflict_key?)` | Persist an append or supersede candidate whose evidence tokens must have been authorized by the current prompt or an actual read/search result. Supersede requires the exact reviewed target and separate replacement evidence. It does not mutate Markdown. |
 | `commit(summary)` | End a model-driven round. Called exactly once; the proven-empty terminal path does not call the provider or this tool. |
 
