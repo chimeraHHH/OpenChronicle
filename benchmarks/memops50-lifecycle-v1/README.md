@@ -80,10 +80,13 @@ distractors, or whether an answer model produced a correct response. Those
 remain separate tiers so a model failure cannot be mislabeled as a storage
 failure.
 
-The first clean production-lifecycle result is recorded in
-[analysis/openchronicle-4bb887f.md](analysis/openchronicle-4bb887f.md). Its raw,
-machine-readable report is
-[`results/openchronicle-4bb887f.json`](results/openchronicle-4bb887f.json).
+The original clean production-lifecycle result is recorded in
+[analysis/openchronicle-4bb887f.md](analysis/openchronicle-4bb887f.md). After the
+adapter's evidence contract was aligned with the classifier trigger semantics,
+the clean regression result remained perfect; see
+[analysis/openchronicle-3a70dfa-trigger-provenance.md](analysis/openchronicle-3a70dfa-trigger-provenance.md)
+and its
+[`machine-readable report`](results/openchronicle-3a70dfa-trigger-provenance.json).
 
 ## Operation-inference tier
 
@@ -112,3 +115,9 @@ The first clean Sol run and its scorer audit are recorded in
 [analysis/decisions-c941895-gpt-5.6-sol-v1.md](analysis/decisions-c941895-gpt-5.6-sol-v1.md).
 The raw report is
 [`results/decisions-c941895-gpt-5.6-sol.json`](results/decisions-c941895-gpt-5.6-sol.json).
+The deterministic corrected-provenance rescore is recorded in
+[analysis/decisions-c941895-rescored-3a70dfa.md](analysis/decisions-c941895-rescored-3a70dfa.md)
+with its
+[`machine-readable report`](results/decisions-c941895-rescored-3a70dfa.json).
+The rescore made zero model calls and preserves the original response hashes,
+sizes, and latencies.
