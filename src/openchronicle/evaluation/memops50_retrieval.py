@@ -53,15 +53,25 @@ class RetrievalCase:
     gold_provenance_item_count: int
 
 
-def load_cases(*, manifest_path: Path, memops_root: Path) -> tuple[RetrievalCase, ...]:
+def load_cases(
+    *,
+    manifest_path: Path,
+    memops_root: Path,
+    exclusion_path: Path | None = None,
+) -> tuple[RetrievalCase, ...]:
     """Load 50 digest-verified adjacent/longitudinal retrieval pairs."""
-    memops50.verify_manifest(manifest_path=manifest_path, memops_root=memops_root)
     manifest = memops50._load_json(
         manifest_path.read_bytes(),
         label="MemOps-50 manifest",
     )
     if not isinstance(manifest, dict) or not isinstance(manifest.get("items"), list):
         raise ValueError("MemOps-50 manifest items are missing")
+    tier_id, expected_counts = _verify_tier_manifest(
+        manifest=manifest,
+        manifest_path=manifest_path,
+        memops_root=memops_root,
+        exclusion_path=exclusion_path,
+    )
     root = memops_root.resolve()
     stage2_root = root / memops50.STAGE2_ROOT
     stage4_root = root / memops50.STAGE4_ROOT
@@ -90,17 +100,8 @@ def load_cases(*, manifest_path: Path, memops_root: Path) -> tuple[RetrievalCase
     if len(cases) != 50:
         raise ValueError("MemOps-50 retrieval tier must contain 50 cases")
     counts = _dataset_counts(cases)
-    expected_counts = {
-        "adjacent_segment_count": 150,
-        "longitudinal_segment_count": 2500,
-        "longitudinal_evidence_carrier_count": 150,
-        "longitudinal_distractor_segment_count": 285,
-        "gold_provenance_item_count": 165,
-        "unique_gold_turn_count": 164,
-        "gold_segment_count": 110,
-    }
     if counts != expected_counts:
-        raise ValueError(f"MemOps-50 retrieval structure changed: {counts}")
+        raise ValueError(f"MemOps-50 retrieval structure changed for {tier_id}: {counts}")
     return tuple(cases)
 
 
@@ -110,8 +111,16 @@ def run_evaluation(
     memops_root: Path,
     metric_contract_path: Path,
     repository_root: Path,
+    exclusion_path: Path | None = None,
 ) -> dict[str, Any]:
-    cases = load_cases(manifest_path=manifest_path, memops_root=memops_root)
+    cases = load_cases(
+        manifest_path=manifest_path,
+        memops_root=memops_root,
+        exclusion_path=exclusion_path,
+    )
+    manifest = memops50._load_json(manifest_path.read_bytes(), label="MemOps-50 manifest")
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("tier_id"), str):
+        raise ValueError("MemOps-50 manifest tier identity is missing")
     contract_bytes = metric_contract_path.read_bytes()
     contract = memops50._load_json(contract_bytes, label="MemOps-50 retrieval contract")
     _validate_contract(contract)
@@ -166,7 +175,7 @@ def run_evaluation(
             "sqlite": sqlite3.sqlite_version,
         },
         "dataset": {
-            "tier_id": "memops50-adjacent-longitudinal-v1",
+            "tier_id": manifest["tier_id"],
             "manifest_path": str(manifest_path.relative_to(repository_root)),
             "manifest_sha256": memops50.sha256_bytes(manifest_path.read_bytes()),
             "upstream_commit": memops50.UPSTREAM_COMMIT,
@@ -195,6 +204,42 @@ def run_evaluation(
         "comparisons": comparisons,
         "gate_verdict": verdict,
     }
+
+
+def _verify_tier_manifest(
+    *,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    memops_root: Path,
+    exclusion_path: Path | None,
+) -> tuple[str, dict[str, int]]:
+    tier_id = manifest.get("tier_id")
+    if tier_id == "memops50-adjacent-longitudinal-v1":
+        memops50.verify_manifest(manifest_path=manifest_path, memops_root=memops_root)
+        return tier_id, {
+            "adjacent_segment_count": 150,
+            "longitudinal_segment_count": 2500,
+            "longitudinal_evidence_carrier_count": 150,
+            "longitudinal_distractor_segment_count": 285,
+            "gold_provenance_item_count": 165,
+            "unique_gold_turn_count": 164,
+            "gold_segment_count": 110,
+        }
+    if tier_id == "memops50-heldout-adjacent-longitudinal-v1":
+        if exclusion_path is None:
+            raise ValueError("held-out MemOps-50 verification requires --exclusion")
+        from . import memops50_heldout
+
+        memops50_heldout.verify_manifest(
+            manifest_path=manifest_path,
+            exclusion_path=exclusion_path,
+            memops_root=memops_root,
+        )
+        expected = manifest.get("retrieval_expected")
+        if expected != memops50_heldout.RETRIEVAL_EXPECTED:
+            raise ValueError("held-out MemOps-50 retrieval expectations changed")
+        return tier_id, dict(memops50_heldout.RETRIEVAL_EXPECTED)
+    raise ValueError(f"unsupported MemOps-50 retrieval tier: {tier_id!r}")
 
 
 def write_report(report: dict[str, Any], output: Path | None) -> str:
@@ -792,6 +837,11 @@ def main(argv: list[str] | None = None) -> int:
         default=Path("benchmarks/memops50-lifecycle-v1/json/manifest.json"),
     )
     parser.add_argument(
+        "--exclusion",
+        type=Path,
+        help="development selection excluded by a held-out manifest",
+    )
+    parser.add_argument(
         "--contract",
         type=Path,
         default=Path("benchmarks/memops50-lifecycle-v1/json/retrieval_metric_contract.json"),
@@ -804,6 +854,7 @@ def main(argv: list[str] | None = None) -> int:
         memops_root=args.memops_root.expanduser().resolve(),
         metric_contract_path=args.contract.resolve(),
         repository_root=repository_root,
+        exclusion_path=args.exclusion.resolve() if args.exclusion else None,
     )
     print(write_report(report, args.output))
     return 0 if report["gate_verdict"]["passed"] else 1

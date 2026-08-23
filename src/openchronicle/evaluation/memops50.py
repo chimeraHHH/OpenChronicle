@@ -192,6 +192,7 @@ def _build_item(
     question_pair_id: str,
     stage2_root: Path,
     stage4_root: Path,
+    selection_seed: str = SELECTION_SEED,
 ) -> dict[str, str]:
     match = _FILE_RE.fullmatch(source_file)
     if match is None:
@@ -231,7 +232,7 @@ def _build_item(
         "",
     )
     rank_hash = sha256_bytes(
-        f"{SELECTION_SEED}\0{source_file}\0{question_pair_id}".encode()
+        f"{selection_seed}\0{source_file}\0{question_pair_id}".encode()
     )
     return {
         "source_file": source_file,
