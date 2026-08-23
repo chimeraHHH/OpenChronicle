@@ -232,8 +232,11 @@ as a set. No item above should be read as a claim that Stage 0 is complete.
   implemented.
 - [x] Rebuildable reducer-subtask event projection plus bounded same-day
   adjacent-event retrieval for both MCP and classifier evidence search.
-- [ ] Same-case comparison of event retrieval against minute and whole-session
-  units before adding model-driven topic-boundary inference.
+- [x] Frozen six-case native comparison of minute, whole-session, event, and
+  one-hop event retrieval. Event adjacency reached 1.000 anchor recall with
+  0.738× the whole-session context and a 0.714 forbidden-anchor-rate reduction.
+- [ ] Repeat retrieval-unit comparison on held-out/public and real replay
+  traces before adding model-driven topic-boundary inference.
 - [ ] Reviewed procedural memory derived only from repeated/adopted text
   workflows, templates, or checklists. It remains generation context and never
   executes computer actions.

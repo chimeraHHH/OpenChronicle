@@ -23,3 +23,6 @@ uv run python scripts/run_vida_event_retrieval.py
 This small first-party regression is not a public benchmark result. It is a
 gate against promoting model-driven topic segmentation without evidence that
 the deterministic reducer sub-task boundary is insufficient.
+
+The first clean result and its limitations are recorded in
+[analysis/native-development-2026-08-24.md](analysis/native-development-2026-08-24.md).

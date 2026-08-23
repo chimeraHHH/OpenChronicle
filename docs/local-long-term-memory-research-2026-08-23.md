@@ -184,6 +184,12 @@ taxonomy supports OpenChronicle's review-first, provenance-bound write path.
     neighbor radius only after revalidating every row against Markdown,
     provenance, policy, and purge state. This reuses the reducer's existing
     app/subject segmentation and adds no model call.
+13. **Same-case retrieval-unit gate.** A six-case native-development fixture
+    compares minute, whole-session, event, and one-hop event units under the
+    same strict-then-zero-hit-OR FTS5/BM25 ranker. The clean bound result gives
+    event adjacency 1.000 anchor recall, 0.738 times the whole-session context,
+    and a 0.714 reduction in forbidden-anchor rate. It also records residual
+    neighbor noise and is not a held-out/public result.
 
 ## Remaining optimization sequence
 
@@ -233,9 +239,11 @@ event boundaries. It materializes one rebuildable row per
 new model call and is already available through MCP `search_activity` and the
 classifier's `search_activity_evidence`.
 
-Next, evaluate minute, whole-session, and event units on the same cases. Add
-model-assisted topic boundaries only if the deterministic sub-task unit shows a
-measured failure; do not change the default on intuition.
+The first native same-case comparison is complete and favors one-hop event
+adjacency over minute or whole-session units on its frozen development cases.
+Repeat it on held-out/public and real replay traces. Add model-assisted topic
+boundaries only if the deterministic sub-task unit shows a measured failure;
+do not change the default on intuition.
 
 ### P1: procedural memory from adopted outcomes
 
