@@ -5,7 +5,9 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import math
+import re
 import sqlite3
+import unicodedata
 from array import array
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -28,6 +30,27 @@ ON memory_embeddings(model_id);
 CREATE INDEX IF NOT EXISTS idx_memory_embeddings_path
 ON memory_embeddings(path);
 """
+
+_PATH_IDENTITY_STOPWORDS = frozenset(
+    {
+        "md",
+        "memory",
+        "memories",
+        "note",
+        "notes",
+        "org",
+        "person",
+        "preference",
+        "preferences",
+        "procedure",
+        "profile",
+        "project",
+        "tool",
+        "topic",
+        "user",
+    }
+)
+_IDENTITY_TOKEN_RE = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 class SemanticIndexUnavailable(RuntimeError):
@@ -323,13 +346,17 @@ def hybrid_search(
             "vector_rank": None,
             "vector_similarity": None,
         }
-    lexical_paths = {hit.path for hit in bm25}
+    lexical_scope_paths = _lexical_entity_scope_paths(query, bm25)
     for rank, (hit, similarity) in enumerate(vector_rows, start=1):
         # An exact lexical hit is a strong scope anchor (project/person/tool
         # name). In that case vectors may expand within the same Markdown
         # scope, but cannot introduce a similarly worded fact from another
         # entity. With no lexical hit, full semantic recall remains available.
-        if hit.id not in records and lexical_paths and hit.path not in lexical_paths:
+        if (
+            hit.id not in records
+            and lexical_scope_paths
+            and hit.path not in lexical_scope_paths
+        ):
             continue
         record = records.setdefault(
             hit.id,
@@ -365,6 +392,33 @@ def hybrid_search(
         )
         for item in ordered[:top_k]
     ]
+
+
+def _lexical_entity_scope_paths(query: str, hits: Sequence[Any]) -> set[str]:
+    """Return lexical paths only when the query names their path identity.
+
+    A BM25 hit alone is not a safe scope boundary: generic UI text can contain
+    the full query while a different memory file holds the semantically correct
+    fact. Project/person/tool slugs are a useful hard boundary only when the
+    query explicitly repeats a non-generic token from that slug.
+    """
+    normalized_query = unicodedata.normalize("NFKC", query)
+    query_tokens = {
+        token.casefold()
+        for token in _IDENTITY_TOKEN_RE.findall(normalized_query)
+        if len(token) >= 2
+    }
+    scoped: set[str] = set()
+    for hit in hits:
+        normalized_path = unicodedata.normalize("NFKC", str(hit.path))
+        path_tokens = {
+            token.casefold()
+            for token in _IDENTITY_TOKEN_RE.findall(normalized_path)
+            if len(token) >= 2 and token.casefold() not in _PATH_IDENTITY_STOPWORDS
+        }
+        if query_tokens & path_tokens:
+            scoped.add(str(hit.path))
+    return scoped
 
 
 def _vector_candidates(

@@ -39,6 +39,25 @@ class FixtureEmbedder:
         return [0.0, 0.0, 0.0, 1.0]
 
 
+class CrossScopeFixtureEmbedder:
+    model_id = "fixture:cross-scope-v1"
+
+    def embed_documents(self, texts):
+        return [self._vector(text) for text in texts]
+
+    def embed_query(self, text):
+        return self._vector(text)
+
+    @staticmethod
+    def _vector(text: str) -> list[float]:
+        lowered = text.lower()
+        if "tool-editor.md" in lowered:
+            return [0.0, 1.0]
+        if "project-openchronicle.md" in lowered or "storage choice" in lowered:
+            return [1.0, 0.0]
+        return [0.0, 1.0]
+
+
 def _seed(conn) -> dict[str, str]:
     entries_mod.create_file(
         conn,
@@ -147,6 +166,48 @@ def test_lexical_entity_anchor_blocks_cross_scope_vector_expansion(ac_root: Path
         )
 
     assert [hit.path for hit in hits] == ["project-atlas.md"]
+
+
+def test_generic_lexical_hit_does_not_hide_cross_file_semantic_match(
+    ac_root: Path,
+) -> None:
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn,
+            name="tool-editor.md",
+            description="editor UI notes",
+            tags=["tool"],
+        )
+        lexical_id = entries_mod.append_entry(
+            conn,
+            name="tool-editor.md",
+            content="The settings panel labels Storage Choice as a menu.",
+            tags=["ui"],
+        )
+        entries_mod.create_file(
+            conn,
+            name="project-openchronicle.md",
+            description="project decisions",
+            tags=["project"],
+        )
+        semantic_id = entries_mod.append_entry(
+            conn,
+            name="project-openchronicle.md",
+            content="OpenChronicle persists its durable state in PostgreSQL.",
+            tags=["database", "decision"],
+        )
+
+        hits = semantic.hybrid_search(
+            conn,
+            query="storage choice",
+            embedder=CrossScopeFixtureEmbedder(),
+            top_k=2,
+        )
+
+    recalled = next(hit for hit in hits if hit.id == semantic_id)
+    assert recalled.vector_rank == 1
+    assert recalled.bm25_rank is None
+    assert lexical_id in {hit.id for hit in hits}
 
 
 def test_semantic_projection_is_rebuildable_and_removes_orphans(ac_root: Path) -> None:
