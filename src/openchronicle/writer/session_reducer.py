@@ -8,9 +8,9 @@ files instead of a session DB table. For a session that just ended:
   3. Parse ``{summary, sub_tasks}`` and append one entry to
      ``event-<session-start-local-date>.md`` — creating the file if it
      doesn't exist yet.
-  4. On LLM success mark the session row ``reduced``; on failure with
-     retries remaining mark it ``failed`` + schedule next retry; on
-     terminal failure write a heuristic entry and mark ``reduced``.
+  4. On LLM success mark the session row ``reduced``; on failure keep the
+     session ``failed`` and schedule another retry. Provider failures never
+     materialize locally guessed activity as memory.
 
 This module is called from two places:
 
@@ -60,11 +60,11 @@ _PRECEDING_ENTRY_LIMIT = 6
 
 logger = get("openchronicle.writer")
 
-# Matches Einsia. The index into this tuple is the attempt counter
-# *before* the retry — a freshly-failed row (retry_count=0) schedules
-# at _RETRY_BACKOFF_MINUTES[0] = 5 min.
+# The index into this tuple is the attempt counter *before* the retry — a
+# freshly-failed row (retry_count=0) schedules at 5 minutes. Once every step
+# has been used, retries continue at the final interval. A provider outage may
+# leave work pending, but it must never manufacture a local summary.
 _RETRY_BACKOFF_MINUTES: tuple[int, ...] = (5, 15, 30, 60, 120)
-_MAX_RETRIES: int = len(_RETRY_BACKOFF_MINUTES)
 _REDUCTION_LOCK_SHARDS = 256
 
 
@@ -503,6 +503,14 @@ def _reduce_window_locked(
         exclude_entry_id=stable_entry_id,
     )
 
+    if payload is not None:
+        sub_tasks = [
+            str(task).strip() for task in (payload.get("sub_tasks") or []) if str(task).strip()
+        ]
+        if not sub_tasks:
+            logger.warning("session %s: reducer returned no sub_tasks", session_id)
+            payload = None
+
     if payload is None:
         if not is_final:
             # Flush failures don't schedule retries — the next flush tick
@@ -522,47 +530,34 @@ def _reduce_window_locked(
                 is_final=False,
             )
         retry_count = existing.retry_count if existing else 0
-        if retry_count + 1 >= _MAX_RETRIES:
-            logger.warning(
-                "session %s: reducer exhausted %d attempts, writing heuristic fallback",
+        retry_delay = _RETRY_BACKOFF_MINUTES[min(retry_count, len(_RETRY_BACKOFF_MINUTES) - 1)]
+        next_retry_at = datetime.now().astimezone() + timedelta(minutes=retry_delay)
+        with _publish_fence(conn, generation):
+            session_store.mark_failed(
+                conn,
                 session_id,
-                _MAX_RETRIES,
+                error="reducer LLM call failed or returned invalid JSON output",
+                next_retry_at=next_retry_at,
             )
-            payload = _heuristic_payload(blocks)
-            succeeded = False
-        else:
-            next_retry_at = datetime.now().astimezone() + timedelta(
-                minutes=_RETRY_BACKOFF_MINUTES[retry_count]
-            )
-            with _publish_fence(conn, generation):
-                session_store.mark_failed(
-                    conn,
-                    session_id,
-                    error="reducer LLM call failed or returned unparseable JSON",
-                    next_retry_at=next_retry_at,
-                )
-            logger.warning(
-                "session %s: reducer failed (retry %d/%d), next attempt at %s",
-                session_id,
-                retry_count + 1,
-                _MAX_RETRIES,
-                next_retry_at.isoformat(),
-            )
-            return ReduceResult(
-                session_id=session_id,
-                succeeded=False,
-                written=False,
-                start_time=session_start,
-                end_time=session_end,
-                is_final=True,
-            )
+        logger.warning(
+            "session %s: reducer failed (attempt %d), retrying in %d minutes at %s",
+            session_id,
+            retry_count + 1,
+            retry_delay,
+            next_retry_at.isoformat(),
+        )
+        return ReduceResult(
+            session_id=session_id,
+            succeeded=False,
+            written=False,
+            start_time=session_start,
+            end_time=session_end,
+            is_final=True,
+        )
     else:
         succeeded = True
 
     summary = str(payload.get("summary") or "").strip()
-    sub_tasks = [str(t).strip() for t in (payload.get("sub_tasks") or []) if str(t).strip()]
-    if not sub_tasks:
-        sub_tasks = _heuristic_payload(blocks)["sub_tasks"]
     sub_tasks = [_attach_drill_down_breadcrumb(s) for s in sub_tasks]
 
     with _publish_fence(conn, generation):
@@ -589,7 +584,7 @@ def _reduce_window_locked(
             end_time=materialized_end,
             summary=summary,
             sub_tasks=sub_tasks,
-            heuristic=not succeeded,
+            heuristic=False,
             is_final=is_final,
             blocks=blocks,
             preceding_evidence=preceding_evidence,
@@ -756,9 +751,7 @@ def _blocks_for_session(
         try:
             raw_start = datetime.fromisoformat(r["start_time"])
             raw_end = datetime.fromisoformat(r["end_time"])
-            intersects = _instant(raw_end) > _instant(start) and _instant(
-                raw_start
-            ) < _instant(end)
+            intersects = _instant(raw_end) > _instant(start) and _instant(raw_start) < _instant(end)
         except (TypeError, ValueError) as exc:
             raise TimelineProjectionInvalid(
                 f"timeline block {block_id} has an invalid window"
@@ -1047,29 +1040,6 @@ def _block_bindings(
         )
         for block in blocks
     ]
-
-
-def _heuristic_payload(
-    blocks: list[timeline_store.TimelineBlock],
-) -> dict[str, Any]:
-    """Fallback when LLM attempts are exhausted."""
-    apps: list[str] = []
-    for b in blocks:
-        for a in b.apps_used:
-            if a and a not in apps:
-                apps.append(a)
-    if not blocks:
-        return {
-            "summary": "",
-            "sub_tasks": ["[Unknown] no notable activity, involving —"],
-        }
-    start_hm = blocks[0].start_time.strftime("%H:%M")
-    end_hm = blocks[-1].end_time.strftime("%H:%M")
-    sub_tasks = [
-        f"[{start_hm}-{end_hm}, {app}] active during the session, involving —" for app in apps
-    ] or [f"[{start_hm}-{end_hm}, Unknown] no notable activity, involving —"]
-    summary = f"Used {', '.join(apps)}." if apps else ""
-    return {"summary": summary, "sub_tasks": sub_tasks}
 
 
 # ─── Entry writing ──────────────────────────────────────────────────────────

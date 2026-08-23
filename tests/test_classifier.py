@@ -199,6 +199,46 @@ def test_classifier_skips_when_event_daily_missing(ac_root: Path) -> None:
     assert "no entries" in result.skipped_reason
 
 
+
+def test_classifier_never_promotes_legacy_heuristic_event(
+    ac_root: Path, monkeypatch,
+) -> None:
+    name = "event-2026-04-23.md"
+    with fts.cursor() as conn:
+        entries_mod.create_file(
+            conn,
+            name=name,
+            description="Legacy reducer output",
+            tags=["event", "session", "daily"],
+        )
+        entry_id = entries_mod.append_entry(
+            conn,
+            name=name,
+            content=(
+                "**Session sess_heuristic** (09:00–09:15)\n\n"
+                "Used Cursor.\n\n"
+                "- [09:00-09:15, Cursor] active during the session, involving —"
+            ),
+            tags=["session", "sid:sess_heuristic", "heuristic"],
+            origin=files_mod.MANUAL_ENTRY_ORIGIN,
+        )
+
+    def unexpected_llm(*args, **kwargs):
+        raise AssertionError("heuristic event must not reach the classifier model")
+
+    monkeypatch.setattr(llm_mod, "call_llm", unexpected_llm)
+    cfg = config_mod.load(ac_root / "config.toml")
+    result = classifier_mod.classify_after_reduce(
+        cfg,
+        session_id="sess_heuristic",
+        event_daily_path=name,
+        just_written_entry_id=entry_id,
+    )
+
+    assert result.committed is False
+    assert result.candidate_ids == []
+    assert "no entries" in result.skipped_reason
+
 def test_classifier_tools_bound_retrieval_and_hide_event_entries(
     ac_root: Path,
 ) -> None:

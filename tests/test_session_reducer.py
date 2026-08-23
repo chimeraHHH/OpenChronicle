@@ -675,12 +675,16 @@ def test_reducer_llm_failure_schedules_retry(ac_root: Path, monkeypatch) -> None
     assert row.next_retry_at is not None
 
 
-def test_reducer_exhausted_retries_writes_heuristic(ac_root: Path, monkeypatch) -> None:
+def test_reducer_retries_after_backoff_schedule_is_exhausted(
+    ac_root: Path, monkeypatch,
+) -> None:
     start = datetime(2026, 4, 21, 13, 0, tzinfo=_TZ)
     end = start + timedelta(minutes=15)
     _seed_blocks(start)
 
-    # Row begins with retry_count=4, meaning this is attempt 5/5.
+    # Row begins with retry_count=4, meaning the next failure reaches the
+    # final backoff step. It must remain retryable instead of materializing a
+    # locally guessed summary.
     with fts.cursor() as conn:
         session_store.insert(
             conn,
@@ -702,15 +706,60 @@ def test_reducer_exhausted_retries_writes_heuristic(ac_root: Path, monkeypatch) 
     )
 
     assert result.succeeded is False
-    assert result.written is True
-    md = (paths.memory_dir() / "event-2026-04-21.md").read_text()
-    assert "Cursor" in md
-    assert "heuristic" in md  # tag should be present on the heading
+    assert result.written is False
+    assert not (paths.memory_dir() / "event-2026-04-21.md").exists()
 
     with fts.cursor() as conn:
         row = session_store.get_by_id(conn, "sess_last_chance")
     assert row is not None
-    assert row.status == "reduced"
+    assert row.status == "failed"
+    assert row.retry_count == 5
+    assert row.next_retry_at is not None
+    delay = row.next_retry_at - datetime.now().astimezone()
+    assert timedelta(minutes=119) < delay <= timedelta(minutes=120)
+
+
+def test_reducer_empty_sub_tasks_schedules_retry_without_local_fallback(
+    ac_root: Path, monkeypatch,
+) -> None:
+    start = datetime(2026, 4, 21, 13, 30, tzinfo=_TZ)
+    end = start + timedelta(minutes=15)
+    _seed_blocks(start)
+
+    with fts.cursor() as conn:
+        session_store.insert(
+            conn,
+            session_store.SessionRow(
+                id="sess_empty_subtasks",
+                start_time=start,
+                end_time=end,
+                status="ended",
+            ),
+        )
+
+    monkeypatch.setenv("OPENCHRONICLE_LLM_MOCK", "1")
+    monkeypatch.setenv(
+        "OPENCHRONICLE_LLM_MOCK_JSON",
+        json.dumps({"summary": "model omitted the required tasks", "sub_tasks": []}),
+    )
+
+    cfg = _unrestricted_cfg(ac_root)
+    result = session_reducer.reduce_session(
+        cfg,
+        session_id="sess_empty_subtasks",
+        start_time=start,
+        end_time=end,
+    )
+
+    assert result.succeeded is False
+    assert result.written is False
+    assert not (paths.memory_dir() / "event-2026-04-21.md").exists()
+    with fts.cursor() as conn:
+        row = session_store.get_by_id(conn, "sess_empty_subtasks")
+    assert row is not None
+    assert row.status == "failed"
+    assert row.retry_count == 1
+    assert row.next_retry_at is not None
 
 
 def test_reducer_idempotent_on_already_reduced(ac_root: Path, monkeypatch) -> None:

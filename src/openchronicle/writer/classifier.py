@@ -394,6 +394,12 @@ def _focus_entries_in_range(
     required_ids = set(focus_entry_ids or [])
     matches: list[files_mod.ParsedEntry] = []
     for e in parsed.entries:
+        # Legacy reducer versions could materialize a locally guessed event
+        # after provider retries were exhausted. Those entries remain readable
+        # for audit, but they are not model-grounded evidence and must never be
+        # promoted into durable long-term memory.
+        if "heuristic" in e.tags:
+            continue
         if sid_tag not in e.tags:
             continue
         if e.id in required_ids:
@@ -501,11 +507,12 @@ def _focus_entries(
     except Exception:  # noqa: BLE001
         return []
     sid_tag = f"sid:{session_id}"
-    matches = [e for e in parsed.entries if sid_tag in e.tags]
+    trusted_entries = [e for e in parsed.entries if "heuristic" not in e.tags]
+    matches = [e for e in trusted_entries if sid_tag in e.tags]
     if not matches:
-        matches = [e for e in parsed.entries if e.id == fallback_entry_id]
-    if not matches and parsed.entries:
-        matches = [parsed.entries[-1]]
+        matches = [e for e in trusted_entries if e.id == fallback_entry_id]
+    if not matches and trusted_entries:
+        matches = [trusted_entries[-1]]
     return [
         entry
         for entry in matches
@@ -613,7 +620,8 @@ def _render_prior_day(
     visible = [
         entry
         for entry in parsed.entries
-        if not candidate_store.is_tombstoned(
+        if "heuristic" not in entry.tags
+        and not candidate_store.is_tombstoned(
             conn,
             kind="memory_entry",
             artifact_id=entry.id,
