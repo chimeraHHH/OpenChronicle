@@ -541,17 +541,29 @@ held-out claim. Reproduction details live in
 
 1. Keep canonical Markdown, SQLite, reviewed lifecycle, valid-time,
    supersession, provenance, and permanent forget unchanged.
-2. Add a read-only local recall explanation that exposes the BM25/vector ranks,
-   RRF score, filters, model/projection identity, and unavailable reason already
-   present in the current implementation. Do not persist queries or content.
-3. Freeze a new source-disjoint validation tier before choosing more ranking
-   parameters. The two existing 50-case tiers are now development/error-analysis
-   data.
-4. Evaluate `candidate top-20 -> tools-free evidence distiller -> at most five
-   exact evidence refs -> answer`, preserving the full candidate trace locally.
-5. Gate answer accuracy, selected-evidence recall/precision, claim faithfulness,
-   citation precision/recall, noise sensitivity, stale/forget leakage, context
-   characters, latency, and token cost together.
+2. The read-only `memory explain-recall` view is implemented. It exposes current
+   BM25/vector/RRF contributions without memory text, raw query persistence, an
+   LLM call, a ranking change, or semantic-backend fallback.
+3. A third balanced 50-case validation tier is frozen with zero source-file
+   overlap against the first 100 cases. Its dataset structure is verified, but
+   its retrieval, distillation, answer, and judge results remain unobserved.
+4. The development evaluator now implements `candidate top-20 -> tools-free
+   turn selector -> at most five opaque exact turn refs -> cited answer` for
+   both adjacent and longitudinal settings (50 logical pairs, 100 rows). The
+   answer model cannot see complete selected segments or the discarded pool.
+5. Faithfulness and correctness are deliberately split: the faithfulness judge
+   sees only each answer part's cited turns and no gold; the lifecycle judge
+   sees the authoritative Stage 2 operation sequence and answer rubric but no
+   retrieved evidence. Both are isolated passes of the frozen Sol identity.
+   Gold-absent candidate pools score zero selector efficiency, lifecycle rates
+   use only applicable rows and report those counts, and abstention has one
+   exact machine-checkable form. Gate turn/segment recall, five-turn oracle
+   efficiency, selected precision, answer accuracy, citation
+   entailment/completeness, stale/forget leakage, adjacent-to-longitudinal
+   accuracy drop, context bytes, and per-stage latency together. Codex CLI
+   exposes no provider token usage, so prompt bytes remain the explicit cost
+   proxy. The blind tier additionally requires a one-shot, stage-caching SQLite
+   ledger and refuses ambiguous or overwritten runs.
 6. Build rebuildable event/topic/day projections only if the distillation tier
    still shows a measured granularity failure. Use leaf evidence for names,
    numbers, negation, and version questions.
