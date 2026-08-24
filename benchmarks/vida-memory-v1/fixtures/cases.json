@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "dataset_id": "OC-Vida-Memory-Fixtures-v1",
+  "split": "retrieval-lifecycle-dev-v1",
+  "entries": [
+    {
+      "key": "typora_preference",
+      "path": "user-preferences.md",
+      "content": "User prefers Typora for long-form Markdown editing.",
+      "tags": ["preference", "editor"],
+      "supersedes": null
+    },
+    {
+      "key": "openchronicle_database",
+      "path": "project-openchronicle.md",
+      "content": "OpenChronicle uses SQLite as its only local database.",
+      "tags": ["project", "database"],
+      "supersedes": null
+    },
+    {
+      "key": "timeline_model_old",
+      "path": "project-openchronicle.md",
+      "content": "The timeline model is gpt-5.4-nano.",
+      "tags": ["project", "model", "timeline"],
+      "supersedes": null
+    },
+    {
+      "key": "timeline_model_current",
+      "path": "project-openchronicle.md",
+      "content": "The timeline model is gpt-5.6-luna.",
+      "tags": ["project", "model", "timeline"],
+      "supersedes": "timeline_model_old"
+    },
+    {
+      "key": "atlas_database",
+      "path": "project-atlas.md",
+      "content": "Project Atlas deploys with PostgreSQL as its database.",
+      "tags": ["project", "database"],
+      "supersedes": null
+    },
+    {
+      "key": "apollo_database",
+      "path": "project-apollo.md",
+      "content": "Project Apollo deploys with SQLite as its database.",
+      "tags": ["project", "database"],
+      "supersedes": null
+    }
+  ],
+  "cases": [
+    {
+      "id": "exact-editor-preference",
+      "category": "exact",
+      "query": "Typora Markdown",
+      "expected_keys": ["typora_preference"],
+      "forbidden_keys": [],
+      "top_k": 5,
+      "include_superseded": false
+    },
+    {
+      "id": "semantic-editor-paraphrase",
+      "category": "semantic",
+      "query": "long document writing application",
+      "expected_keys": ["typora_preference"],
+      "forbidden_keys": [],
+      "top_k": 5,
+      "include_superseded": false
+    },
+    {
+      "id": "cross-language-local-database",
+      "category": "cross_language",
+      "query": "本地 数据库",
+      "expected_keys": ["openchronicle_database"],
+      "forbidden_keys": [],
+      "top_k": 5,
+      "include_superseded": false
+    },
+    {
+      "id": "current-model-excludes-stale",
+      "category": "knowledge_update",
+      "query": "timeline model",
+      "expected_keys": ["timeline_model_current"],
+      "forbidden_keys": ["timeline_model_old"],
+      "top_k": 5,
+      "include_superseded": false
+    },
+    {
+      "id": "historical-model-opt-in",
+      "category": "history",
+      "query": "gpt-5.4-nano",
+      "expected_keys": ["timeline_model_old"],
+      "forbidden_keys": [],
+      "top_k": 5,
+      "include_superseded": true
+    },
+    {
+      "id": "entity-isolation-atlas",
+      "category": "entity",
+      "query": "Atlas database",
+      "expected_keys": ["atlas_database"],
+      "forbidden_keys": ["apollo_database"],
+      "top_k": 5,
+      "include_superseded": false
+    },
+    {
+      "id": "abstain-unrecorded-passport",
+      "category": "abstention",
+      "query": "passport number",
+      "expected_keys": [],
+      "forbidden_keys": [],
+      "top_k": 5,
+      "include_superseded": false
+    }
+  ]
+}

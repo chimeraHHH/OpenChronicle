@@ -1,6 +1,6 @@
 """Async daemon wiring for the session/reducer pipeline.
 
-Three asyncio tasks live here:
+Five periodic asyncio tasks live here:
 
   * ``run_check_cuts`` — calls ``SessionManager.check_cuts`` every
     ``session.tick_seconds`` so idle gaps / soft cuts fire even when
@@ -9,6 +9,10 @@ Three asyncio tasks live here:
     ``reducer.daily_tick_hour/minute``), force-ends the currently open
     session, retries any ``failed`` sessions, and covers the edge case
     where the process was offline across midnight.
+  * ``run_flush_tick`` — materializes new active-session timeline blocks.
+  * ``run_classifier_tick`` — best-effort periodic durable-fact extraction.
+  * ``run_pending_reduction_tick`` — retries ended sessions after the timeline
+    producer watermark reaches their terminal bucket.
   * ``build_manager`` — factory that wires ``on_session_end`` to
     persist a ``sessions`` row and spawn the S2 reducer thread.
 """
@@ -16,21 +20,176 @@ Three asyncio tasks live here:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+import os
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from ..config import Config
+from ..local_time import local_now
 from ..logger import get
 from ..store import fts
-from ..writer import classifier as classifier_mod
-from ..writer import session_reducer
+from ..writer import classifier_delivery, classifier_jobs, session_reducer
 from . import store as session_store
 from .manager import SessionManager
 
 logger = get("openchronicle.session")
 
+_EMPTY_SESSION_FALLBACK = timedelta(minutes=1)
 
-def build_manager(cfg: Config) -> SessionManager:
+
+def _pid_is_alive(pid: int) -> bool:
+    """Return whether ``pid`` still names a process we must not disturb."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, OverflowError):
+        return False
+    except PermissionError:
+        # A process owned by another user is still live; inability to signal it
+        # is a reason to protect the row, not to declare it orphaned.
+        return True
+    except OSError:
+        # Unknown platform-specific errors are handled conservatively: a
+        # possibly-live owner must not be force-ended.
+        return True
+    return True
+
+
+def _instant(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        value = value.astimezone()
+    return value.astimezone(UTC)
+
+
+def _add_elapsed(value: datetime, delta: timedelta) -> datetime:
+    """Add real elapsed time without losing the local display timezone."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value + delta
+    return (_instant(value) + delta).astimezone(value.tzinfo)
+
+
+def _earlier(left: datetime, right: datetime) -> datetime:
+    return left if _instant(left) <= _instant(right) else right
+
+
+def _later(left: datetime, right: datetime) -> datetime:
+    return left if _instant(left) >= _instant(right) else right
+
+
+def _infer_recovery_end(
+    conn,
+    *,
+    start: datetime,
+    restart_time: datetime,
+    max_session_hours: int,
+) -> datetime:
+    """Infer a crash boundary without crossing a later session or restart."""
+    # A backwards wall-clock jump must never create end < start.  Conversely,
+    # a fast restart must not use the upstream one-minute fallback beyond the
+    # restart boundary, where it could overlap the new boot's first session.
+    upper_bound = _later(start, restart_time)
+    ceiling = _add_elapsed(start, timedelta(hours=max(0, max_session_hours)))
+    upper_bound = _earlier(upper_bound, ceiling)
+
+    next_start = session_store.next_session_start_after(conn, start)
+    if next_start is not None and _instant(next_start) > _instant(start):
+        upper_bound = _earlier(upper_bound, next_start)
+
+    block_end = session_store.latest_timeline_end_in_window(
+        conn,
+        start=start,
+        end=upper_bound,
+    )
+    candidate = block_end or _add_elapsed(start, _EMPTY_SESSION_FALLBACK)
+    return _earlier(upper_bound, _later(start, candidate))
+
+
+def recover_orphan_sessions(
+    cfg: Config,
+    *,
+    now: datetime | None = None,
+    pid_is_alive: Callable[[int], bool] | None = None,
+    daemon_lease_held: bool = False,
+) -> int:
+    """End active rows whose owning daemon is gone and make them reducible.
+
+    This runs synchronously before the new ``SessionManager`` is constructed.
+    When the caller holds the singleton daemon lease, no different process can
+    legitimately own an active row for this store; treating a merely-live PID
+    as authoritative there would let PID reuse strand a crash survivor forever.
+    Without that lease, rows owned by a live PID are deliberately skipped,
+    preserving the conservative behavior for direct/library callers.
+    Updates are conditional on ``status='active'``, so retrying after a crash
+    during recovery is idempotent.
+    """
+    restart_time = now or local_now()
+    owner_is_alive = pid_is_alive or _pid_is_alive
+    recovered = 0
+
+    with fts.cursor() as conn:
+        for row in session_store.list_active(conn):
+            owned_by_this_process = (
+                row.owner_pid == os.getpid()
+                and row.owner_token == session_store.current_owner_token()
+            )
+            owner_is_another_live_process = (
+                not daemon_lease_held
+                and row.owner_pid is not None
+                and row.owner_pid != os.getpid()
+                and owner_is_alive(row.owner_pid)
+            )
+            if owned_by_this_process or owner_is_another_live_process:
+                logger.info(
+                    "session recovery skipped live owner: session=%s pid=%s",
+                    row.id,
+                    row.owner_pid,
+                )
+                continue
+
+            end_time = _infer_recovery_end(
+                conn,
+                start=row.start_time,
+                restart_time=restart_time,
+                max_session_hours=cfg.session.max_session_hours,
+            )
+            if session_store.mark_ended(conn, row.id, end_time):
+                recovered += 1
+                logger.info(
+                    "recovered orphan session %s: %s -> %s",
+                    row.id,
+                    row.start_time.isoformat(),
+                    end_time.isoformat(),
+                )
+
+    return recovered
+
+
+def build_manager(
+    cfg: Config,
+    *,
+    daemon_lease_held: bool = False,
+    clock: Callable[[], datetime] = local_now,
+) -> SessionManager:
     """Construct a SessionManager whose end-callback wires the reducer."""
+
+    # This is the daemon's restart boundary: no manager from this boot exists
+    # yet, so any unowned/dead-owner active row is a hard-crash survivor.
+    try:
+        recovered = recover_orphan_sessions(
+            cfg,
+            now=clock(),
+            daemon_lease_held=daemon_lease_held,
+        )
+        if recovered:
+            logger.info(
+                "session startup recovery moved %d row(s) to pending reduction",
+                recovered,
+            )
+    except Exception as exc:  # noqa: BLE001
+        # Capture should still start if recovery encounters corrupt legacy
+        # data.  The untouched active row remains available for a later retry.
+        logger.error("session startup recovery failed: %s", exc, exc_info=True)
 
     def _on_start(session_id: str, start: datetime) -> None:
         """Persist an 'active' row immediately so crashes are recoverable."""
@@ -38,28 +197,37 @@ def build_manager(cfg: Config) -> SessionManager:
             session_store.insert(
                 conn,
                 session_store.SessionRow(
-                    id=session_id, start_time=start, status="active",
+                    id=session_id,
+                    start_time=start,
+                    status="active",
+                    owner_pid=os.getpid(),
+                    owner_token=session_store.current_owner_token(),
                 ),
             )
 
-    def _on_end(session_id: str, start: datetime, end: datetime) -> None:
+    def _persist_end(session_id: str, start: datetime, end: datetime) -> None:
+        """Durably close the row before any optional reducer dispatch."""
         with fts.cursor() as conn:
             existing = session_store.get_by_id(conn, session_id)
             if existing is None:
                 session_store.insert(
                     conn,
                     session_store.SessionRow(
-                        id=session_id, start_time=start, end_time=end, status="ended",
+                        id=session_id,
+                        start_time=start,
+                        end_time=end,
+                        status="ended",
                     ),
                 )
             else:
                 session_store.mark_ended(conn, session_id, end)
 
+    def _on_end(session_id: str, start: datetime, end: datetime):
         if not cfg.reducer.enabled:
             logger.info("reducer disabled — session %s stored without reduce", session_id)
             return
 
-        session_reducer.reduce_session_async(
+        return session_reducer.reduce_session_async(
             cfg,
             session_id=session_id,
             start_time=start,
@@ -68,53 +236,20 @@ def build_manager(cfg: Config) -> SessionManager:
         )
 
     def _after_reduce(result: session_reducer.ReduceResult) -> None:
-        """Terminal reducer succeeded → classify any window the 30-min tick missed."""
-        if not result.written or not result.entry_id or not result.path:
-            return
+        """Drain the terminal intent persisted by the reducer."""
         if not result.is_final:
             # Incremental flushes are handled by run_classifier_tick on its
             # own cadence — the reducer callback only fires the terminal
             # catch-up for any trailing window the tick hadn't reached yet.
             return
-        window_start: datetime | None = None
-        if result.end_time is not None:
-            with fts.cursor() as conn:
-                row = session_store.get_by_id(conn, result.session_id)
-                if row and row.classified_end:
-                    window_start = row.classified_end
         try:
-            classify = classifier_mod.classify_after_reduce(
-                cfg,
-                session_id=result.session_id,
-                event_daily_path=result.path,
-                just_written_entry_id=result.entry_id,
-                session_start=result.start_time,
-                session_end=result.end_time,
-                window_start=window_start,
-            )
-            if classify.committed and classify.written_ids:
-                logger.info(
-                    "classifier %s: wrote %d entries into %s",
-                    result.session_id,
-                    len(classify.written_ids),
-                    ", ".join(classify.created_paths) or "existing files",
-                )
-            elif classify.skipped_reason:
-                logger.info(
-                    "classifier %s: skipped (%s)", result.session_id, classify.skipped_reason
-                )
-            else:
-                logger.info(
-                    "classifier %s: committed with no writes", result.session_id
-                )
-            if classify.committed and result.end_time is not None:
-                with fts.cursor() as conn:
-                    session_store.set_classified_end(
-                        conn, result.session_id, result.end_time,
-                    )
+            classifier_delivery.run_recovery_pass(cfg, limit=10)
         except Exception as exc:  # noqa: BLE001
             logger.warning(
-                "classifier %s: crashed: %s", result.session_id, exc, exc_info=True
+                "classifier delivery %s crashed: %s",
+                result.session_id,
+                exc,
+                exc_info=True,
             )
 
     return SessionManager(
@@ -122,7 +257,9 @@ def build_manager(cfg: Config) -> SessionManager:
         soft_cut_minutes=cfg.session.soft_cut_minutes,
         max_session_hours=cfg.session.max_session_hours,
         on_session_start=_on_start,
+        on_session_persist=_persist_end,
         on_session_end=_on_end,
+        clock=clock,
     )
 
 
@@ -145,8 +282,8 @@ async def run_flush_tick(cfg: Config, manager: SessionManager) -> None:
 
     Every ``session.flush_minutes`` (min 5) checks for an active session and
     reduces any closed timeline blocks since the last flush into a partial
-    entry in the event-daily file. Classifier is not fired here — it only
-    runs on the terminal reduce at session end.
+    entry in the event-daily file. This loop does not invoke the classifier;
+    a separate periodic classifier task and a terminal catch-up do that work.
     """
     if not cfg.reducer.enabled:
         logger.info("flush tick loop not started (reducer disabled)")
@@ -165,7 +302,7 @@ async def run_flush_tick(cfg: Config, manager: SessionManager) -> None:
                 cfg,
                 session_id=session_id,
                 session_start=session_start,
-                now=datetime.now().astimezone(),
+                now=local_now(),
             )
         except asyncio.CancelledError:
             raise
@@ -174,81 +311,82 @@ async def run_flush_tick(cfg: Config, manager: SessionManager) -> None:
 
 
 async def run_classifier_tick(cfg: Config, manager: SessionManager) -> None:
-    """Periodic durable-fact classification for the active session.
-
-    Every ``classifier.interval_minutes`` (min 5) checks for an active
-    session and classifies any event-daily entries tagged with the
-    session that have landed since the last classifier pass. The
-    terminal reduce runs its own catch-up for the trailing window, so
-    this tick is a pure incremental step — no effect at session end.
-    """
+    """Poll durable classifier requests and enqueue proven flush coverage."""
     if not cfg.reducer.enabled:
         logger.info("classifier tick loop not started (reducer disabled)")
         return
     interval = max(300, int(cfg.classifier.interval_minutes) * 60)
-    logger.info("classifier tick loop started (every %ds)", interval)
+    poll_seconds = max(
+        5,
+        min(60, int(getattr(cfg.classifier, "retry_seconds", 60))),
+    )
+    logger.info(
+        "classifier delivery loop started (cadence=%ds, retry poll=%ds)",
+        interval,
+        poll_seconds,
+    )
     while True:
         try:
-            await asyncio.sleep(interval)
             snap = manager.current_snapshot()
-            if snap is None:
-                continue
-            session_id, session_start = snap
-            now = datetime.now().astimezone()
-            event_daily_name = f"event-{session_start.strftime('%Y-%m-%d')}.md"
-
-            window_start = session_start
-            with fts.cursor() as conn:
-                row = session_store.get_by_id(conn, session_id)
-                if row and row.classified_end:
-                    window_start = row.classified_end
-
-            if now - window_start < timedelta(seconds=interval):
-                continue
-
-            result = await asyncio.to_thread(
-                classifier_mod.classify_window,
-                cfg,
-                session_id=session_id,
-                event_daily_path=event_daily_name,
-                start=window_start,
-                end=now,
-                include_prior_day=window_start == session_start,
-            )
-
-            if result.committed and result.written_ids:
-                logger.info(
-                    "classifier tick %s: wrote %d entries into %s",
-                    session_id,
-                    len(result.written_ids),
-                    ", ".join(result.created_paths) or "existing files",
-                )
-            elif result.skipped_reason:
-                logger.info(
-                    "classifier tick %s: skipped (%s)",
-                    session_id, result.skipped_reason,
-                )
-            else:
-                logger.info(
-                    "classifier tick %s: committed with no writes", session_id,
-                )
-
-            if result.committed or result.skipped_reason:
+            if snap is not None:
+                session_id, _ = snap
                 with fts.cursor() as conn:
-                    session_store.set_classified_end(conn, session_id, now)
+                    row = session_store.get_by_id(conn, session_id)
+                    if row is not None and row.flush_end is not None:
+                        cursor = row.classified_end or row.start_time
+                        if (
+                            _instant(row.flush_end) > _instant(cursor)
+                            and (_instant(row.flush_end) - _instant(cursor)).total_seconds()
+                            >= interval
+                        ):
+                            classifier_jobs.request(
+                                conn,
+                                session_id=session_id,
+                                requested_end=row.flush_end,
+                                include_prior_day=row.classified_end is None,
+                            )
+            await asyncio.to_thread(classifier_delivery.run_recovery_pass, cfg)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
-            logger.error("classifier tick failed: %s", exc, exc_info=True)
+            logger.error("classifier delivery tick failed: %s", exc, exc_info=True)
+        await asyncio.sleep(poll_seconds)
 
 
-def _seconds_until_next_local(hour: int, minute: int) -> float:
+async def run_pending_reduction_tick(cfg: Config) -> None:
+    """Retry durable ended/failed rows after late timeline blocks arrive."""
+    if not cfg.reducer.enabled:
+        logger.info("pending reducer loop not started (reducer disabled)")
+        return
+    interval = 60
+    logger.info("pending reducer loop started (every %ds)", interval)
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            await asyncio.to_thread(session_reducer.reduce_all_pending, cfg)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            logger.error("pending reducer tick failed: %s", exc, exc_info=True)
+
+
+def _seconds_until_next_local(
+    hour: int,
+    minute: int,
+    *,
+    now: datetime | None = None,
+) -> float:
     """Seconds from now until the next local-time HH:MM."""
-    now = datetime.now().astimezone()
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-    if target <= now:
+    now = now or local_now()
+    if now.tzinfo is None or now.utcoffset() is None:
+        now = now.astimezone()
+    # Pick the first occurrence of an ambiguous fall-back time so this daily
+    # job cannot fire twice on the same local date. A nonexistent spring time
+    # maps through UTC to its corresponding post-gap instant.
+    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0, fold=0)
+    if _instant(target) <= _instant(now):
         target = target + timedelta(days=1)
-    return (target - now).total_seconds()
+    return (_instant(target) - _instant(now)).total_seconds()
 
 
 async def run_daily_safety_net(cfg: Config, manager: SessionManager) -> None:
@@ -274,7 +412,9 @@ async def run_daily_safety_net(cfg: Config, manager: SessionManager) -> None:
                 busy, log_pages, ckpt_pages = await asyncio.to_thread(fts.checkpoint)
                 logger.info(
                     "daily wal_checkpoint(TRUNCATE): busy=%d log=%d checkpointed=%d",
-                    busy, log_pages, ckpt_pages,
+                    busy,
+                    log_pages,
+                    ckpt_pages,
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("daily wal_checkpoint failed: %s", exc)

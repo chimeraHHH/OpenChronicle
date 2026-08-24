@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-reply-rescue"
+description = "Enables the delete_reply_rescue command without any pre-configured scope."
+commands.allow = ["delete_reply_rescue"]
+
+[[permission]]
+identifier = "deny-delete-reply-rescue"
+description = "Denies the delete_reply_rescue command without any pre-configured scope."
+commands.deny = ["delete_reply_rescue"]

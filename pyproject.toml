@@ -22,18 +22,30 @@ dependencies = [
     "rich>=13.7",
     "litellm>=1.52",
     "python-frontmatter>=1.1",
-    "mss>=9.0",
     "Pillow>=10.0",
     "mcp>=1.0",
     "httpx[socks]>=0.27",
     "tomli>=2.0; python_version < '3.11'",
+    "pdfplumber>=0.11.10,<0.12",
+    "pypdfium2==5.12.1",
+    "pypdf==6.15.0",
+    "reportlab==5.0.0",
+    "uharfbuzz==0.56.0",
+    "defusedxml>=0.7.1,<0.8",
+    "python-docx>=1.2.0,<1.3",
 ]
 
 [project.scripts]
 openchronicle = "openchronicle.cli:app"
+openchronicle-desktop-bridge = "openchronicle.desktop_bridge:main"
 
 [project.urls]
 Repository = "https://github.com/openchronicle/openchronicle"
+
+[project.optional-dependencies]
+semantic-memory = [
+    "fastembed==0.8.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -47,12 +59,18 @@ packages = ["src/openchronicle"]
 "resources/build-mac-ax-helper.sh" = "openchronicle/_bundled/build-mac-ax-helper.sh"
 "resources/mac-ax-watcher.swift" = "openchronicle/_bundled/mac-ax-watcher.swift"
 "resources/build-mac-ax-watcher.sh" = "openchronicle/_bundled/build-mac-ax-watcher.sh"
+"resources/mac-ax-selection.swift" = "openchronicle/_bundled/mac-ax-selection.swift"
+"resources/build-mac-ax-selection.sh" = "openchronicle/_bundled/build-mac-ax-selection.sh"
 
 [dependency-groups]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
+]
+desktop-bundle = [
+    "fonttools==4.63.0",
+    "pyinstaller==6.22.0",
 ]
 
 [tool.ruff]

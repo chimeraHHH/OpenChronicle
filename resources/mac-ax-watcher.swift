@@ -20,12 +20,16 @@ import Foundation
 
 // MARK: - Event Output
 
+let kMaxEventBytes = 32 * 1024
+let kMaxIdentityCharacters = 512
+
 /// Thread-safe JSON line writer to stdout
 final class EventWriter {
     private let lock = NSLock()
 
     func write(event: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: event, options: []),
+              data.count <= kMaxEventBytes,
               let line = String(data: data, encoding: .utf8)
         else { return }
 
@@ -94,8 +98,8 @@ func truncate(_ s: String, _ maxLen: Int) -> String {
 /// metadata so the downstream model can still see that the user interacted
 /// with a password-like field.
 func describeElement(_ el: AXUIElement) -> [String: Any] {
-    let role = axRole(el) ?? ""
-    let subrole = axSubrole(el) ?? ""
+    let role = truncate(axRole(el) ?? "", 200)
+    let subrole = truncate(axSubrole(el) ?? "", 200)
     let title = truncate(axString(el, kAXTitleAttribute as String) ?? "", 200)
     let identifier = truncate(axString(el, kAXIdentifierAttribute as String) ?? "", 200)
     let rawValue = axString(el, kAXValueAttribute as String) ?? ""
@@ -114,7 +118,11 @@ func appInfoForElement(_ el: AXUIElement) -> (pid: pid_t, name: String, bundleId
     var pid: pid_t = 0
     AXUIElementGetPid(el, &pid)
     if pid > 0, let app = NSRunningApplication(processIdentifier: pid) {
-        return (pid, app.localizedName ?? "", app.bundleIdentifier ?? "")
+        return (
+            pid,
+            truncate(app.localizedName ?? "", kMaxIdentityCharacters),
+            truncate(app.bundleIdentifier ?? "", kMaxIdentityCharacters)
+        )
     }
     return (pid, "", "")
 }
@@ -137,7 +145,10 @@ func getWindowTitle(_ appElement: AXUIElement) -> String {
     guard err == .success, let window = ref else { return "" }
     // swiftlint:disable:next force_cast
     let winEl = window as! AXUIElement
-    return axString(winEl, kAXTitleAttribute as String) ?? ""
+    return truncate(
+        axString(winEl, kAXTitleAttribute as String) ?? "",
+        kMaxIdentityCharacters
+    )
 }
 
 // MARK: - Interaction Tapper
@@ -256,8 +267,8 @@ final class InteractionTapper {
             if let front = NSWorkspace.shared.frontmostApplication {
                 appInfo = (
                     front.processIdentifier,
-                    front.localizedName ?? "",
-                    front.bundleIdentifier ?? ""
+                    truncate(front.localizedName ?? "", kMaxIdentityCharacters),
+                    truncate(front.bundleIdentifier ?? "", kMaxIdentityCharacters)
                 )
             }
         }
@@ -328,8 +339,8 @@ final class InteractionTapper {
                 let pid = front.processIdentifier
                 typingApp = (
                     pid,
-                    front.localizedName ?? "",
-                    front.bundleIdentifier ?? ""
+                    truncate(front.localizedName ?? "", kMaxIdentityCharacters),
+                    truncate(front.bundleIdentifier ?? "", kMaxIdentityCharacters)
                 )
                 let appEl = AXUIElementCreateApplication(pid)
                 typingWindowTitle = getWindowTitle(appEl)
@@ -561,8 +572,8 @@ final class AppContext {
 
     init(pid: pid_t, name: String, bundleId: String) {
         self.pid = pid
-        self.name = name
-        self.bundleId = bundleId
+        self.name = truncate(name, kMaxIdentityCharacters)
+        self.bundleId = truncate(bundleId, kMaxIdentityCharacters)
     }
 }
 

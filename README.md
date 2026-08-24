@@ -35,6 +35,8 @@
 
 > **Status:** v0.1.0 · macOS only · early alpha
 
+> **This fork:** see the [official-source Vida product research](docs/vida-public-product-research.md), the clean-room [Vida-like proactive assistant roadmap](docs/vida-like-roadmap.md), the [Stage 1 memory/Daily Wrap contract](docs/stage1-memory-daily-wrap.md), and the [trusted desktop-shell boundary](docs/desktop-shell.md).
+
 OpenChronicle gives AI agents a local, inspectable memory built from real screen and app context.
 
 It runs on your Mac, captures structured context from what you're doing, and turns it into persistent Markdown memory: what you're working on, what you've decided, which tools you use, and which people or projects matter.
@@ -70,6 +72,42 @@ We think this is the right tradeoff for an early memory system:
 
 > **AX-first for accurate, compact, low-cost memory; screenshot-assisted for richer multimodal context.**
 
+### Capture privacy boundary
+
+The Stage 0 implementation is designed to fail closed unless Accessibility and
+CoreGraphics can agree on one exact focused window. Schema versions 4 and 5
+bind the app, bundle ID, title, PID, `CGWindowID`, and bounds before AX content
+can be persisted. Secure text-field values are replaced with `[REDACTED]`
+inside the native helper, before Python sees them.
+
+Browser URL allow/exclude rules are bounded literals, not regular expressions.
+They run after in-memory AX extraction but before screenshots, JSON, FTS, or
+model use. Active URL policy supports only known browser bundles with a
+family-specific address-control adapter; other apps are denied before AX
+collection. The privacy gate requires exactly one address value from an exact
+stable AX identifier. A bounded scan of the rest of the tree is an additional
+deny surface, never substitute address evidence. The native helper must provide
+a receipt proving an unpruned tree, and two snapshots must retain the same
+window and URL evidence. This reduces navigation races but is not an atomic
+browser transaction.
+
+A successful URL-policy observation uses the `url_metadata_only` profile: it
+retains only app/bundle/PID/`CGWindowID`/bounds metadata and an explicitly
+observed, approved HTTP(S) URL. Raw AX, focused content, and screenshots are
+omitted; visible text and titles are cleared. A scheme-less address is checked
+under both HTTP and HTTPS interpretations, remains `null` in S1, and is rejected
+as durable URL-policy evidence. The retained value is address-control evidence,
+not proof that the browser loaded that document. Outside URL policy, screenshots
+remain opt-in and target one exact CoreGraphics window, with no display-capture
+or `mss` fallback. Watcher content
+details never enter persistence or session hooks. See [Capture](docs/capture.md)
+and [Configuration](docs/config.md) for the complete contract.
+
+This describes implementation status, not completed live acceptance. The
+unlocked, real-application Accessibility and Screen Recording audit remains
+open in [#3](https://github.com/chimeraHHH/OpenChronicle/issues/3); exact-window
+privacy is not release-validated until that audit is recorded and reviewed.
+
 ---
 
 ## OpenChronicle vs OpenAI Chronicle
@@ -98,12 +136,17 @@ flowchart LR
     SM["Session mgr<br/>idle 5m · app-switch 3m<br/>max 2h"]
     S2["<b>S2</b> reducer"]
     ED[(event-<br/>YYYY-MM-DD.md)]
-    CLF["Classifier<br/>→ user- / project- / tool- /<br/>topic- / person- / org-*.md"]
+    CLF["Classifier<br/>grounded proposals only"]
+    CAND[(review inbox)]
+    REVIEW["Local review<br/>edit · approve · reject · forget"]
+    WRAP["Daily Wrap<br/>grounded · revisioned"]
     STORE[("SQLite FTS5<br/>+ Markdown")]
 
-    W --> S0 --> S1 --> BUF --> TL --> TB --> S2 --> ED --> CLF --> STORE
+    W --> S0 --> S1 --> BUF --> TL --> TB --> S2 --> ED --> CLF --> CAND --> REVIEW --> STORE
     ED --> STORE
-    BUF -. pre_capture_hook<br/>(post-write · skipped on content-dedup) .-> SM
+    ED --> WRAP
+    TB --> WRAP
+    BUF -. exact persisted timestamp<br/>(post-write · skipped on content-dedup) .-> SM
     SM -. flush 5m / on_end .-> S2
     TB -. grounding .-> CLF
 ```
@@ -113,19 +156,29 @@ The core idea is simple:
 1. capture context
 2. compress it into sessions
 3. extract durable facts
-4. store memory locally
-5. let agents query it through tools
+4. review grounded memory candidates
+5. store approved memory locally and generate an evidence-backed Daily Wrap
+6. let agents query memory, wraps, and provenance through read-only tools
 
 ---
 
 ## What you get
 
 * **Event-driven capture** from macOS AX events
+* **Fail-closed exact-window privacy implementation** with literal browser URL
+  rules and secure-field redaction; live real-application acceptance remains
+  open in [#3](https://github.com/chimeraHHH/OpenChronicle/issues/3)
 * **Session-aware memory writing** instead of noisy per-snapshot logs
 * **Human-readable Markdown memory**
 * **Local SQLite indexing**
-* **Structured memory files** like user-, project-, tool-, topic-, person-, org-, and daily event-
+* **Structured memory files** like user-, project-, tool-, topic-, person-, org-, reviewed text-only procedure-, and daily event- memory
 * **Supersede-not-delete history**
+* **Review-first durable memory candidates** with evidence, conflicts, and explicit approval
+* **Canonical Daily Wraps** with exact, explicitly untrusted activity quotes,
+  per-item source references, and partial-coverage reporting
+* **Crash-resumable true purge** for a candidate, its accepted entry, candidate-owned target metadata/file, and derived wraps
+* **Native review-shell source slice** for pause/resume, candidate review,
+  read-only Daily Wraps, timeline inspection, privacy policy, and exact source lineage
 * **Local or cloud model support**
 * **Always-on agent-readable interface**, with MCP as the best-supported path today
 
@@ -161,8 +214,44 @@ openchronicle capture-once
 openchronicle timeline tick
 openchronicle timeline list
 openchronicle writer run
+openchronicle memory adoptions
+openchronicle memory explain-recall "editor preference" --top-k 5
+openchronicle memory usefulness --json
+openchronicle memory screen-adoption <adoption-id>
+openchronicle memory candidates
+openchronicle memory show <candidate-id>
+openchronicle memory approve <candidate-id>
+openchronicle provenance trace memory_entry <entry-id> --path project-example.md
+openchronicle daily-wrap run --date 2026-08-06 --timezone Asia/Shanghai
+openchronicle daily-wrap show --date 2026-08-06 --timezone Asia/Shanghai
 openchronicle rebuild-index
 ```
+
+Scheduled Daily Wrap is opt-in because it may invoke the configured model with
+a hard byte-bounded evidence payload. Set `[daily_wrap] enabled = true` only after
+choosing an acceptable local or cloud model; one-off `daily-wrap run` remains
+explicit.
+
+`memory screen-adoption` is also explicit model egress: it displays the
+configured classifier provider before sending the exact adopted Prompt/Reply
+Rescue text. A qualifying reusable workflow, checklist, or template is only
+staged in the ordinary review inbox; it is never approved, published, or
+executed automatically.
+
+`memory usefulness` is the business-state-preserving outcome view for local
+long-term memory. It joins an exact reviewed memory revision to Prompt Rescue
+outputs and their immutable adoption records without emitting prompt, memory,
+or artifact text. Normal first-run CLI initialization may still create config,
+log, and SQLite schema files. Unedited adoption is reported as a descriptive
+positive association; edited adoption remains ambiguous, and neither signal
+changes ranking automatically.
+
+`memory explain-recall` is the complementary local ranking view. It reports
+the current BM25/vector channel ranks, cosine similarity, and RRF score without
+returning memory text or echoing the raw query. It invokes no LLM, persists no
+query trace, and does not change ranking. If semantic search is enabled but its
+local backend is unavailable, the command reports that failure instead of
+silently falling back to BM25.
 
 ---
 
@@ -221,6 +310,14 @@ Documentation
 * [docs/writer.md](docs/writer.md) - reducer, classifier, and retry model
 * [docs/mcp.md](docs/mcp.md) - current tool surface and integrations
 * [docs/memory-format.md](docs/memory-format.md) - file layout and supersede semantics
+* [docs/memory-recall-explain-v1.md](docs/memory-recall-explain-v1.md) - local BM25/vector/RRF recall diagnostics and privacy boundary
+* [docs/memory-usefulness-v1.md](docs/memory-usefulness-v1.md) - exact memory revision to Prompt Rescue adoption outcome report
+* [docs/stage1-memory-daily-wrap.md](docs/stage1-memory-daily-wrap.md) - provenance, review inbox, Daily Wrap, privacy, and failure semantics
+* [docs/desktop-shell.md](docs/desktop-shell.md) - Tauri trust boundary, fixed bridge protocol, dangerous-action semantics, and release gates
+* [docs/vida-public-product-research.md](docs/vida-public-product-research.md) - dated official-source Vida capability and privacy research
+* [docs/local-long-term-memory-research-2026-08-23.md](docs/local-long-term-memory-research-2026-08-23.md) - multi-agent paper/repository survey and local-memory implementation decisions
+* [docs/vida-like-roadmap.md](docs/vida-like-roadmap.md) - clean-room parity plan and staged safety gates
+* [docs/runtime-reliability.md](docs/runtime-reliability.md) - process fault matrix, 10k replay, and the still-open 24-hour/daemon-queue/cascade-replay gates
 * [docs/troubleshooting.md](docs/troubleshooting.md) - common issues
 
 ---
@@ -231,7 +328,23 @@ Documentation
 uv sync --all-extras
 uv run pytest
 uv run ruff check
+
+cd apps/desktop
+nvm use                 # .nvmrc pins the supported Node.js LTS runtime
+npm ci
+npm test
+npm run build
+npm run tauri:dev
+
+cd src-tauri
+cargo test --locked --all-targets
+cargo clippy --locked --all-targets -- -D warnings
+cargo check --locked --release
 ```
+
+The desktop source build intentionally is not a distributable app yet. A
+self-contained, signed bridge sidecar plus notarization and macOS TCC testing
+remain release gates; see [docs/desktop-shell.md](docs/desktop-shell.md).
 
 ---
 

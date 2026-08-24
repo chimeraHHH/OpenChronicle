@@ -1,0 +1,3721 @@
+{
+  "dataset": {
+    "code_revision": "fe1735de8cf8b9908e1e3d3b5612afc815698062",
+    "data_revision": "7ea066982b140a19337e17e60d45d4076e042faf",
+    "fact_count": 455,
+    "parquet_sha256": "24d5c3f09ce0ce15625cb9f8a98f44f0d864ca6c94d7b4ad04eb697ca3a5ff45",
+    "qa_pair_ids_sha256": "c513400af92ce9ecd24b1fee9e3241be12f0d2881bc66597a4557b2a73328a6f",
+    "question_count": 100,
+    "source": "factconsolidation_sh_6k"
+  },
+  "environment": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.11.15"
+  },
+  "evaluation_id": "mab-cr-factconsolidation-sh-6k-v1",
+  "manifest": {
+    "path": "benchmarks/memoryagentbench-factconsolidation-v1/json/manifest.json",
+    "sha256": "de9c8c00bbd5b3b4fa67cddaf6d44e689436db677cef7c0d47d973a45d90c629"
+  },
+  "metric_contract": {
+    "path": "benchmarks/memoryagentbench-factconsolidation-v1/json/metric_contract.json",
+    "sha256": "e576c9fda1ac259ac7053483ebb7f2bb820fa5e16d7c4fedccf268c36c53b27d"
+  },
+  "repository": {
+    "commit": "93fb60faf57bc2471cc09f7c7dcaf3a2e419615a",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "result": {
+    "gate_verdict": {
+      "checks": {
+        "accepted_count": true,
+        "bm25_slot_oracle_accuracy": true,
+        "bm25_top1_accuracy": true,
+        "current_fact_count": true,
+        "current_slot_consistency": true,
+        "duplicate_current_slot_count": true,
+        "fact_parser_coverage": true,
+        "history_entry_count": true,
+        "no_memory_accuracy": true,
+        "question_parser_coverage": true,
+        "repository_clean": true,
+        "typed_slot_oracle_accuracy": true,
+        "typed_slot_oracle_contradiction_free_accuracy": true,
+        "typed_slot_oracle_contradiction_rate": true,
+        "typed_slot_oracle_stale_value_rate": true,
+        "unique_current_slot_count": true
+      },
+      "passed": true
+    },
+    "ingest": {
+      "accepted_count": 455,
+      "append_count": 294,
+      "current_fact_count": 294,
+      "current_slot_consistency": 1.0,
+      "duplicate_current_slot_count": 0,
+      "elapsed_ms": 74051.59,
+      "history_entry_count": 455,
+      "operation_count": 455,
+      "peak_tracemalloc_mb": 17.889,
+      "review_mode": "fixture_auto_review_in_isolated_temporary_root",
+      "supersede_count": 161,
+      "unique_current_slot_count": 294
+    },
+    "parser": {
+      "fact_coverage": 1.0,
+      "question_coverage": 1.0,
+      "unique_slot_count": 294
+    },
+    "variants": {
+      "bm25_top1_current_only": {
+        "accuracy": 1.0,
+        "contradiction_free_accuracy": 1.0,
+        "contradiction_rate": 0.0,
+        "query_latency_p50_ms": 0.705,
+        "query_latency_p95_ms": 0.951,
+        "rows": [
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "pesäpallo",
+            "qa_pair_id": "factconsolidation_sh_6k_no0",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "The Fairly OddParents",
+            "qa_pair_id": "factconsolidation_sh_6k_no1",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "India",
+            "qa_pair_id": "factconsolidation_sh_6k_no2",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Shahnameh",
+            "qa_pair_id": "factconsolidation_sh_6k_no3",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "University of California, Berkeley",
+            "qa_pair_id": "factconsolidation_sh_6k_no4",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Thomas Kyd",
+            "qa_pair_id": "factconsolidation_sh_6k_no5",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "basketball",
+            "qa_pair_id": "factconsolidation_sh_6k_no6",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Muay Thai",
+            "qa_pair_id": "factconsolidation_sh_6k_no7",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Swedish",
+            "qa_pair_id": "factconsolidation_sh_6k_no8",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Jonathan Rothschild",
+            "qa_pair_id": "factconsolidation_sh_6k_no9",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Giuseppe Conte",
+            "qa_pair_id": "factconsolidation_sh_6k_no10",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ellen Pompeo",
+            "qa_pair_id": "factconsolidation_sh_6k_no11",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "quarterback",
+            "qa_pair_id": "factconsolidation_sh_6k_no12",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Malaysia",
+            "qa_pair_id": "factconsolidation_sh_6k_no13",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Samuel Beckett",
+            "qa_pair_id": "factconsolidation_sh_6k_no14",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Africa",
+            "qa_pair_id": "factconsolidation_sh_6k_no15",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Zoroastrianism",
+            "qa_pair_id": "factconsolidation_sh_6k_no16",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Italy",
+            "qa_pair_id": "factconsolidation_sh_6k_no17",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Microsoft",
+            "qa_pair_id": "factconsolidation_sh_6k_no18",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Steve Jobs",
+            "qa_pair_id": "factconsolidation_sh_6k_no19",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Peter Diamandis",
+            "qa_pair_id": "factconsolidation_sh_6k_no20",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "John Knox",
+            "qa_pair_id": "factconsolidation_sh_6k_no21",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby union",
+            "qa_pair_id": "factconsolidation_sh_6k_no22",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ernst Heinkel",
+            "qa_pair_id": "factconsolidation_sh_6k_no23",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "United States of America",
+            "qa_pair_id": "factconsolidation_sh_6k_no24",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Beaumont",
+            "qa_pair_id": "factconsolidation_sh_6k_no25",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Narendra Modi",
+            "qa_pair_id": "factconsolidation_sh_6k_no26",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Israel",
+            "qa_pair_id": "factconsolidation_sh_6k_no27",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "post-punk",
+            "qa_pair_id": "factconsolidation_sh_6k_no28",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Guangzhou",
+            "qa_pair_id": "factconsolidation_sh_6k_no29",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Japan",
+            "qa_pair_id": "factconsolidation_sh_6k_no30",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tang Empire",
+            "qa_pair_id": "factconsolidation_sh_6k_no31",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Philadelphia",
+            "qa_pair_id": "factconsolidation_sh_6k_no32",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Russian Empire",
+            "qa_pair_id": "factconsolidation_sh_6k_no33",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Taipei",
+            "qa_pair_id": "factconsolidation_sh_6k_no34",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "German",
+            "qa_pair_id": "factconsolidation_sh_6k_no35",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Madonna",
+            "qa_pair_id": "factconsolidation_sh_6k_no36",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tokyo",
+            "qa_pair_id": "factconsolidation_sh_6k_no37",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Harare",
+            "qa_pair_id": "factconsolidation_sh_6k_no38",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "ABB Group",
+            "qa_pair_id": "factconsolidation_sh_6k_no39",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ankara",
+            "qa_pair_id": "factconsolidation_sh_6k_no40",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby",
+            "qa_pair_id": "factconsolidation_sh_6k_no41",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "cornerback",
+            "qa_pair_id": "factconsolidation_sh_6k_no42",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oderzo",
+            "qa_pair_id": "factconsolidation_sh_6k_no43",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Antarctica",
+            "qa_pair_id": "factconsolidation_sh_6k_no44",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Pius XII",
+            "qa_pair_id": "factconsolidation_sh_6k_no45",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "The Beatles",
+            "qa_pair_id": "factconsolidation_sh_6k_no46",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles Darwin",
+            "qa_pair_id": "factconsolidation_sh_6k_no47",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Soviet Union",
+            "qa_pair_id": "factconsolidation_sh_6k_no48",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "United States of America",
+            "qa_pair_id": "factconsolidation_sh_6k_no49",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oceania",
+            "qa_pair_id": "factconsolidation_sh_6k_no50",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "cricket",
+            "qa_pair_id": "factconsolidation_sh_6k_no51",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Connachta",
+            "qa_pair_id": "factconsolidation_sh_6k_no52",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "atheism",
+            "qa_pair_id": "factconsolidation_sh_6k_no53",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Australian hip hop",
+            "qa_pair_id": "factconsolidation_sh_6k_no54",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Czech Republic",
+            "qa_pair_id": "factconsolidation_sh_6k_no55",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Italy",
+            "qa_pair_id": "factconsolidation_sh_6k_no56",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles the Bold",
+            "qa_pair_id": "factconsolidation_sh_6k_no57",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Kylie Minogue",
+            "qa_pair_id": "factconsolidation_sh_6k_no58",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "association football",
+            "qa_pair_id": "factconsolidation_sh_6k_no59",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rap rock",
+            "qa_pair_id": "factconsolidation_sh_6k_no60",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "flanker",
+            "qa_pair_id": "factconsolidation_sh_6k_no61",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Bernard Arnault",
+            "qa_pair_id": "factconsolidation_sh_6k_no62",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "German",
+            "qa_pair_id": "factconsolidation_sh_6k_no63",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "baseball",
+            "qa_pair_id": "factconsolidation_sh_6k_no64",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby",
+            "qa_pair_id": "factconsolidation_sh_6k_no65",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "journalist",
+            "qa_pair_id": "factconsolidation_sh_6k_no66",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "British Broadcasting Corporation",
+            "qa_pair_id": "factconsolidation_sh_6k_no67",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "North America",
+            "qa_pair_id": "factconsolidation_sh_6k_no68",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tucson",
+            "qa_pair_id": "factconsolidation_sh_6k_no69",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Canadair",
+            "qa_pair_id": "factconsolidation_sh_6k_no70",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Japan",
+            "qa_pair_id": "factconsolidation_sh_6k_no71",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "placekicker",
+            "qa_pair_id": "factconsolidation_sh_6k_no72",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Alan Jay Lerner",
+            "qa_pair_id": "factconsolidation_sh_6k_no73",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "John Keats",
+            "qa_pair_id": "factconsolidation_sh_6k_no74",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oscar Wilde",
+            "qa_pair_id": "factconsolidation_sh_6k_no75",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Shinzō Abe",
+            "qa_pair_id": "factconsolidation_sh_6k_no76",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Stephen McNeil",
+            "qa_pair_id": "factconsolidation_sh_6k_no77",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby union",
+            "qa_pair_id": "factconsolidation_sh_6k_no78",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Prague",
+            "qa_pair_id": "factconsolidation_sh_6k_no79",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "goaltender",
+            "qa_pair_id": "factconsolidation_sh_6k_no80",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Elizabeth II",
+            "qa_pair_id": "factconsolidation_sh_6k_no81",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Canada",
+            "qa_pair_id": "factconsolidation_sh_6k_no82",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Church of Scotland",
+            "qa_pair_id": "factconsolidation_sh_6k_no83",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Nobuhiro Watsuki",
+            "qa_pair_id": "factconsolidation_sh_6k_no84",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Rajanpur",
+            "qa_pair_id": "factconsolidation_sh_6k_no85",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Africa",
+            "qa_pair_id": "factconsolidation_sh_6k_no86",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Rodez",
+            "qa_pair_id": "factconsolidation_sh_6k_no87",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Walter Chrysler",
+            "qa_pair_id": "factconsolidation_sh_6k_no88",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Washington, D.C.",
+            "qa_pair_id": "factconsolidation_sh_6k_no89",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "basketball",
+            "qa_pair_id": "factconsolidation_sh_6k_no90",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Australia",
+            "qa_pair_id": "factconsolidation_sh_6k_no91",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "David Beckham",
+            "qa_pair_id": "factconsolidation_sh_6k_no92",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Iran",
+            "qa_pair_id": "factconsolidation_sh_6k_no93",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ferdowsi",
+            "qa_pair_id": "factconsolidation_sh_6k_no94",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "point guard",
+            "qa_pair_id": "factconsolidation_sh_6k_no95",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Israel",
+            "qa_pair_id": "factconsolidation_sh_6k_no96",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles Frederick, Duke of Holstein-Gottorp",
+            "qa_pair_id": "factconsolidation_sh_6k_no97",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Amala Paul",
+            "qa_pair_id": "factconsolidation_sh_6k_no98",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "wide receiver",
+            "qa_pair_id": "factconsolidation_sh_6k_no99",
+            "stale": false,
+            "unanswered": false
+          }
+        ],
+        "stale_value_rate": 0.0,
+        "unanswered_rate": 0.0
+      },
+      "bm25_top20_plus_slot_oracle": {
+        "accuracy": 1.0,
+        "contradiction_free_accuracy": 1.0,
+        "contradiction_rate": 0.0,
+        "query_latency_p50_ms": 0.874,
+        "query_latency_p95_ms": 1.117,
+        "rows": [
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "pesäpallo",
+            "qa_pair_id": "factconsolidation_sh_6k_no0",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "The Fairly OddParents",
+            "qa_pair_id": "factconsolidation_sh_6k_no1",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "India",
+            "qa_pair_id": "factconsolidation_sh_6k_no2",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Shahnameh",
+            "qa_pair_id": "factconsolidation_sh_6k_no3",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "University of California, Berkeley",
+            "qa_pair_id": "factconsolidation_sh_6k_no4",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Thomas Kyd",
+            "qa_pair_id": "factconsolidation_sh_6k_no5",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "basketball",
+            "qa_pair_id": "factconsolidation_sh_6k_no6",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Muay Thai",
+            "qa_pair_id": "factconsolidation_sh_6k_no7",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Swedish",
+            "qa_pair_id": "factconsolidation_sh_6k_no8",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Jonathan Rothschild",
+            "qa_pair_id": "factconsolidation_sh_6k_no9",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Giuseppe Conte",
+            "qa_pair_id": "factconsolidation_sh_6k_no10",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ellen Pompeo",
+            "qa_pair_id": "factconsolidation_sh_6k_no11",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "quarterback",
+            "qa_pair_id": "factconsolidation_sh_6k_no12",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Malaysia",
+            "qa_pair_id": "factconsolidation_sh_6k_no13",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Samuel Beckett",
+            "qa_pair_id": "factconsolidation_sh_6k_no14",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Africa",
+            "qa_pair_id": "factconsolidation_sh_6k_no15",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Zoroastrianism",
+            "qa_pair_id": "factconsolidation_sh_6k_no16",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Italy",
+            "qa_pair_id": "factconsolidation_sh_6k_no17",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Microsoft",
+            "qa_pair_id": "factconsolidation_sh_6k_no18",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Steve Jobs",
+            "qa_pair_id": "factconsolidation_sh_6k_no19",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Peter Diamandis",
+            "qa_pair_id": "factconsolidation_sh_6k_no20",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "John Knox",
+            "qa_pair_id": "factconsolidation_sh_6k_no21",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby union",
+            "qa_pair_id": "factconsolidation_sh_6k_no22",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ernst Heinkel",
+            "qa_pair_id": "factconsolidation_sh_6k_no23",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "United States of America",
+            "qa_pair_id": "factconsolidation_sh_6k_no24",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Beaumont",
+            "qa_pair_id": "factconsolidation_sh_6k_no25",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Narendra Modi",
+            "qa_pair_id": "factconsolidation_sh_6k_no26",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Israel",
+            "qa_pair_id": "factconsolidation_sh_6k_no27",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "post-punk",
+            "qa_pair_id": "factconsolidation_sh_6k_no28",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Guangzhou",
+            "qa_pair_id": "factconsolidation_sh_6k_no29",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Japan",
+            "qa_pair_id": "factconsolidation_sh_6k_no30",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tang Empire",
+            "qa_pair_id": "factconsolidation_sh_6k_no31",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Philadelphia",
+            "qa_pair_id": "factconsolidation_sh_6k_no32",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Russian Empire",
+            "qa_pair_id": "factconsolidation_sh_6k_no33",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Taipei",
+            "qa_pair_id": "factconsolidation_sh_6k_no34",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "German",
+            "qa_pair_id": "factconsolidation_sh_6k_no35",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Madonna",
+            "qa_pair_id": "factconsolidation_sh_6k_no36",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tokyo",
+            "qa_pair_id": "factconsolidation_sh_6k_no37",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Harare",
+            "qa_pair_id": "factconsolidation_sh_6k_no38",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "ABB Group",
+            "qa_pair_id": "factconsolidation_sh_6k_no39",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ankara",
+            "qa_pair_id": "factconsolidation_sh_6k_no40",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby",
+            "qa_pair_id": "factconsolidation_sh_6k_no41",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "cornerback",
+            "qa_pair_id": "factconsolidation_sh_6k_no42",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oderzo",
+            "qa_pair_id": "factconsolidation_sh_6k_no43",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Antarctica",
+            "qa_pair_id": "factconsolidation_sh_6k_no44",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Pius XII",
+            "qa_pair_id": "factconsolidation_sh_6k_no45",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "The Beatles",
+            "qa_pair_id": "factconsolidation_sh_6k_no46",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles Darwin",
+            "qa_pair_id": "factconsolidation_sh_6k_no47",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Soviet Union",
+            "qa_pair_id": "factconsolidation_sh_6k_no48",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "United States of America",
+            "qa_pair_id": "factconsolidation_sh_6k_no49",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oceania",
+            "qa_pair_id": "factconsolidation_sh_6k_no50",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "cricket",
+            "qa_pair_id": "factconsolidation_sh_6k_no51",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Connachta",
+            "qa_pair_id": "factconsolidation_sh_6k_no52",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "atheism",
+            "qa_pair_id": "factconsolidation_sh_6k_no53",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Australian hip hop",
+            "qa_pair_id": "factconsolidation_sh_6k_no54",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Czech Republic",
+            "qa_pair_id": "factconsolidation_sh_6k_no55",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Italy",
+            "qa_pair_id": "factconsolidation_sh_6k_no56",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles the Bold",
+            "qa_pair_id": "factconsolidation_sh_6k_no57",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Kylie Minogue",
+            "qa_pair_id": "factconsolidation_sh_6k_no58",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "association football",
+            "qa_pair_id": "factconsolidation_sh_6k_no59",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rap rock",
+            "qa_pair_id": "factconsolidation_sh_6k_no60",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "flanker",
+            "qa_pair_id": "factconsolidation_sh_6k_no61",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Bernard Arnault",
+            "qa_pair_id": "factconsolidation_sh_6k_no62",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "German",
+            "qa_pair_id": "factconsolidation_sh_6k_no63",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "baseball",
+            "qa_pair_id": "factconsolidation_sh_6k_no64",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby",
+            "qa_pair_id": "factconsolidation_sh_6k_no65",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "journalist",
+            "qa_pair_id": "factconsolidation_sh_6k_no66",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "British Broadcasting Corporation",
+            "qa_pair_id": "factconsolidation_sh_6k_no67",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "North America",
+            "qa_pair_id": "factconsolidation_sh_6k_no68",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tucson",
+            "qa_pair_id": "factconsolidation_sh_6k_no69",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Canadair",
+            "qa_pair_id": "factconsolidation_sh_6k_no70",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Japan",
+            "qa_pair_id": "factconsolidation_sh_6k_no71",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "placekicker",
+            "qa_pair_id": "factconsolidation_sh_6k_no72",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Alan Jay Lerner",
+            "qa_pair_id": "factconsolidation_sh_6k_no73",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "John Keats",
+            "qa_pair_id": "factconsolidation_sh_6k_no74",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oscar Wilde",
+            "qa_pair_id": "factconsolidation_sh_6k_no75",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Shinzō Abe",
+            "qa_pair_id": "factconsolidation_sh_6k_no76",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Stephen McNeil",
+            "qa_pair_id": "factconsolidation_sh_6k_no77",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby union",
+            "qa_pair_id": "factconsolidation_sh_6k_no78",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Prague",
+            "qa_pair_id": "factconsolidation_sh_6k_no79",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "goaltender",
+            "qa_pair_id": "factconsolidation_sh_6k_no80",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Elizabeth II",
+            "qa_pair_id": "factconsolidation_sh_6k_no81",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Canada",
+            "qa_pair_id": "factconsolidation_sh_6k_no82",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Church of Scotland",
+            "qa_pair_id": "factconsolidation_sh_6k_no83",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Nobuhiro Watsuki",
+            "qa_pair_id": "factconsolidation_sh_6k_no84",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Rajanpur",
+            "qa_pair_id": "factconsolidation_sh_6k_no85",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Africa",
+            "qa_pair_id": "factconsolidation_sh_6k_no86",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Rodez",
+            "qa_pair_id": "factconsolidation_sh_6k_no87",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Walter Chrysler",
+            "qa_pair_id": "factconsolidation_sh_6k_no88",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Washington, D.C.",
+            "qa_pair_id": "factconsolidation_sh_6k_no89",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "basketball",
+            "qa_pair_id": "factconsolidation_sh_6k_no90",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Australia",
+            "qa_pair_id": "factconsolidation_sh_6k_no91",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "David Beckham",
+            "qa_pair_id": "factconsolidation_sh_6k_no92",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Iran",
+            "qa_pair_id": "factconsolidation_sh_6k_no93",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ferdowsi",
+            "qa_pair_id": "factconsolidation_sh_6k_no94",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "point guard",
+            "qa_pair_id": "factconsolidation_sh_6k_no95",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Israel",
+            "qa_pair_id": "factconsolidation_sh_6k_no96",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles Frederick, Duke of Holstein-Gottorp",
+            "qa_pair_id": "factconsolidation_sh_6k_no97",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Amala Paul",
+            "qa_pair_id": "factconsolidation_sh_6k_no98",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "wide receiver",
+            "qa_pair_id": "factconsolidation_sh_6k_no99",
+            "stale": false,
+            "unanswered": false
+          }
+        ],
+        "stale_value_rate": 0.0,
+        "unanswered_rate": 0.0
+      },
+      "no_memory": {
+        "accuracy": 0.0,
+        "contradiction_free_accuracy": 0.0,
+        "contradiction_rate": 0.0,
+        "query_latency_p50_ms": 0.0,
+        "query_latency_p95_ms": 0.0,
+        "rows": [
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no0",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no1",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no2",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no3",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no4",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no5",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no6",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no7",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no8",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no9",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no10",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no11",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no12",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no13",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no14",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no15",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no16",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no17",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no18",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no19",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no20",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no21",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no22",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no23",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no24",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no25",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no26",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no27",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no28",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no29",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no30",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no31",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no32",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no33",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no34",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no35",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no36",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no37",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no38",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no39",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no40",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no41",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no42",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no43",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no44",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no45",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no46",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no47",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no48",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no49",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no50",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no51",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no52",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no53",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no54",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no55",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no56",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no57",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no58",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no59",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no60",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no61",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no62",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no63",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no64",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no65",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no66",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no67",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no68",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no69",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no70",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no71",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no72",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no73",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no74",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no75",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no76",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no77",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no78",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no79",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no80",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no81",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no82",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no83",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no84",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no85",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no86",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no87",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no88",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no89",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no90",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no91",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no92",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no93",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no94",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no95",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no96",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no97",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no98",
+            "stale": false,
+            "unanswered": true
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": false,
+            "correct": false,
+            "prediction": "",
+            "qa_pair_id": "factconsolidation_sh_6k_no99",
+            "stale": false,
+            "unanswered": true
+          }
+        ],
+        "stale_value_rate": 0.0,
+        "unanswered_rate": 1.0
+      },
+      "typed_slot_oracle": {
+        "accuracy": 1.0,
+        "contradiction_free_accuracy": 1.0,
+        "contradiction_rate": 0.0,
+        "query_latency_p50_ms": 0.018,
+        "query_latency_p95_ms": 0.024,
+        "rows": [
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "pesäpallo",
+            "qa_pair_id": "factconsolidation_sh_6k_no0",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "The Fairly OddParents",
+            "qa_pair_id": "factconsolidation_sh_6k_no1",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "India",
+            "qa_pair_id": "factconsolidation_sh_6k_no2",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Shahnameh",
+            "qa_pair_id": "factconsolidation_sh_6k_no3",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "University of California, Berkeley",
+            "qa_pair_id": "factconsolidation_sh_6k_no4",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Thomas Kyd",
+            "qa_pair_id": "factconsolidation_sh_6k_no5",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "basketball",
+            "qa_pair_id": "factconsolidation_sh_6k_no6",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Muay Thai",
+            "qa_pair_id": "factconsolidation_sh_6k_no7",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Swedish",
+            "qa_pair_id": "factconsolidation_sh_6k_no8",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Jonathan Rothschild",
+            "qa_pair_id": "factconsolidation_sh_6k_no9",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Giuseppe Conte",
+            "qa_pair_id": "factconsolidation_sh_6k_no10",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ellen Pompeo",
+            "qa_pair_id": "factconsolidation_sh_6k_no11",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "quarterback",
+            "qa_pair_id": "factconsolidation_sh_6k_no12",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Malaysia",
+            "qa_pair_id": "factconsolidation_sh_6k_no13",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Samuel Beckett",
+            "qa_pair_id": "factconsolidation_sh_6k_no14",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Africa",
+            "qa_pair_id": "factconsolidation_sh_6k_no15",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Zoroastrianism",
+            "qa_pair_id": "factconsolidation_sh_6k_no16",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Italy",
+            "qa_pair_id": "factconsolidation_sh_6k_no17",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Microsoft",
+            "qa_pair_id": "factconsolidation_sh_6k_no18",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Steve Jobs",
+            "qa_pair_id": "factconsolidation_sh_6k_no19",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Peter Diamandis",
+            "qa_pair_id": "factconsolidation_sh_6k_no20",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "John Knox",
+            "qa_pair_id": "factconsolidation_sh_6k_no21",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby union",
+            "qa_pair_id": "factconsolidation_sh_6k_no22",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ernst Heinkel",
+            "qa_pair_id": "factconsolidation_sh_6k_no23",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "United States of America",
+            "qa_pair_id": "factconsolidation_sh_6k_no24",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Beaumont",
+            "qa_pair_id": "factconsolidation_sh_6k_no25",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Narendra Modi",
+            "qa_pair_id": "factconsolidation_sh_6k_no26",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Israel",
+            "qa_pair_id": "factconsolidation_sh_6k_no27",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "post-punk",
+            "qa_pair_id": "factconsolidation_sh_6k_no28",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Guangzhou",
+            "qa_pair_id": "factconsolidation_sh_6k_no29",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Japan",
+            "qa_pair_id": "factconsolidation_sh_6k_no30",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tang Empire",
+            "qa_pair_id": "factconsolidation_sh_6k_no31",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Philadelphia",
+            "qa_pair_id": "factconsolidation_sh_6k_no32",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Russian Empire",
+            "qa_pair_id": "factconsolidation_sh_6k_no33",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Taipei",
+            "qa_pair_id": "factconsolidation_sh_6k_no34",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "German",
+            "qa_pair_id": "factconsolidation_sh_6k_no35",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Madonna",
+            "qa_pair_id": "factconsolidation_sh_6k_no36",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tokyo",
+            "qa_pair_id": "factconsolidation_sh_6k_no37",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Harare",
+            "qa_pair_id": "factconsolidation_sh_6k_no38",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "ABB Group",
+            "qa_pair_id": "factconsolidation_sh_6k_no39",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ankara",
+            "qa_pair_id": "factconsolidation_sh_6k_no40",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby",
+            "qa_pair_id": "factconsolidation_sh_6k_no41",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "cornerback",
+            "qa_pair_id": "factconsolidation_sh_6k_no42",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oderzo",
+            "qa_pair_id": "factconsolidation_sh_6k_no43",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Antarctica",
+            "qa_pair_id": "factconsolidation_sh_6k_no44",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Pius XII",
+            "qa_pair_id": "factconsolidation_sh_6k_no45",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "The Beatles",
+            "qa_pair_id": "factconsolidation_sh_6k_no46",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles Darwin",
+            "qa_pair_id": "factconsolidation_sh_6k_no47",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Soviet Union",
+            "qa_pair_id": "factconsolidation_sh_6k_no48",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "United States of America",
+            "qa_pair_id": "factconsolidation_sh_6k_no49",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oceania",
+            "qa_pair_id": "factconsolidation_sh_6k_no50",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "cricket",
+            "qa_pair_id": "factconsolidation_sh_6k_no51",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Connachta",
+            "qa_pair_id": "factconsolidation_sh_6k_no52",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "atheism",
+            "qa_pair_id": "factconsolidation_sh_6k_no53",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Australian hip hop",
+            "qa_pair_id": "factconsolidation_sh_6k_no54",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Czech Republic",
+            "qa_pair_id": "factconsolidation_sh_6k_no55",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Italy",
+            "qa_pair_id": "factconsolidation_sh_6k_no56",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles the Bold",
+            "qa_pair_id": "factconsolidation_sh_6k_no57",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Kylie Minogue",
+            "qa_pair_id": "factconsolidation_sh_6k_no58",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "association football",
+            "qa_pair_id": "factconsolidation_sh_6k_no59",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rap rock",
+            "qa_pair_id": "factconsolidation_sh_6k_no60",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "flanker",
+            "qa_pair_id": "factconsolidation_sh_6k_no61",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Bernard Arnault",
+            "qa_pair_id": "factconsolidation_sh_6k_no62",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "German",
+            "qa_pair_id": "factconsolidation_sh_6k_no63",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "baseball",
+            "qa_pair_id": "factconsolidation_sh_6k_no64",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby",
+            "qa_pair_id": "factconsolidation_sh_6k_no65",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "journalist",
+            "qa_pair_id": "factconsolidation_sh_6k_no66",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "British Broadcasting Corporation",
+            "qa_pair_id": "factconsolidation_sh_6k_no67",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "North America",
+            "qa_pair_id": "factconsolidation_sh_6k_no68",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Tucson",
+            "qa_pair_id": "factconsolidation_sh_6k_no69",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Canadair",
+            "qa_pair_id": "factconsolidation_sh_6k_no70",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Japan",
+            "qa_pair_id": "factconsolidation_sh_6k_no71",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "placekicker",
+            "qa_pair_id": "factconsolidation_sh_6k_no72",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Alan Jay Lerner",
+            "qa_pair_id": "factconsolidation_sh_6k_no73",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "John Keats",
+            "qa_pair_id": "factconsolidation_sh_6k_no74",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Oscar Wilde",
+            "qa_pair_id": "factconsolidation_sh_6k_no75",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Shinzō Abe",
+            "qa_pair_id": "factconsolidation_sh_6k_no76",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Stephen McNeil",
+            "qa_pair_id": "factconsolidation_sh_6k_no77",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "rugby union",
+            "qa_pair_id": "factconsolidation_sh_6k_no78",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Prague",
+            "qa_pair_id": "factconsolidation_sh_6k_no79",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "goaltender",
+            "qa_pair_id": "factconsolidation_sh_6k_no80",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Elizabeth II",
+            "qa_pair_id": "factconsolidation_sh_6k_no81",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Canada",
+            "qa_pair_id": "factconsolidation_sh_6k_no82",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Church of Scotland",
+            "qa_pair_id": "factconsolidation_sh_6k_no83",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Nobuhiro Watsuki",
+            "qa_pair_id": "factconsolidation_sh_6k_no84",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Rajanpur",
+            "qa_pair_id": "factconsolidation_sh_6k_no85",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Africa",
+            "qa_pair_id": "factconsolidation_sh_6k_no86",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Rodez",
+            "qa_pair_id": "factconsolidation_sh_6k_no87",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Walter Chrysler",
+            "qa_pair_id": "factconsolidation_sh_6k_no88",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Washington, D.C.",
+            "qa_pair_id": "factconsolidation_sh_6k_no89",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "basketball",
+            "qa_pair_id": "factconsolidation_sh_6k_no90",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Australia",
+            "qa_pair_id": "factconsolidation_sh_6k_no91",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "David Beckham",
+            "qa_pair_id": "factconsolidation_sh_6k_no92",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Iran",
+            "qa_pair_id": "factconsolidation_sh_6k_no93",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Ferdowsi",
+            "qa_pair_id": "factconsolidation_sh_6k_no94",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "point guard",
+            "qa_pair_id": "factconsolidation_sh_6k_no95",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Israel",
+            "qa_pair_id": "factconsolidation_sh_6k_no96",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Charles Frederick, Duke of Holstein-Gottorp",
+            "qa_pair_id": "factconsolidation_sh_6k_no97",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "Amala Paul",
+            "qa_pair_id": "factconsolidation_sh_6k_no98",
+            "stale": false,
+            "unanswered": false
+          },
+          {
+            "contradiction": false,
+            "contradiction_free": true,
+            "correct": true,
+            "prediction": "wide receiver",
+            "qa_pair_id": "factconsolidation_sh_6k_no99",
+            "stale": false,
+            "unanswered": false
+          }
+        ],
+        "stale_value_rate": 0.0,
+        "unanswered_rate": 0.0
+      }
+    }
+  },
+  "schema_version": 1,
+  "scope": "official-data deterministic OpenChronicle adapter; not an official leaderboard run"
+}

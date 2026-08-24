@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "suite_id": "OC-Vida-Resume-Native-Export-v1",
+  "renderer_version": 1,
+  "template_id": "openchronicle-classic-v1",
+  "formats": ["pdf", "docx"],
+  "limits": {
+    "maximum_pdf_bytes": 10485760,
+    "maximum_docx_bytes": 4194304,
+    "maximum_docx_members": 100,
+    "maximum_docx_uncompressed_bytes": 8388608,
+    "renderer_timeout_seconds": 30
+  },
+  "pdf_engine": {
+    "kind": "reportlab-harfbuzz-offline",
+    "version": "ReportLab 5.0.0 + uharfbuzz 0.56.0",
+    "reportlab_version": "5.0.0",
+    "uharfbuzz_version": "0.56.0",
+    "pypdf_version": "6.15.0",
+    "release_boundary": "bundled_offline",
+    "font_source": {
+      "repository": "google/fonts",
+      "commit": "2d85e20401920891efb7cd6272d6339685df2820",
+      "build_tool": "fonttools@4.63.0",
+      "license": "OFL-1.1",
+      "assets": {
+        "NotoSans-Regular.ttf": "82d154854e9c223e853625ae9faf7302fdccc02f6bacfd429d6ff311da93d011",
+        "NotoSansSC-Regular.ttf": "56b7235feaf4eeeccaa59289ee95d965ed07fb3b2297251981e5e05b4e21ed27",
+        "NotoSansArabic-Regular.ttf": "1a4e20719f69a8b17b80a82d732f1f45f88b662b4213817554b06499eef00c68"
+      }
+    }
+  },
+  "pdf_preview": {
+    "kind": "backend-rasterized-png-pages",
+    "pypdfium2_version": "5.12.1",
+    "scale": 1.5,
+    "maximum_pages": 20,
+    "maximum_page_bytes": 4194304,
+    "maximum_total_bytes": 20971520,
+    "webview_pdf_bytes": false,
+    "webview_pdf_path": false
+  },
+  "docx_engine": {
+    "repository": "python-openxml/python-docx",
+    "commit": "e45454602b53e8e572b179ccf1c91093ec9f4ed7",
+    "version": "1.2.0",
+    "license": "MIT"
+  },
+  "docx_qa": {
+    "kind": "libreoffice-headless-to-pdf",
+    "version": "LibreOffice 26.2.3.2 70e089b17412e4cb7773e41413306b17a2328c34",
+    "tools": {
+      "pdfinfo_version": "pdfinfo version 26.04.0",
+      "pdftotext_version": "pdftotext version 26.04.0",
+      "pdftoppm_version": "pdftoppm version 26.04.0"
+    },
+    "page_width_points": 595.276,
+    "page_height_points": 841.89,
+    "page_size_tolerance_points": 2.0,
+    "maximum_pdf_bytes": 10485760,
+    "maximum_png_bytes": 20971520,
+    "expected_pages": {
+      "single-page-hostile-markup": [1, 1],
+      "unicode-and-directionality": [1, 1],
+      "long-unbroken-token": [1, 1],
+      "automatic-multipage-flow": [2, 4]
+    }
+  },
+  "comparators": [
+    {
+      "repository": "AmruthPillai/Reactive-Resume",
+      "commit": "efd950bd9394975201655fefb8c47f0edb44d273",
+      "pdf_dependency": "@react-pdf/renderer@^4.6.0",
+      "docx_dependency": "docx@^9.7.1",
+      "license": "MIT",
+      "observed_boundary": "PDF.js preview shares React-PDF output, but the audited Arabic extraction probe did not preserve exact logical Unicode order"
+    },
+    {
+      "repository": "MrBitBucket/reportlab-mirror",
+      "commit": "5e0a36e3face0f8ecd1ed03cc4791a84981bd8c5",
+      "version": "5.0.0",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "repository": "Kozea/WeasyPrint",
+      "commit": "32873118e8a70ceef87643775c247384d64798ea",
+      "release": "v69.0",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "repository": "typst/typst",
+      "commit": "9dfd3a08500b7896045f907433cf7b4b02434fad",
+      "release": "v0.15.1",
+      "license": "Apache-2.0",
+      "observed_boundary": "CJK requires bundled fonts and the audited Arabic extraction probe did not preserve exact logical Unicode order"
+    },
+    {
+      "repository": "py-pdf/fpdf2",
+      "commit": "42ec66442bf278b9768ca787fe601d3d334c62e4",
+      "version": "2.8.7",
+      "license": "LGPL-3.0-only",
+      "observed_boundary": "HarfBuzz-shaped Arabic rendered visually but the audited extraction probe returned CID/control substitutions"
+    },
+    {
+      "repository": "xitanggg/open-resume",
+      "commit": "4f8255a2c763479837f69f1dccf2a3338730cd79",
+      "license": "AGPL-3.0-only",
+      "observed_boundary": "React-PDF viewer is retained only for debugging because its live form latency is noticeable; production preview renders shared React-PDF components without the viewer"
+    },
+    {
+      "repository": "akhil-dara/cvaurum",
+      "commit": "e9f8993487f784c90ce2872e2de5599a1ce7dbe4",
+      "license": "MIT",
+      "observed_boundary": "The same browser DOM and print route drive exact-preview claims, trading native offline simplicity for browser-print fidelity"
+    }
+  ],
+  "hard_gates": {
+    "one_semantic_tree": true,
+    "current_projection_refetched": true,
+    "reviewed_preview_digest_required": true,
+    "webview_document_bytes_forbidden": true,
+    "webview_path_forbidden": true,
+    "native_create_new_only": true,
+    "private_file_mode": true,
+    "output_digest_recomputed_in_rust": true,
+    "pdf_a4_and_text_order_verified": true,
+    "pdf_fonts_embedded": true,
+    "pdf_no_child_process_or_network": true,
+    "pdf_repeat_bytes_deterministic": true,
+    "pdf_preview_exact_content_digest": true,
+    "pdf_preview_png_only_in_webview": true,
+    "docx_deterministic_zip": true,
+    "docx_external_relationships_forbidden": true,
+    "docx_active_content_forbidden": true,
+    "docx_exact_ordered_text_verified": true,
+    "action_capability": "none"
+  }
+}

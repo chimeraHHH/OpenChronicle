@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "dataset_id": "openchronicle-event-retrieval-native-v1",
+  "split": "frozen-native-development",
+  "cases": [
+    {
+      "id": "grouped-root-cause",
+      "query": "orion timeout root cause",
+      "required_anchors": ["ORION_TIMEOUT_47", "expired staging certificate"],
+      "forbidden_anchors": ["DISTRACTOR_LUNCH_ORDER"],
+      "observations": [
+        {"id": "grc-m1", "session_id": "grc-s1", "event_id": "grc-e1", "order": 1, "text": "Opened the Orion release dashboard and observed ORION_TIMEOUT_47."},
+        {"id": "grc-m2", "session_id": "grc-s1", "event_id": "grc-e1", "order": 2, "text": "Traced the root cause to an expired staging certificate."},
+        {"id": "grc-m3", "session_id": "grc-s1", "event_id": "grc-e2", "order": 3, "text": "Unrelated chat contained DISTRACTOR_LUNCH_ORDER."},
+        {"id": "grc-m4", "session_id": "grc-s1", "event_id": "grc-e3", "order": 4, "text": "Returned to release notes and documented the remediation."}
+      ]
+    },
+    {
+      "id": "previous-cause",
+      "query": "nebula retry succeeded",
+      "required_anchors": ["rotated the Nebula signing key", "NEBULA_RETRY_OK"],
+      "forbidden_anchors": ["DISTRACTOR_EXPENSE_FORM"],
+      "observations": [
+        {"id": "pc-m1", "session_id": "pc-s1", "event_id": "pc-e0", "order": 1, "text": "Reviewed an unrelated DISTRACTOR_EXPENSE_FORM."},
+        {"id": "pc-m2", "session_id": "pc-s1", "event_id": "pc-e1", "order": 2, "text": "Before retrying, rotated the Nebula signing key."},
+        {"id": "pc-m3", "session_id": "pc-s1", "event_id": "pc-e2", "order": 3, "text": "The Nebula release retry succeeded with NEBULA_RETRY_OK."},
+        {"id": "pc-m4", "session_id": "pc-s1", "event_id": "pc-e3", "order": 4, "text": "Verified the Nebula artifact checksum after success."}
+      ]
+    },
+    {
+      "id": "next-outcome",
+      "query": "quartz cache decision",
+      "required_anchors": ["QUARTZ_CACHE_BYPASS", "latency dropped to 82ms"],
+      "forbidden_anchors": ["DISTRACTOR_BOOK_CLUB"],
+      "observations": [
+        {"id": "no-m1", "session_id": "no-s1", "event_id": "no-e1", "order": 1, "text": "Chose QUARTZ_CACHE_BYPASS for the Quartz cache decision."},
+        {"id": "no-m2", "session_id": "no-s1", "event_id": "no-e2", "order": 2, "text": "After the change, Quartz latency dropped to 82ms."},
+        {"id": "no-m3", "session_id": "no-s1", "event_id": "no-e3", "order": 3, "text": "A later message mentioned DISTRACTOR_BOOK_CLUB."}
+      ]
+    },
+    {
+      "id": "precise-authored-text",
+      "query": "falcon rollback command",
+      "required_anchors": ["uv run falcon rollback --revision 19"],
+      "forbidden_anchors": ["DISTRACTOR_TRAVEL_RECEIPT"],
+      "observations": [
+        {"id": "pat-m1", "session_id": "pat-s1", "event_id": "pat-e1", "order": 1, "text": "Typed the Falcon rollback command: uv run falcon rollback --revision 19."},
+        {"id": "pat-m2", "session_id": "pat-s1", "event_id": "pat-e2", "order": 2, "text": "Confirmed the Falcon service was healthy after rollback."},
+        {"id": "pat-m3", "session_id": "pat-s1", "event_id": "pat-e3", "order": 3, "text": "Filed an unrelated DISTRACTOR_TRAVEL_RECEIPT."}
+      ]
+    },
+    {
+      "id": "same-session-disambiguation",
+      "query": "atlas lockfile migration",
+      "required_anchors": ["ATLAS_LOCK_V3"],
+      "forbidden_anchors": ["DISTRACTOR_ATLAS_MEETING", "DISTRACTOR_ATLAS_IMAGE"],
+      "observations": [
+        {"id": "ssd-m1", "session_id": "ssd-s1", "event_id": "ssd-e0", "order": 1, "text": "Read DISTRACTOR_ATLAS_MEETING notes about hiring."},
+        {"id": "ssd-m2", "session_id": "ssd-s1", "event_id": "ssd-e1", "order": 2, "text": "Completed the Atlas lockfile migration to ATLAS_LOCK_V3."},
+        {"id": "ssd-m3", "session_id": "ssd-s1", "event_id": "ssd-e2", "order": 3, "text": "Validated the migrated Atlas dependency graph."},
+        {"id": "ssd-m4", "session_id": "ssd-s1", "event_id": "ssd-e3", "order": 4, "text": "Opened DISTRACTOR_ATLAS_IMAGE assets for a slide."}
+      ]
+    },
+    {
+      "id": "event-compression",
+      "query": "lumen schema approval",
+      "required_anchors": ["LUMEN_SCHEMA_12", "approved by Mira"],
+      "forbidden_anchors": ["DISTRACTOR_WEATHER_WIDGET"],
+      "observations": [
+        {"id": "ec-m1", "session_id": "ec-s1", "event_id": "ec-e1", "order": 1, "text": "Drafted Lumen schema LUMEN_SCHEMA_12."},
+        {"id": "ec-m2", "session_id": "ec-s1", "event_id": "ec-e1", "order": 2, "text": "The Lumen schema was approved by Mira."},
+        {"id": "ec-m3", "session_id": "ec-s1", "event_id": "ec-e2", "order": 3, "text": "Recorded the approval in the Lumen changelog."},
+        {"id": "ec-m4", "session_id": "ec-s1", "event_id": "ec-e3", "order": 4, "text": "Adjusted an unrelated DISTRACTOR_WEATHER_WIDGET."}
+      ]
+    }
+  ]
+}

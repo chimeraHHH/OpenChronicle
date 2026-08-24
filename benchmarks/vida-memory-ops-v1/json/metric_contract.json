@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "baseline_id": "vida-memory-operations-v1",
+  "acceptance_target": "reviewed-memory-lifecycle-ready",
+  "dataset": {
+    "id": "OC-Vida-Memory-Operations-v1",
+    "split": "reviewed-lifecycle-dev-v1",
+    "path": "benchmarks/vida-memory-ops-v1/fixtures/traces.json"
+  },
+  "evaluation_path": "uv run python scripts/run_vida_memory_operations.py",
+  "primary_metric": "checkpoint_pass_rate",
+  "metrics": {
+    "operation_success_rate": {"direction": "higher", "required": true},
+    "checkpoint_pass_rate": {"direction": "higher", "required": true},
+    "stale_value_rate": {"direction": "lower", "required": true},
+    "forget_leakage_rate": {"direction": "lower", "required": true},
+    "over_forget_rate": {"direction": "lower", "required": true},
+    "provenance_support_rate": {"direction": "higher", "required": true},
+    "trajectory_order_accuracy": {"direction": "higher", "required": true}
+  },
+  "gates": {
+    "operation_success_rate_min": 1.0,
+    "checkpoint_pass_rate_min": 1.0,
+    "stale_value_rate_max": 0.0,
+    "forget_leakage_rate_max": 0.0,
+    "over_forget_rate_max": 0.0,
+    "provenance_support_rate_min": 1.0,
+    "trajectory_order_accuracy_min": 1.0
+  },
+  "known_deviations": [
+    "This first split executes gold operations directly; it does not measure whether a model inferred the correct operation from conversation text.",
+    "Reflection checks exact multi-source provenance and lifecycle state, not semantic truth or writing quality.",
+    "The fixture is a deterministic product regression gate, not a claim of public MemOps performance."
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "artifact_id": "xenova-ms-marco-minilm-l6-v2-onnx-fp32-a0914435",
+  "upstream": {
+    "repository": "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2",
+    "revision": "a09144355adeed5f58c8ed011d209bf8ee5a1fec",
+    "base_model": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    "license_spdx": "Apache-2.0",
+    "license_evidence": "fastembed-0.8.0-supported-model-registry"
+  },
+  "execution": {
+    "library": "fastembed",
+    "library_version": "0.8.0",
+    "library_wheel_sha256": "40bee672657574a1009e35ec50030a55f2b426842cb011845379817641bbbbd0",
+    "library_distribution_sha256": "9608098e85618fbdace86856af3aa517f28df89be6e47e640581657240793665",
+    "onnxruntime_version": "1.29.0",
+    "onnxruntime_distribution_sha256": "d4fc9fe6c90408a01a3532a9529d11aef974940c3baa3017eeaf75e239d3c070",
+    "tokenizers_version": "0.22.2",
+    "tokenizers_distribution_sha256": "457935f8635ea2fcaea99bf22c74838a585131dd6d8deef4918db33d7c41c4c7",
+    "numpy_version": "2.4.6",
+    "numpy_distribution_sha256": "b7e8953c635e1ff3a67acacc3ac47652f8d9127c019a38408489d2fd7672c706",
+    "python_version": "3.11.15",
+    "platform_system": "Darwin",
+    "platform_machine": "arm64",
+    "dependency_lock_sha256": "3e63bd0df117a0232e6027e58926e51beaae166e87a7ee36a11105448bfdb3a6",
+    "provider": "CPUExecutionProvider",
+    "threads": 1,
+    "batch_size": 64,
+    "dtype": "float32",
+    "local_files_only": true,
+    "trust_remote_code": false,
+    "model_file": "onnx/model.onnx",
+    "expected_logits_shape": [
+      "batch_size",
+      1
+    ],
+    "expected_logits_name": "logits",
+    "expected_logits_type": "tensor(float)",
+    "score_extraction": "logits[i,0]",
+    "activation": "identity",
+    "max_pair_tokens": 512,
+    "truncation_allowed": false
+  },
+  "files": [
+    {
+      "path": "README.md",
+      "size": 1783,
+      "sha256": "5ab9570ca405274a5eed93c119b32bc6415e6dfcc5f822b00e5d6757b4190a31"
+    },
+    {
+      "path": "config.json",
+      "size": 824,
+      "sha256": "d827779a72d27ae68cf878a6fc2e954542663fe21ca515d9f4783fc96be2d37e"
+    },
+    {
+      "path": "onnx/model.onnx",
+      "size": 90992115,
+      "sha256": "c623d0bcb99f4622beb413eaef00cfbe5db20df9f1dd982da4b4f26022881870"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "size": 125,
+      "sha256": "b6d346be366a7d1d48332dbc9fdf3bf8960b5d879522b7799ddba59e76237ee3"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 711396,
+      "sha256": "d241a60d5e8f04cc1b2b3e9ef7a4921b27bf526d9f6050ab90f9267a1f9e5c66"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "size": 1242,
+      "sha256": "0b29c7bfc889e53b36d9dd3e686dd4300f6525110eaa98c76a5dafceb2029f53"
+    },
+    {
+      "path": "vocab.txt",
+      "size": 231508,
+      "sha256": "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
+    }
+  ],
+  "files_aggregate_sha256": "ac180b887cbdf361a4e13b332a61e5695eb37fc4d4249333a778eb18c9714a96"
+}

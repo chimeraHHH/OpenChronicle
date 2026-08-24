@@ -22,6 +22,7 @@ Additional guards:
 
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from collections.abc import Callable
@@ -45,20 +46,24 @@ class EventDispatcher:
     """Consumes watcher events and invokes a capture callback.
 
     ``capture_fn`` should be idempotent and safe to call from this thread.
-    It will be called with a kwarg ``trigger`` carrying the event metadata
-    (event_type / bundle_id / window_title) so captures can be logged.
+    It will be called with a kwarg ``trigger`` carrying a deep-copied snapshot
+    of the full watcher event so debounce cannot observe producer mutation.
+    The capture scheduler treats it only as a wake-up signal and projects it
+    to exact identity fields before persistence or session delivery.
     """
 
     def __init__(
         self,
         capture_fn: Callable[[dict[str, Any]], None],
         *,
+        event_filter: Callable[[dict[str, Any]], bool] | None = None,
         debounce_seconds: float = 3.0,
         min_capture_gap_seconds: float = 2.0,
         dedup_interval_seconds: float = 1.0,
         same_window_dedup_seconds: float = 5.0,
     ) -> None:
         self._capture_fn = capture_fn
+        self._event_filter = event_filter
         self._debounce_seconds = debounce_seconds
         self._min_capture_gap = min_capture_gap_seconds
         self._dedup_interval = dedup_interval_seconds
@@ -84,6 +89,8 @@ class EventDispatcher:
         event_type = raw.get("event_type", "")
         if not event_type or event_type in _SKIP_EVENTS:
             return
+        if self._event_filter is not None and not self._event_filter(raw):
+            return
 
         bundle_id = raw.get("bundle_id", "") or ""
         window_title = raw.get("window_title", "") or ""
@@ -97,11 +104,15 @@ class EventDispatcher:
         if len(self._last_event_time) >= self._PRUNE_EVERY:
             self._prune_event_times(now)
 
-        trigger = {
-            "event_type": event_type,
-            "bundle_id": bundle_id,
-            "window_title": window_title,
-        }
+        # Preserve the complete watcher observation. The previous projection
+        # discarded details/app_name/pid/timestamp and forced the asynchronous
+        # capture worker to guess intent from whichever window was frontmost
+        # later. Deep-copy so a producer reusing a decoded object cannot mutate
+        # the queued observation after this method returns.
+        trigger = copy.deepcopy(raw)
+        trigger["event_type"] = str(event_type)
+        trigger["bundle_id"] = str(bundle_id)
+        trigger["window_title"] = str(window_title)
 
         if event_type in _IMMEDIATE_EVENTS:
             self._cancel_debounce()
@@ -111,9 +122,7 @@ class EventDispatcher:
 
     def _prune_event_times(self, now: float) -> None:
         cutoff = now - self._dedup_interval
-        self._last_event_time = {
-            k: t for k, t in self._last_event_time.items() if t >= cutoff
-        }
+        self._last_event_time = {k: t for k, t in self._last_event_time.items() if t >= cutoff}
 
     def _schedule_debounce(self, trigger: dict[str, Any]) -> None:
         with self._lock:
@@ -163,16 +172,14 @@ class EventDispatcher:
                 and (now - self._last_capture_monotonic) < self._same_window_dedup
             ):
                 logger.debug(
-                    "capture skipped (same-window dedup <%.1fs): %s",
-                    self._same_window_dedup, trigger["window_title"][:40],
+                    "capture skipped (same-window dedup <%.1fs)",
+                    self._same_window_dedup,
                 )
                 return
 
             gap = now - self._last_capture_monotonic
             if gap < self._min_capture_gap and not is_focus_change:
-                logger.debug(
-                    "capture skipped (rate limit %.1fs): %s", gap, event_type
-                )
+                logger.debug("capture skipped (rate limit %.1fs): %s", gap, event_type)
                 return
 
             self._last_capture_key = key
@@ -180,8 +187,10 @@ class EventDispatcher:
 
         try:
             self._capture_fn(trigger)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("capture callback failed: %s", exc)
+        except Exception:  # noqa: BLE001
+            # A callback can fail while it still owns the full watcher frame.
+            # Exception text is therefore not a safe secondary log sink.
+            logger.warning("capture callback failed")
 
     def shutdown(self) -> None:
         self._cancel_debounce()

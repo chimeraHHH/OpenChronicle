@@ -1,0 +1,529 @@
+{
+  "comparisons": {
+    "anchor_recall_lift_vs_minute": 0.5,
+    "context_chars_ratio_vs_session": 0.737907,
+    "forbidden_anchor_rate_reduction_vs_session": 0.714286
+  },
+  "dataset": {
+    "case_count": 6,
+    "id": "openchronicle-event-retrieval-native-v1",
+    "path": "benchmarks/vida-event-retrieval-v1/json/cases.json",
+    "sha256": "4c7e430e600052616009d8363761af1ceb92708f013d9a678435e7cf039b7b95",
+    "split": "frozen-native-development"
+  },
+  "environment": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.11.15",
+    "sqlite": "3.53.1"
+  },
+  "evaluation_id": "vida-event-retrieval-v1",
+  "gate_verdict": {
+    "checks": {
+      "anchor_recall": true,
+      "anchor_recall_lift_vs_minute": true,
+      "answerable_rate": true,
+      "context_chars_ratio_vs_session": true,
+      "forbidden_anchor_rate": true,
+      "forbidden_anchor_rate_reduction_vs_session": true
+    },
+    "gates": {
+      "max_context_chars_ratio_vs_session": 0.75,
+      "max_forbidden_anchor_rate": 0.3,
+      "min_anchor_recall": 1.0,
+      "min_anchor_recall_lift_vs_minute": 0.25,
+      "min_answerable_rate": 1.0,
+      "min_forbidden_anchor_rate_reduction_vs_session": 0.6
+    },
+    "passed": true
+  },
+  "metric_contract": {
+    "path": "benchmarks/vida-event-retrieval-v1/json/metric_contract.json",
+    "sha256": "49aefd0589b1fc45bbf7785ec8bfcae9e1b92fe4998c9075f083931f555a9b33"
+  },
+  "repository": {
+    "commit": "c903bb6d554b528881560846430f78baaaa2e6de",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "retrieval_contract": {
+    "event_adjacency_radius": 1,
+    "note": "All variants use the same local ranker. This isolates retrieval-unit shape; production projection/authorization is covered by tests/test_activity_events.py.",
+    "ranker": "sqlite_fts5_bm25_strict_then_or_on_zero_hits",
+    "tokenizer": "unicode61 remove_diacritics 2",
+    "top_k": 1
+  },
+  "schema_version": 1,
+  "variants": {
+    "event": {
+      "cases": [
+        {
+          "answerable": true,
+          "case_id": "grouped-root-cause",
+          "context_chars": 122,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "grc-e1",
+          "query": "orion timeout root cause",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "ORION_TIMEOUT_47",
+            "expired staging certificate"
+          ],
+          "returned_unit_ids": [
+            "grc-e1"
+          ]
+        },
+        {
+          "answerable": false,
+          "case_id": "previous-cause",
+          "context_chars": 56,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "pc-e2",
+          "query": "nebula retry succeeded",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "NEBULA_RETRY_OK"
+          ],
+          "returned_unit_ids": [
+            "pc-e2"
+          ]
+        },
+        {
+          "answerable": false,
+          "case_id": "next-outcome",
+          "context_chars": 56,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "no-e1",
+          "query": "quartz cache decision",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "QUARTZ_CACHE_BYPASS"
+          ],
+          "returned_unit_ids": [
+            "no-e1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "precise-authored-text",
+          "context_chars": 72,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "pat-e1",
+          "query": "falcon rollback command",
+          "required_anchor_count": 1,
+          "required_anchor_hits": [
+            "uv run falcon rollback --revision 19"
+          ],
+          "returned_unit_ids": [
+            "pat-e1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "same-session-disambiguation",
+          "context_chars": 56,
+          "forbidden_anchor_count": 2,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "ssd-e1",
+          "query": "atlas lockfile migration",
+          "required_anchor_count": 1,
+          "required_anchor_hits": [
+            "ATLAS_LOCK_V3"
+          ],
+          "returned_unit_ids": [
+            "ssd-e1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "event-compression",
+          "context_chars": 76,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "ec-e1",
+          "query": "lumen schema approval",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "LUMEN_SCHEMA_12",
+            "approved by Mira"
+          ],
+          "returned_unit_ids": [
+            "ec-e1"
+          ]
+        }
+      ],
+      "metrics": {
+        "anchor_recall": 0.8,
+        "answerable_rate": 0.666667,
+        "case_count": 6.0,
+        "empty_hit_rate": 0.0,
+        "forbidden_anchor_rate": 0.0,
+        "mean_context_chars": 73.0,
+        "mean_returned_units": 1.0
+      }
+    },
+    "event_adjacent": {
+      "cases": [
+        {
+          "answerable": true,
+          "case_id": "grouped-root-cause",
+          "context_chars": 171,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [
+            "DISTRACTOR_LUNCH_ORDER"
+          ],
+          "matched_unit_id": "grc-e1",
+          "query": "orion timeout root cause",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "ORION_TIMEOUT_47",
+            "expired staging certificate"
+          ],
+          "returned_unit_ids": [
+            "grc-e1",
+            "grc-e2"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "previous-cause",
+          "context_chars": 158,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "pc-e2",
+          "query": "nebula retry succeeded",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "rotated the Nebula signing key",
+            "NEBULA_RETRY_OK"
+          ],
+          "returned_unit_ids": [
+            "pc-e1",
+            "pc-e2",
+            "pc-e3"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "next-outcome",
+          "context_chars": 106,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "no-e1",
+          "query": "quartz cache decision",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "QUARTZ_CACHE_BYPASS",
+            "latency dropped to 82ms"
+          ],
+          "returned_unit_ids": [
+            "no-e1",
+            "no-e2"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "precise-authored-text",
+          "context_chars": 129,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "pat-e1",
+          "query": "falcon rollback command",
+          "required_anchor_count": 1,
+          "required_anchor_hits": [
+            "uv run falcon rollback --revision 19"
+          ],
+          "returned_unit_ids": [
+            "pat-e1",
+            "pat-e2"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "same-session-disambiguation",
+          "context_chars": 153,
+          "forbidden_anchor_count": 2,
+          "forbidden_anchor_hits": [
+            "DISTRACTOR_ATLAS_MEETING"
+          ],
+          "matched_unit_id": "ssd-e1",
+          "query": "atlas lockfile migration",
+          "required_anchor_count": 1,
+          "required_anchor_hits": [
+            "ATLAS_LOCK_V3"
+          ],
+          "returned_unit_ids": [
+            "ssd-e0",
+            "ssd-e1",
+            "ssd-e2"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "event-compression",
+          "context_chars": 122,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "ec-e1",
+          "query": "lumen schema approval",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "LUMEN_SCHEMA_12",
+            "approved by Mira"
+          ],
+          "returned_unit_ids": [
+            "ec-e1",
+            "ec-e2"
+          ]
+        }
+      ],
+      "metrics": {
+        "anchor_recall": 1.0,
+        "answerable_rate": 1.0,
+        "case_count": 6.0,
+        "empty_hit_rate": 0.0,
+        "forbidden_anchor_rate": 0.285714,
+        "mean_context_chars": 139.833333,
+        "mean_returned_units": 2.333333
+      }
+    },
+    "minute": {
+      "cases": [
+        {
+          "answerable": false,
+          "case_id": "grouped-root-cause",
+          "context_chars": 65,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "grc-m1",
+          "query": "orion timeout root cause",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "ORION_TIMEOUT_47"
+          ],
+          "returned_unit_ids": [
+            "grc-m1"
+          ]
+        },
+        {
+          "answerable": false,
+          "case_id": "previous-cause",
+          "context_chars": 56,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "pc-m3",
+          "query": "nebula retry succeeded",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "NEBULA_RETRY_OK"
+          ],
+          "returned_unit_ids": [
+            "pc-m3"
+          ]
+        },
+        {
+          "answerable": false,
+          "case_id": "next-outcome",
+          "context_chars": 56,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "no-m1",
+          "query": "quartz cache decision",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "QUARTZ_CACHE_BYPASS"
+          ],
+          "returned_unit_ids": [
+            "no-m1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "precise-authored-text",
+          "context_chars": 72,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "pat-m1",
+          "query": "falcon rollback command",
+          "required_anchor_count": 1,
+          "required_anchor_hits": [
+            "uv run falcon rollback --revision 19"
+          ],
+          "returned_unit_ids": [
+            "pat-m1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "same-session-disambiguation",
+          "context_chars": 56,
+          "forbidden_anchor_count": 2,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "ssd-m2",
+          "query": "atlas lockfile migration",
+          "required_anchor_count": 1,
+          "required_anchor_hits": [
+            "ATLAS_LOCK_V3"
+          ],
+          "returned_unit_ids": [
+            "ssd-m2"
+          ]
+        },
+        {
+          "answerable": false,
+          "case_id": "event-compression",
+          "context_chars": 45,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [],
+          "matched_unit_id": "ec-m3",
+          "query": "lumen schema approval",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [],
+          "returned_unit_ids": [
+            "ec-m3"
+          ]
+        }
+      ],
+      "metrics": {
+        "anchor_recall": 0.5,
+        "answerable_rate": 0.333333,
+        "case_count": 6.0,
+        "empty_hit_rate": 0.0,
+        "forbidden_anchor_rate": 0.0,
+        "mean_context_chars": 58.333333,
+        "mean_returned_units": 1.0
+      }
+    },
+    "session": {
+      "cases": [
+        {
+          "answerable": true,
+          "case_id": "grouped-root-cause",
+          "context_chars": 229,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [
+            "DISTRACTOR_LUNCH_ORDER"
+          ],
+          "matched_unit_id": "grc-s1",
+          "query": "orion timeout root cause",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "ORION_TIMEOUT_47",
+            "expired staging certificate"
+          ],
+          "returned_unit_ids": [
+            "grc-s1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "previous-cause",
+          "context_chars": 205,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [
+            "DISTRACTOR_EXPENSE_FORM"
+          ],
+          "matched_unit_id": "pc-s1",
+          "query": "nebula retry succeeded",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "rotated the Nebula signing key",
+            "NEBULA_RETRY_OK"
+          ],
+          "returned_unit_ids": [
+            "pc-s1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "next-outcome",
+          "context_chars": 154,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [
+            "DISTRACTOR_BOOK_CLUB"
+          ],
+          "matched_unit_id": "no-s1",
+          "query": "quartz cache decision",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "QUARTZ_CACHE_BYPASS",
+            "latency dropped to 82ms"
+          ],
+          "returned_unit_ids": [
+            "no-s1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "precise-authored-text",
+          "context_chars": 175,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [
+            "DISTRACTOR_TRAVEL_RECEIPT"
+          ],
+          "matched_unit_id": "pat-s1",
+          "query": "falcon rollback command",
+          "required_anchor_count": 1,
+          "required_anchor_hits": [
+            "uv run falcon rollback --revision 19"
+          ],
+          "returned_unit_ids": [
+            "pat-s1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "same-session-disambiguation",
+          "context_chars": 203,
+          "forbidden_anchor_count": 2,
+          "forbidden_anchor_hits": [
+            "DISTRACTOR_ATLAS_MEETING",
+            "DISTRACTOR_ATLAS_IMAGE"
+          ],
+          "matched_unit_id": "ssd-s1",
+          "query": "atlas lockfile migration",
+          "required_anchor_count": 1,
+          "required_anchor_hits": [
+            "ATLAS_LOCK_V3"
+          ],
+          "returned_unit_ids": [
+            "ssd-s1"
+          ]
+        },
+        {
+          "answerable": true,
+          "case_id": "event-compression",
+          "context_chars": 171,
+          "forbidden_anchor_count": 1,
+          "forbidden_anchor_hits": [
+            "DISTRACTOR_WEATHER_WIDGET"
+          ],
+          "matched_unit_id": "ec-s1",
+          "query": "lumen schema approval",
+          "required_anchor_count": 2,
+          "required_anchor_hits": [
+            "LUMEN_SCHEMA_12",
+            "approved by Mira"
+          ],
+          "returned_unit_ids": [
+            "ec-s1"
+          ]
+        }
+      ],
+      "metrics": {
+        "anchor_recall": 1.0,
+        "answerable_rate": 1.0,
+        "case_count": 6.0,
+        "empty_hit_rate": 0.0,
+        "forbidden_anchor_rate": 1.0,
+        "mean_context_chars": 189.5,
+        "mean_returned_units": 1.0
+      }
+    }
+  }
+}

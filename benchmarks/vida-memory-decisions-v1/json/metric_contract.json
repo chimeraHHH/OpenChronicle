@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "baseline_id": "vida-memory-decisions-v1",
+  "acceptance_target": "model-memory-decision-dev-ready",
+  "dataset": {
+    "id": "OC-Vida-Memory-Decisions-v1",
+    "split": "model-decision-dev-v1",
+    "path": "benchmarks/vida-memory-decisions-v1/fixtures/cases.json"
+  },
+  "evaluation_path": "uv run python scripts/run_vida_memory_decisions.py",
+  "primary_metric": "operation_f1",
+  "metrics": {
+    "parse_success_rate": {"direction": "higher", "required": true},
+    "operation_precision": {"direction": "higher", "required": true},
+    "operation_recall": {"direction": "higher", "required": true},
+    "target_binding_accuracy": {"direction": "higher", "required": true},
+    "value_accuracy": {"direction": "higher", "required": true},
+    "provenance_support_rate": {"direction": "higher", "required": true},
+    "noop_accuracy": {"direction": "higher", "required": true}
+  },
+  "gates": {
+    "parse_success_rate_min": 1.0,
+    "operation_precision_min": 0.8,
+    "operation_recall_min": 0.8,
+    "target_binding_accuracy_min": 0.8,
+    "value_accuracy_min": 0.8,
+    "provenance_support_rate_min": 0.8,
+    "noop_accuracy_min": 1.0
+  },
+  "known_deviations": [
+    "This is a small native development split, not a public MemOps leaderboard result.",
+    "Forget is evaluated as an inert decision label and never bypasses user-confirmed deletion.",
+    "Old values and evidence are exact; new values use frozen required semantic anchors to avoid a second judge model."
+  ]
+}

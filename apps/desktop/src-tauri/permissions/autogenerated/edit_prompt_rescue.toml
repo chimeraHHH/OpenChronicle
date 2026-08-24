@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-edit-prompt-rescue"
+description = "Enables the edit_prompt_rescue command without any pre-configured scope."
+commands.allow = ["edit_prompt_rescue"]
+
+[[permission]]
+identifier = "deny-edit-prompt-rescue"
+description = "Denies the edit_prompt_rescue command without any pre-configured scope."
+commands.deny = ["edit_prompt_rescue"]

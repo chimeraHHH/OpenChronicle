@@ -6,7 +6,10 @@ Memory files are plain Markdown under `~/.openchronicle/memory/`. Three rules:
 2. Each file is YAML frontmatter + a list of append-only entries.
 3. When information changes, the *old entry* is struck through in place; new content is appended.
 
-A human can read, grep, diff, and hand-edit these files. The SQLite FTS index (`index.db`) is a derived mirror — rebuild it from the files any time with `openchronicle rebuild-index`.
+A human can read, grep, diff, and hand-edit these files. SQLite `index.db` is a
+derived mirror: ordinary entry FTS plus an event-level projection of reducer
+sub-tasks and their previous/next links. Rebuild all of it from Markdown at any
+time with `openchronicle rebuild-index`.
 
 ## File prefixes
 
@@ -18,9 +21,19 @@ A human can read, grep, diff, and hand-edit these files. The SQLite FTS index (`
 | `topic-` | A knowledge domain or ongoing area of attention | `topic-rust-async.md` |
 | `person-` | Another person the user interacts with | `person-alice.md` |
 | `org-` | A company, team, or institution | `org-anthropic.md` |
+| `procedure-` | Reviewed text-only workflow, checklist, or template | `procedure-release-note.md` |
 | `event-` | Per-day session-level activity log (written by the S2 reducer) | `event-2026-04-22.md` |
 
 `user-profile.md` and `user-preferences.md` are preseeded on first install; everything else is created by the writer on demand. See `prompts/schema.md` for the full decision tree (also available via MCP `get_schema`).
+
+`procedure-*` entries are ordinary reviewed, provenance-bearing memories with a
+small canonical body: title, type (`workflow`, `checklist`, or `template`),
+scope, trigger, an explicit `text-generation context only` capability line,
+and 2–12 steps. Templates also carry inert fenced text. They may influence a
+draft, checklist, summary, or organization plan returned by a model, but they
+never authorize tool calls or execute computer actions. Explicit user-authored
+procedures may be proposed from one direct source; observed or inferred
+procedures require cited event evidence from two distinct sessions.
 
 ## File layout
 
@@ -37,14 +50,15 @@ needs_compact: false
 
 # User Profile
 
-## [2026-04-20T14:02:11] {id: 20260420-1402-a1b23c} #identity
+## [2026-04-20T14:02:11] {id: 20260420-1402-a1b23c} #identity #oc-origin:manual-v1
 User goes by Kming. Based in Shanghai.
 
-## [2026-04-20T16:30:05] {id: 20260420-1630-3f0e99} #work #employer
+## [2026-04-20T16:30:05] {id: 20260420-1630-3f0e99} #work #employer #oc-origin:manual-v1
 ~~User works at Old Corp as a principal engineer.~~ #superseded-by:20260421-0915-c4f1a5
 
-## [2026-04-21T09:15:00] {id: 20260421-0915-c4f1a5} #work #employer
+## [2026-04-21T09:15:00] {id: 20260421-0915-c4f1a5} #work #employer #oc-origin:derived-v1
 User joined Acme Corp as a senior engineer.
+<!-- oc-provenance: {"v":1,"sources":[{"kind":"memory_entry","id":"20260420-1630-3f0e99","path":"user-profile.md","timestamp":"2026-04-20T16:30:05+08:00","content_hash":"<sha256>"}]} -->
 ```
 
 ### Frontmatter fields
@@ -61,6 +75,12 @@ User joined Acme Corp as a senior engineer.
 
 Hand-editing frontmatter is allowed; run `rebuild-index` afterward to sync the FTS tables.
 
+For `event-YYYY-MM-DD.md`, every canonical bullet beginning with
+`- [HH:MM-HH:MM, App]` becomes one rebuildable activity event. Its stable ID is
+derived from the source path, entry ID, and bullet ordinal; it is not written
+back into Markdown. Legacy event bodies without this shape stay searchable as
+one coarse event. The source entry remains the only authority.
+
 ### Entry heading
 
 ```
@@ -71,26 +91,71 @@ Hand-editing frontmatter is allowed; run `rebuild-index` afterward to sync the F
 - **Id.** `YYYYMMDD-HHMM` + 6 hex chars from `blake2s(os.urandom(8), digest_size=3)`. Collision probability <0.1% even under heavy batched writes within the same minute.
 - **Tags.** 1–3 per entry, hashtag-style. Indexed for `read_memory(tags=...)` and `search`.
 
+### Origin marker and legacy migration
+
+Every canonical entry heading also carries exactly one reserved trust marker:
+
+- `#oc-origin:manual-v1` — an explicit local, human-authored trust root;
+- `#oc-origin:automation-v1` — automation output without evidence ancestry;
+- `#oc-origin:derived-v1` — output with a canonical `oc-provenance` frame.
+
+The marker remains visible in Markdown but is removed from user-facing tags and
+tag search. Application writes set it automatically. For hand-written entries,
+add `#oc-origin:manual-v1` to the heading and run `rebuild-index`. An unmarked
+legacy entry, a duplicate/unknown origin marker, and an automation entry without
+live provenance are deliberately absent from MCP, desktop, snapshot, and model
+inputs. An empty or fully quarantined file does not expose its path or
+frontmatter through those surfaces. This explicit marker prevents a lost
+provenance frame from silently turning model output into trusted local memory.
+
 ### Body
 
 1–3 sentences. Self-contained — a reader should understand the fact without the surrounding entries. See `prompts/schema.md` for tense / subject-clarity rules.
 
 ## Supersede semantics
 
-When a fact changes, the writer calls `supersede(path, old_id, new_content, reason)`:
+When a fact changes, the classifier stages a human-reviewed `supersede`
+candidate bound to the old entry ID and body hash. Approval calls the canonical
+supersede operation:
 
 1. Old entry's body is wrapped in `~~...~~`.
 2. A trailing `#superseded-by:{new_id}` tag is appended to the old heading.
 3. The old entry's FTS row gets `superseded = 1` — hidden from default search.
 4. A new entry is appended with the replacement content.
+5. The replacement embeds provenance references to the post-strike old entry,
+   reviewed candidate, and evidence for the new value, allowing source tracing,
+   fixed-point rebuild, and transitive purge.
 
-Nothing is deleted. The timeline is intact, and `read_memory` / `search` with `include_superseded=true` surfaces the chain.
+Normal supersession deletes nothing. The timeline is intact, and `read_memory`
+/ `search` with `include_superseded=true` surfaces the chain. If the user later
+purges the reviewed replacement candidate, its deterministic replacement is
+deleted and the immediately preceding value becomes current again.
+
+`search(as_of=<ISO-8601>)` is the bounded historical view. It considers the
+chain but returns only the revision that had already been recorded and had not
+yet been replaced at the requested time. The same instant is applied to typed
+`valid_from`/`valid_to` metadata. Default search remains current-only, so adding
+history cannot silently reintroduce stale values into normal context.
 
 ## Compaction
 
-When a file's entry count gets large, the writer can flag it with `flag_compact`. The compact stage rewrites the file to preserve the *facts* while reducing tokens — e.g., by merging multiple supersedes into a single "current state" + historical note.
+When a file's entry count gets large, the writer can flag it with `flag_compact`.
+The compact stage accepts non-empty files made of explicit `manual-v1` roots
+and/or live provenance-bearing derivatives. Automation roots, unmarked legacy
+entries, invalid origins/frames, stale sources, and policy-denied branches are
+refused before provider egress.
 
-A regex-based fact-preservation check rejects any rewrite that drops >5% of unique noun phrases. Rejected rewrites leave the file flagged for manual review; they never silently lose information.
+For an eligible file, the compact stage may rewrite leaf entry bodies to preserve the
+*facts* while reducing tokens. Entry IDs, timestamps, count, order, origin
+markers, and provenance-free status must remain exact. Local frontmatter is
+authoritative and cannot be replaced by model output; only `needs_compact` is
+cleared after a successful write.
+
+A regex-based fact-preservation check rejects any rewrite that drops >5% of
+unique noun phrases. Canonical parsing also drops unframed model text. The
+writeback compares the file with the exact pre-call snapshot, so an external
+edit causes a retry rather than an overwrite. Rejected rewrites leave the file
+flagged for manual review; they never silently lose information.
 
 Trigger knobs live in `[writer]`:
 
@@ -108,7 +173,10 @@ hard_limit_tokens = 50000    # emergency: always flag
 - Let the writer do it (normal path), or
 - Edit the Markdown, then run `uv run openchronicle rebuild-index` to resync.
 
-The rebuild is safe and idempotent — it parses every file and rebuilds the `entries`, `files`, and `entries_fts` tables from scratch.
+The rebuild is safe and idempotent — it parses every visible file and rebuilds
+the `entries`, `files`, and `entries_fts` tables from scratch. Files or entries
+behind a pending purge tombstone are deliberately skipped, as are entries whose
+memory-entry/candidate provenance dependency is no longer current.
 
 ## Wiping memory
 
@@ -118,3 +186,8 @@ uv run openchronicle clean all          # ...plus captures, timeline blocks, wri
 ```
 
 Config (`config.toml`) is never touched by `clean` commands.
+Cleanup first hides canonical files with content-free tombstones and clears
+their search projections, then unlinks them. If any unlink fails, the command
+returns nonzero and keeps the corresponding deny marker; direct reads and
+`rebuild-index` cannot expose that leftover file. Remove the filesystem obstacle
+and rerun the same clean command to finish.

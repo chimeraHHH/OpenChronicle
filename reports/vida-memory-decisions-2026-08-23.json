@@ -1,0 +1,392 @@
+{
+  "dataset": {
+    "case_count": 8,
+    "gold_operation_count": 6,
+    "id": "OC-Vida-Memory-Decisions-v1",
+    "path": "benchmarks/vida-memory-decisions-v1/fixtures/cases.json",
+    "sha256": "c9da65d0d3a1538b5453e17dd798dde1f305e838555dbc07c569f62e77261699",
+    "source": "openchronicle_native",
+    "split": "model-decision-dev-v1"
+  },
+  "environment": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.11.15"
+  },
+  "evaluation_id": "vida-memory-decisions-v1",
+  "metric_contract": {
+    "path": "benchmarks/vida-memory-decisions-v1/json/metric_contract.json",
+    "sha256": "375ed7dd8bb81a8e62fa7a8a498a31d5ddd1476fe9b4f6efc1545151a25ce2e3"
+  },
+  "repository": {
+    "commit": "7d8eea069929d51d158fd276eeb438d763e35617",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "schema_version": 1,
+  "variant": {
+    "action_capability": "none",
+    "cases": [
+      {
+        "binding_errors": 0,
+        "case_id": "remember-explicit-project-model",
+        "failure_stage": "",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "r1-user"
+            ],
+            "new_value": "gpt-5.6-luna",
+            "new_value_anchors": [
+              "gpt-5.6-luna"
+            ],
+            "old_value": "",
+            "target_id": "project.timeline-model",
+            "type": "remember"
+          }
+        ],
+        "latency_ms": 8799.361958,
+        "passed": true,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "r1-user"
+            ],
+            "new_value": "OpenChronicle uses gpt-5.6-luna for one-minute timeline normalization.",
+            "old_value": "",
+            "target_id": "project.timeline-model",
+            "type": "remember"
+          }
+        ],
+        "provenance_error_keys": [],
+        "response_chars": 219,
+        "response_sha256": "8c30615529d2cb84f5938376b16e0a7cd621523431b876dc5f7915c8ac6a97f9",
+        "tp": 1,
+        "value_error_keys": []
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "remember-negative-third-party",
+        "failure_stage": "",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [],
+        "latency_ms": 7975.196583,
+        "passed": true,
+        "predicted_operations": [],
+        "provenance_error_keys": [],
+        "response_chars": 36,
+        "response_sha256": "22595c62b28d0fa043a6fa9c5ece4e6a09174c3cff645f17d186d69a9e568230",
+        "tp": 0,
+        "value_error_keys": []
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "update-confirmed-model",
+        "failure_stage": "",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "u1-user"
+            ],
+            "new_value": "gpt-5.6-luna",
+            "new_value_anchors": [
+              "gpt-5.6-luna"
+            ],
+            "old_value": "gpt-5.4-nano",
+            "target_id": "project.timeline-model",
+            "type": "update"
+          }
+        ],
+        "latency_ms": 7964.32425,
+        "passed": true,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "u1-user"
+            ],
+            "new_value": "gpt-5.6-luna",
+            "old_value": "gpt-5.4-nano",
+            "target_id": "project.timeline-model",
+            "type": "update"
+          }
+        ],
+        "provenance_error_keys": [],
+        "response_chars": 171,
+        "response_sha256": "be52bbc404e613c82f4c77882b7508674bd3b4b0de1c6b870800c3ed5ae5dadb",
+        "tp": 1,
+        "value_error_keys": []
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "update-negative-tentative",
+        "failure_stage": "",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [],
+        "latency_ms": 8542.567416,
+        "passed": true,
+        "predicted_operations": [],
+        "provenance_error_keys": [],
+        "response_chars": 36,
+        "response_sha256": "22595c62b28d0fa043a6fa9c5ece4e6a09174c3cff645f17d186d69a9e568230",
+        "tp": 0,
+        "value_error_keys": []
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "forget-one-target-not-neighbor",
+        "failure_stage": "",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "f1-user"
+            ],
+            "new_value": "",
+            "new_value_anchors": [],
+            "old_value": "Typora",
+            "target_id": "user.editor.long-form",
+            "type": "forget"
+          }
+        ],
+        "latency_ms": 9197.052208,
+        "passed": true,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "f1-user"
+            ],
+            "new_value": "",
+            "old_value": "Typora",
+            "target_id": "user.editor.long-form",
+            "type": "forget"
+          }
+        ],
+        "provenance_error_keys": [],
+        "response_chars": 152,
+        "response_sha256": "62daf19280ce980bb68bb44e771d46c6ec33aa54b78bbd1df5f00f3be7813eb7",
+        "tp": 1,
+        "value_error_keys": []
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "reflect-independent-sessions",
+        "failure_stage": "",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "p1-user",
+              "p2-user"
+            ],
+            "new_value": "The user repeatedly prefers reports to end with concrete next actions.",
+            "new_value_anchors": [
+              "repeatedly prefers",
+              "reports",
+              "concrete next actions"
+            ],
+            "old_value": "",
+            "target_id": "user.reporting.next-actions-pattern",
+            "type": "reflect"
+          }
+        ],
+        "latency_ms": 8457.111583,
+        "passed": true,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "p1-user",
+              "p2-user"
+            ],
+            "new_value": "The user repeatedly prefers reports and project summaries to end with concrete next actions.",
+            "old_value": "",
+            "target_id": "user.reporting.next-actions-pattern",
+            "type": "reflect"
+          }
+        ],
+        "provenance_error_keys": [],
+        "response_chars": 263,
+        "response_sha256": "85694c0354fa2944086287bbb1a66a72a49cf5d074e9e7a216187ee67cb56c96",
+        "tp": 1,
+        "value_error_keys": []
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "reflect-negative-single-session",
+        "failure_stage": "",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [],
+        "latency_ms": 9479.352708,
+        "passed": true,
+        "predicted_operations": [],
+        "provenance_error_keys": [],
+        "response_chars": 36,
+        "response_sha256": "22595c62b28d0fa043a6fa9c5ece4e6a09174c3cff645f17d186d69a9e568230",
+        "tp": 0,
+        "value_error_keys": []
+      },
+      {
+        "binding_errors": 0,
+        "case_id": "multi-operation-update-and-remember",
+        "failure_stage": "",
+        "false_negative_keys": [],
+        "false_positive_keys": [],
+        "fn": 0,
+        "fp": 0,
+        "gold_operations": [
+          {
+            "evidence_ids": [
+              "m1-user"
+            ],
+            "new_value": "gpt-5.6-luna",
+            "new_value_anchors": [
+              "gpt-5.6-luna"
+            ],
+            "old_value": "gpt-5.4-nano",
+            "target_id": "project.timeline-model",
+            "type": "update"
+          },
+          {
+            "evidence_ids": [
+              "m1-user"
+            ],
+            "new_value": "If Luna fails, leave the item retryable and do not create a local rule summary.",
+            "new_value_anchors": [
+              "fails",
+              "retryable",
+              "do not create a local rule summary"
+            ],
+            "old_value": "",
+            "target_id": "project.summary-failure-policy",
+            "type": "remember"
+          }
+        ],
+        "latency_ms": 9394.821208,
+        "passed": true,
+        "predicted_operations": [
+          {
+            "evidence_ids": [
+              "m1-user"
+            ],
+            "new_value": "gpt-5.6-luna",
+            "old_value": "gpt-5.4-nano",
+            "target_id": "project.timeline-model",
+            "type": "update"
+          },
+          {
+            "evidence_ids": [
+              "m1-user"
+            ],
+            "new_value": "If gpt-5.6-luna fails, leave the item retryable and do not create a local rule summary.",
+            "old_value": "",
+            "target_id": "project.summary-failure-policy",
+            "type": "remember"
+          }
+        ],
+        "provenance_error_keys": [],
+        "response_chars": 380,
+        "response_sha256": "6ebe8e0659bb7bc1c41cbc9b5422d191b1c56252c19f4f19ba3817f3fc2534c8",
+        "tp": 2,
+        "value_error_keys": []
+      }
+    ],
+    "gate_verdict": {
+      "checks": {
+        "noop_accuracy": true,
+        "operation_precision": true,
+        "operation_recall": true,
+        "parse_success_rate": true,
+        "provenance_support_rate": true,
+        "target_binding_accuracy": true,
+        "value_accuracy": true
+      },
+      "passed": true
+    },
+    "id": "configured_model_memory_decision_json_v1",
+    "metrics": {
+      "by_operation_type": {
+        "forget": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        },
+        "reflect": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 1
+        },
+        "remember": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 2
+        },
+        "update": {
+          "f1": 1.0,
+          "fn": 0,
+          "fp": 0,
+          "precision": 1.0,
+          "recall": 1.0,
+          "tp": 2
+        }
+      },
+      "case_pass_rate": 1.0,
+      "failure_stage_counts": {
+        "binding_error": 0,
+        "detection_error": 0,
+        "parse_error": 0,
+        "provenance_error": 0,
+        "provider_error": 0,
+        "value_error": 0
+      },
+      "noop_accuracy": 1.0,
+      "operation_f1": 1.0,
+      "operation_fn": 0,
+      "operation_fp": 0,
+      "operation_precision": 1.0,
+      "operation_recall": 1.0,
+      "operation_tp": 6,
+      "parse_success_rate": 1.0,
+      "provenance_support_rate": 1.0,
+      "target_binding_accuracy": 1.0,
+      "value_accuracy": 1.0
+    },
+    "provider": {
+      "model": "gpt-5.6-sol",
+      "provider": "codex_cli",
+      "reasoning_effort": "none",
+      "stage": "classifier"
+    }
+  }
+}

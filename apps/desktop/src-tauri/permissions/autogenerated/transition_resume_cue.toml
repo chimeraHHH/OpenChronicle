@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-transition-resume-cue"
+description = "Enables the transition_resume_cue command without any pre-configured scope."
+commands.allow = ["transition_resume_cue"]
+
+[[permission]]
+identifier = "deny-transition-resume-cue"
+description = "Denies the transition_resume_cue command without any pre-configured scope."
+commands.deny = ["transition_resume_cue"]

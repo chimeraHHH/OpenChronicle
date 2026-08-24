@@ -1,0 +1,38 @@
+[package]
+name = "openchronicle-desktop"
+version = "0.1.0"
+description = "Trusted native review shell for OpenChronicle"
+authors = ["OpenChronicle contributors"]
+license = "MIT"
+edition = "2021"
+rust-version = "1.88"
+
+[lib]
+name = "openchronicle_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = ["isolation"] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "=2.11.5", features = ["isolation", "tray-icon"] }
+rfd = "=0.16.0"
+libc = "=0.2.189"
+sha2 = "=0.10.9"
+base64 = "=0.22.1"
+uuid = { version = "=1.24.0", features = ["v4"] }
+quick-xml = "=0.41.0"
+zip = { version = "=7.2.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+tauri-plugin-global-shortcut = "=2.3.2"
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

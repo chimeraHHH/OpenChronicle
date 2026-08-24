@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "dataset_id": "OC-Vida-Resume-Document-Extraction-v1",
+  "split": "synthetic-document-ingress-adversarial-dev-v1",
+  "cases": [
+    {"id": "pdf-single-column", "format": "pdf", "expected": {"admission": "review", "warning_codes": [], "locator": "page_bbox", "action_capability": "none"}},
+    {"id": "pdf-two-column-order-uncertain", "format": "pdf", "expected": {"admission": "review", "warning_codes": ["reading_order_requires_review"], "locator": "page_bbox", "action_capability": "none"}},
+    {"id": "pdf-unicode-rtl", "format": "pdf", "expected": {"admission": "review", "warning_codes": ["reading_order_requires_review"], "locator": "page_bbox", "action_capability": "none"}},
+    {"id": "pdf-hostile-instruction-is-data", "format": "pdf", "expected": {"admission": "review", "warning_codes": ["untrusted_document_text"], "locator": "page_bbox", "action_capability": "none"}},
+    {"id": "pdf-image-only", "format": "pdf", "expected": {"admission": "review_without_candidates", "warning_codes": ["ocr_required"], "locator": "none", "action_capability": "none"}},
+    {"id": "pdf-encrypted", "format": "pdf", "expected": {"admission": "rejected", "warning_codes": [], "locator": "none", "action_capability": "none"}},
+    {"id": "pdf-malformed", "format": "pdf", "expected": {"admission": "rejected", "warning_codes": [], "locator": "none", "action_capability": "none"}},
+    {"id": "pdf-page-limit", "format": "pdf", "expected": {"admission": "rejected", "warning_codes": [], "locator": "none", "action_capability": "none"}},
+    {"id": "source-byte-limit", "format": "pdf", "expected": {"admission": "rejected", "warning_codes": [], "locator": "none", "action_capability": "none"}},
+    {"id": "docx-paragraph-order", "format": "docx", "expected": {"admission": "review", "warning_codes": [], "locator": "part_block", "action_capability": "none"}},
+    {"id": "docx-table-order", "format": "docx", "expected": {"admission": "review", "warning_codes": [], "locator": "part_block", "action_capability": "none"}},
+    {"id": "docx-unicode-rtl", "format": "docx", "expected": {"admission": "review", "warning_codes": [], "locator": "part_block", "action_capability": "none"}},
+    {"id": "docx-hostile-instruction-is-data", "format": "docx", "expected": {"admission": "review", "warning_codes": ["untrusted_document_text"], "locator": "part_block", "action_capability": "none"}},
+    {"id": "docx-external-relationship", "format": "docx", "expected": {"admission": "review", "warning_codes": ["external_relationship_ignored"], "locator": "part_block", "action_capability": "none"}},
+    {"id": "docx-macro-or-embedded-object", "format": "docx", "expected": {"admission": "rejected", "warning_codes": [], "locator": "none", "action_capability": "none"}},
+    {"id": "docx-zip-expansion-limit", "format": "docx", "expected": {"admission": "rejected", "warning_codes": [], "locator": "none", "action_capability": "none"}},
+    {"id": "docx-malformed-xml", "format": "docx", "expected": {"admission": "rejected", "warning_codes": [], "locator": "none", "action_capability": "none"}},
+    {"id": "admission-source-tamper", "format": "pdf", "expected": {"admission": "rejected_after_review", "warning_codes": [], "locator": "page_bbox", "action_capability": "none"}},
+    {"id": "admission-review-tamper", "format": "docx", "expected": {"admission": "rejected_after_review", "warning_codes": [], "locator": "part_block", "action_capability": "none"}},
+    {"id": "admission-profile-cas-race", "format": "docx", "expected": {"admission": "rejected_after_review", "warning_codes": [], "locator": "part_block", "action_capability": "none"}}
+  ]
+}

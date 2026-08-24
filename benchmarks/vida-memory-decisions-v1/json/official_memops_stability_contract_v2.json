@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "vida-memory-decision-stability-v2",
+  "gates": {
+    "min_run_count": 3,
+    "min_run_gate_pass_rate": 1.0,
+    "min_structural_case_decision_agreement_rate": 1.0,
+    "min_evidence_case_decision_agreement_rate": 0.75,
+    "min_operation_f1": 0.9,
+    "max_operation_f1_stdev": 0.04,
+    "min_operation_recall": 0.95,
+    "min_operation_precision": 0.85,
+    "min_provenance_support_rate": 0.9,
+    "max_operation_fp": 4,
+    "max_provider_or_parse_failure_count": 0
+  }
+}

@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.12.2"
+          enable-cache: true
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --python ${{ matrix.python-version }}
+
+      - name: Run tests
+        run: uv run --python ${{ matrix.python-version }} pytest -q
+
+      - name: Run lint
+        run: uv run --python ${{ matrix.python-version }} ruff check .
+
+  desktop:
+    name: Desktop shell
+    runs-on: macos-latest
+
+    defaults:
+      run:
+        working-directory: apps/desktop
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: apps/desktop/.nvmrc
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - name: Install locked frontend dependencies
+        run: npm ci
+
+      - name: Test frontend contracts and interactions
+        run: npm test
+
+      - name: Build production frontend
+        run: npm run build
+
+      - name: Install Rust quality components
+        run: rustup component add rustfmt clippy
+        working-directory: apps/desktop/src-tauri
+
+      - name: Check Rust formatting
+        run: cargo fmt --check
+        working-directory: apps/desktop/src-tauri
+
+      - name: Test native core
+        run: cargo test --locked --all-targets
+        working-directory: apps/desktop/src-tauri
+
+      - name: Lint native core
+        run: cargo clippy --locked --all-targets -- -D warnings
+        working-directory: apps/desktop/src-tauri
+
+      - name: Check native release profile
+        run: cargo check --locked --release
+        working-directory: apps/desktop/src-tauri

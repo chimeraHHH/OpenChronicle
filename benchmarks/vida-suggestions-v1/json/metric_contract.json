@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "baseline_id": "vida-work-resumption-v1",
+  "acceptance_target": "comparison_ready",
+  "task": "work_resumption_opportunity_detection",
+  "dataset": {
+    "id": "OC-Vida-Fixtures-v1",
+    "split": "work-resumption-opportunity-v1",
+    "path": "benchmarks/vida-suggestions-v1/fixtures/opportunities.json"
+  },
+  "evaluation_path": "uv run python scripts/run_vida_suggestion_eval.py",
+  "variants": {
+    "reactive": "The production detector/kernel is evaluated only after an explicit user invocation flag.",
+    "heuristic": "The production deterministic gap assessor is evaluated without policy, budget, cooldown, or persistence gates.",
+    "kernel": "The production WorkResumptionService and SuggestionKernel run against isolated real SQLite/provenance/capture roots."
+  },
+  "primary_metric": "opportunity_precision",
+  "metrics": {
+    "opportunity_precision": {"direction": "higher", "required": true},
+    "opportunity_recall": {"direction": "report_only", "required": true},
+    "evidence_coverage": {"direction": "higher", "required": true},
+    "unsupported_claim_rate": {"direction": "lower", "required": true},
+    "semantic_duplicate_count": {"direction": "lower", "required": true},
+    "invalid_interruptions_per_user_day": {"direction": "lower", "required": true},
+    "decision_latency_p95_ms": {"direction": "lower", "required": true}
+  },
+  "stage2_gates": {
+    "opportunity_precision": 0.85,
+    "evidence_coverage": 1.0,
+    "unsupported_claim_rate": 0.0,
+    "semantic_duplicate_count": 0,
+    "invalid_interruptions_per_user_day_max": 1.0,
+    "decision_latency_p95_ms_max": 250.0
+  },
+  "source": {
+    "repository": "https://github.com/Einsia/OpenChronicle",
+    "implementation_identity": "The evaluator records the exact local commit and dirty-state flag in every result."
+  },
+  "known_deviations": [
+    "This v1 split is a deterministic engineering fixture set, not a human-rated field corpus.",
+    "The full kernel currently uses a fixed detector score and has no learned ranker.",
+    "Latency is host-specific and measures the decision call after fixture setup, not end-to-end daemon notification latency.",
+    "Formal artifact.confirm_baseline registration is unavailable in the current Codex tool session; local reports must not be promoted as an accepted baseline while dirty or unregistered."
+  ]
+}

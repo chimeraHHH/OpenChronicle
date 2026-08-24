@@ -3,32 +3,57 @@ from __future__ import annotations
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-
-import pytest
+from zoneinfo import ZoneInfo
 
 from openchronicle import config as config_mod
-from openchronicle import paths
+from openchronicle.provenance import store as provenance_store
+from openchronicle.provenance.models import EvidenceRef, content_digest
 from openchronicle.session import store as session_store
 from openchronicle.session import tick as session_tick
+from openchronicle.store import entries as entries_store
+from openchronicle.store import files as files_store
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
 from openchronicle.writer import session_reducer
-
 
 _TZ = timezone(timedelta(hours=8))
 
 
 def _seed_block(start: datetime) -> None:
     with fts.cursor() as conn:
-        timeline_store.insert(
+        block = timeline_store.TimelineBlock(
+            start_time=start,
+            end_time=start + timedelta(minutes=5),
+            entries=["[Cursor] editing, involving —"],
+            apps_used=["Cursor"],
+            capture_count=1,
+        )
+        timeline_store.insert(conn, block)
+        source_body = "Manual session tick fixture source."
+        entries_store.create_file(
             conn,
-            timeline_store.TimelineBlock(
-                start_time=start,
-                end_time=start + timedelta(minutes=5),
-                entries=["[Cursor] editing, involving —"],
-                apps_used=["Cursor"],
-                capture_count=1,
-            ),
+            name="user-session-tick-source.md",
+            description="test source",
+            tags=["test"],
+        )
+        source_id = entries_store.append_entry(
+            conn,
+            name="user-session-tick-source.md",
+            content=source_body,
+            tags=["manual"],
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+        )
+        provenance_store.replace_sources(
+            conn,
+            subject=EvidenceRef(kind="timeline_block", id=block.id),
+            sources=[
+                EvidenceRef(
+                    kind="memory_entry",
+                    id=source_id,
+                    path="user-session-tick-source.md",
+                    content_hash=content_digest(source_body),
+                )
+            ],
         )
 
 
@@ -37,6 +62,38 @@ def test_seconds_until_next_local_rolls_past_midnight() -> None:
     # assert properties: result must be in [0, 86400).
     s = session_tick._seconds_until_next_local(23, 55)
     assert 0 < s <= 86400
+
+
+def test_seconds_until_next_local_uses_absolute_time_across_dst_gap() -> None:
+    zone = ZoneInfo("America/New_York")
+    now = datetime(2026, 3, 8, 1, 30, tzinfo=zone)
+
+    assert session_tick._seconds_until_next_local(2, 30, now=now) == 3600
+
+
+def test_seconds_until_next_local_does_not_repeat_fallback_day() -> None:
+    zone = ZoneInfo("America/New_York")
+    now = datetime(2026, 11, 1, 1, 45, tzinfo=zone, fold=0)
+
+    # Today's first 01:30 has passed. The second folded 01:30 is not treated
+    # as another daily occurrence; schedule tomorrow's local 01:30 instead.
+    assert session_tick._seconds_until_next_local(1, 30, now=now) == 24.75 * 3600
+
+
+def test_recovery_elapsed_addition_preserves_dst_instants() -> None:
+    zone = ZoneInfo("America/New_York")
+    fallback = datetime(2026, 11, 1, 1, 30, tzinfo=zone, fold=0)
+    spring = datetime(2026, 3, 8, 1, 30, tzinfo=zone)
+
+    fallback_plus_hour = session_tick._add_elapsed(fallback, timedelta(hours=1))
+    spring_plus_hour = session_tick._add_elapsed(spring, timedelta(hours=1))
+
+    assert (fallback_plus_hour.hour, fallback_plus_hour.minute, fallback_plus_hour.fold) == (
+        1,
+        30,
+        1,
+    )
+    assert (spring_plus_hour.hour, spring_plus_hour.minute) == (3, 30)
 
 
 def test_reduce_all_pending_catches_ended_row(ac_root: Path, monkeypatch) -> None:
@@ -102,6 +159,7 @@ def test_build_manager_wires_reducer_end_to_end(ac_root: Path, monkeypatch) -> N
     manager.force_end(reason="test")
     # Give the reducer thread a moment to finish.
     import time
+
     for _ in range(40):
         with fts.cursor() as conn:
             row = session_store.get_by_id(conn, sid)

@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "dataset_id": "OC-Vida-Fixtures-v1",
+  "split": "work-resumption-opportunity-v1",
+  "reference_now": "2026-08-09T06:00:00+00:00",
+  "cases": [
+    {
+      "id": "positive-explicit-clean-return",
+      "simulated_user_day": "day-01",
+      "expected_help": true,
+      "explicit_invocation": true,
+      "gates": [],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Implemented the bridge contract"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Reopened the bridge tests"], "apps": ["Editor"]}
+    },
+    {
+      "id": "positive-proactive-clean-return",
+      "simulated_user_day": "day-02",
+      "expected_help": true,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 45, "end_minutes_ago": 35, "entries": ["Drafted the evaluation contract"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 4, "end_minutes_ago": 1, "entries": ["Returned to the evaluation contract"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-short-gap",
+      "simulated_user_day": "day-03",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 15, "end_minutes_ago": 10, "entries": ["Editing continuously"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Still editing"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-stale-return",
+      "simulated_user_day": "day-04",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 60, "end_minutes_ago": 50, "entries": ["Old work state"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 20, "end_minutes_ago": 15, "entries": ["Return is already stale"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-insufficient-context",
+      "simulated_user_day": "day-05",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Only one verified block"], "apps": ["Editor"]},
+      "current": null
+    },
+    {
+      "id": "negative-quiet-hours",
+      "simulated_user_day": "day-06",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": ["quiet_hours"],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Late work"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Quiet-hours return"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-policy-changed",
+      "simulated_user_day": "day-07",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": ["policy_excluded"],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Previously allowed evidence"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Now excluded evidence"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-budget-exhausted",
+      "simulated_user_day": "day-08",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": ["budget_exhausted"],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Another opportunity"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Budget should suppress this"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-semantic-duplicate",
+      "simulated_user_day": "day-09",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": ["prior_identical"],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Already suggested state"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Already suggested return"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-suggestions-disabled",
+      "simulated_user_day": "day-10",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": ["suggestions_disabled"],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Opt-out evidence"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Opt-out must win"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-below-score-threshold",
+      "simulated_user_day": "day-11",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": ["below_threshold"],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Low-confidence state"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Low-confidence return"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-ambiguous-empty-context",
+      "simulated_user_day": "day-12",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": [], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": [], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-already-resolved",
+      "simulated_user_day": "day-13",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Finished and submitted the report"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Opened an unrelated note"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-active-conversation",
+      "simulated_user_day": "day-14",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Conversation paused"], "apps": ["Messages"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["Actively replying now"], "apps": ["Messages"]}
+    },
+    {
+      "id": "negative-future-clock-sample",
+      "simulated_user_day": "day-15",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 40, "end_minutes_ago": 35, "entries": ["Clock fixture"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 1, "end_minutes_ago": -1, "entries": ["Future sample"], "apps": ["Editor"]}
+    },
+    {
+      "id": "negative-gap-over-maximum",
+      "simulated_user_day": "day-16",
+      "expected_help": false,
+      "explicit_invocation": false,
+      "gates": [],
+      "previous": {"start_minutes_ago": 900, "end_minutes_ago": 895, "entries": ["Very old state"], "apps": ["Editor"]},
+      "current": {"start_minutes_ago": 5, "end_minutes_ago": 1, "entries": ["New day context"], "apps": ["Editor"]}
+    }
+  ]
+}

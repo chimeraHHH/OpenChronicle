@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "vida-procedure-adoption-v1",
+  "dataset": {
+    "id": "OC-Vida-Procedure-Adoption-v1",
+    "split": "frozen-native-development"
+  },
+  "primary_metric": "qualification_f1",
+  "gates": {
+    "parse_success_rate_min": 1.0,
+    "qualification_precision_min": 0.9,
+    "qualification_recall_min": 0.8,
+    "negative_accuracy_min": 0.9,
+    "procedure_type_accuracy_min": 0.8,
+    "anchor_support_rate_min": 0.9,
+    "action_boundary_rate_min": 1.0
+  }
+}

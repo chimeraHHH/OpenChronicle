@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-queue-reply-rescue"
+description = "Enables the queue_reply_rescue command without any pre-configured scope."
+commands.allow = ["queue_reply_rescue"]
+
+[[permission]]
+identifier = "deny-queue-reply-rescue"
+description = "Denies the queue_reply_rescue command without any pre-configured scope."
+commands.deny = ["queue_reply_rescue"]

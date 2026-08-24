@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "baseline_id": "vida-memory-decisions-official-memops-smoke-v1",
+  "acceptance_target": "official-memops-adapter-smoke-ready",
+  "dataset": {
+    "id": "MemOps-Official-Adjacent-Smoke-v1",
+    "split": "official-adjacent-fixed-4",
+    "path": "benchmarks/vida-memory-decisions-v1/json/official_memops_manifest.json"
+  },
+  "evaluation_path": "uv run python scripts/run_vida_memory_decisions.py --memops-root /path/to/MemOps",
+  "primary_metric": "operation_f1",
+  "gates": {
+    "parse_success_rate_min": 1.0,
+    "operation_precision_min": 0.7,
+    "operation_recall_min": 0.7,
+    "target_binding_accuracy_min": 0.8,
+    "value_accuracy_min": 0.0,
+    "provenance_support_rate_min": 0.7,
+    "noop_accuracy_min": 1.0
+  },
+  "known_deviations": [
+    "This fixed four-file adjacent smoke is not the full official MemOps evaluation pipeline or leaderboard score.",
+    "The upstream files remain external and must match the pinned commit and SHA-256 manifest.",
+    "Official generated new values use exact full-string anchors, so value accuracy is diagnostic and not gated in this smoke.",
+    "No-operation accuracy is vacuously one because the selected official files contain confirmed operations."
+  ]
+}

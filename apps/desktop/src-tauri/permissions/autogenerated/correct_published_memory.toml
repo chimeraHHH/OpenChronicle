@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-correct-published-memory"
+description = "Enables the correct_published_memory command without any pre-configured scope."
+commands.allow = ["correct_published_memory"]
+
+[[permission]]
+identifier = "deny-correct-published-memory"
+description = "Denies the correct_published_memory command without any pre-configured scope."
+commands.deny = ["correct_published_memory"]

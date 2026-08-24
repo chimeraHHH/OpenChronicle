@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-approve-candidate"
+description = "Enables the approve_candidate command without any pre-configured scope."
+commands.allow = ["approve_candidate"]
+
+[[permission]]
+identifier = "deny-approve-candidate"
+description = "Denies the approve_candidate command without any pre-configured scope."
+commands.deny = ["approve_candidate"]

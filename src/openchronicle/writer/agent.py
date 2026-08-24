@@ -14,8 +14,7 @@ from dataclasses import dataclass, field
 
 from ..config import Config
 from ..logger import get
-from . import classifier as classifier_mod
-from . import session_reducer
+from . import classifier_delivery, session_reducer
 
 logger = get("openchronicle.writer")
 
@@ -25,11 +24,12 @@ class WriterRunResult:
     reduced: int = 0
     classified: int = 0
     written_ids: list[str] = field(default_factory=list)
+    candidate_ids: list[str] = field(default_factory=list)
     summaries: list[str] = field(default_factory=list)
 
 
 def run(cfg: Config) -> WriterRunResult:
-    """Reduce pending sessions, then classify each fresh event-daily entry."""
+    """Reduce pending sessions, then drain durable classifier deliveries."""
     result = WriterRunResult()
     if not cfg.reducer.enabled:
         logger.info("writer run: reducer disabled, nothing to do")
@@ -40,25 +40,19 @@ def run(cfg: Config) -> WriterRunResult:
         if not rr.succeeded:
             continue
         result.reduced += 1
-        if not (rr.written and rr.entry_id and rr.path and rr.is_final):
+
+    for delivery in classifier_delivery.run_recovery_pass(cfg):
+        if delivery.status != "succeeded":
             continue
-        try:
-            cr = classifier_mod.classify_after_reduce(
-                cfg,
-                session_id=rr.session_id,
-                event_daily_path=rr.path,
-                just_written_entry_id=rr.entry_id,
-                session_start=rr.start_time,
-                session_end=rr.end_time,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "classifier %s crashed: %s", rr.session_id, exc, exc_info=True
-            )
-            continue
-        if cr.committed:
-            result.classified += 1
-            result.written_ids.extend(cr.written_ids)
-            if cr.summary:
-                result.summaries.append(cr.summary)
+        payload = delivery.result or {}
+        result.classified += 1
+        written_ids = payload.get("written_ids", [])
+        candidate_ids = payload.get("candidate_ids", [])
+        if isinstance(written_ids, list):
+            result.written_ids.extend(str(value) for value in written_ids)
+        if isinstance(candidate_ids, list):
+            result.candidate_ids.extend(str(value) for value in candidate_ids)
+        summary = payload.get("summary")
+        if isinstance(summary, str) and summary:
+            result.summaries.append(summary)
     return result

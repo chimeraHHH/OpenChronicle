@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import shutil
-import signal
 import subprocess
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import typer
 from rich.console import Console
@@ -18,7 +19,13 @@ from rich.table import Table
 from . import __version__, paths
 from . import config as config_mod
 from . import logger as logger_mod
+from .capture import filenames as capture_filenames
+from .capture import reconcile as capture_reconcile
+from .capture import store_lock as capture_store
+from .memory_candidates import store as candidate_store
+from .privacy.egress import privacy_egress_fenced, privacy_egress_lock
 from .store import entries as entries_mod
+from .store import files as files_mod
 from .store import fts, index_md
 
 app = typer.Typer(
@@ -39,9 +46,11 @@ def _init() -> config_mod.Config:
 
 
 def _is_pid_alive(pid: int) -> bool:
+    if pid <= 1:
+        return False
     try:
         os.kill(pid, 0)
-    except ProcessLookupError:
+    except (ProcessLookupError, OverflowError):
         return False
     except PermissionError:
         return True
@@ -51,9 +60,43 @@ def _is_pid_alive(pid: int) -> bool:
 def _read_pid() -> int | None:
     try:
         pid = int(paths.pid_file().read_text().strip())
-    except (FileNotFoundError, ValueError):
+    except (OSError, ValueError):
+        return None
+    # A PID alone is unsafe after SIGKILL because the OS can reuse it for an
+    # unrelated process. Bind the public PID file to the PID recorded by the
+    # process that currently holds OpenChronicle's lifetime lease. Malformed,
+    # dangerous (process-group/init), stale, or mismatched values fail closed.
+    if pid <= 1:
+        return None
+    lock_pid = _held_daemon_lock_pid()
+    if lock_pid != pid:
         return None
     return pid if _is_pid_alive(pid) else None
+
+
+def _held_daemon_lock_pid() -> int | None:
+    """Return the valid PID recorded in a currently-held daemon lease."""
+    try:
+        fd = os.open(paths.daemon_lock_file(), os.O_RDWR)
+    except OSError:
+        return None
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            try:
+                os.lseek(fd, 0, os.SEEK_SET)
+                lock_pid = int(os.read(fd, 64).decode("ascii").strip())
+            except (OSError, UnicodeDecodeError, ValueError):
+                return None
+            return lock_pid if lock_pid > 1 else None
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return None
+    except OSError:
+        # Stop must never send a signal when lease ownership is ambiguous.
+        return None
+    finally:
+        os.close(fd)
 
 
 def _daemon_uptime() -> str:
@@ -81,7 +124,9 @@ def _daemon_uptime() -> str:
         return "unknown"
 
 
-def _last_capture_info() -> tuple[str | None, str | None]:
+def _last_capture_info(
+    cfg: config_mod.Config | None = None,
+) -> tuple[str | None, str | None]:
     """Return ``(timestamp, app_name)`` of the most recent capture buffer file.
 
     Returns ``(None, None)`` when the buffer directory is empty or missing.
@@ -89,17 +134,51 @@ def _last_capture_info() -> tuple[str | None, str | None]:
     buf = paths.capture_buffer_dir()
     if not buf.exists():
         return None, None
-    json_files = sorted(p for p in buf.iterdir() if p.suffix == ".json")
+    json_files = [p for p in buf.iterdir() if p.suffix == ".json"]
     if not json_files:
         return None, None
-    try:
-        data = json.loads(json_files[-1].read_bytes())
+    from .privacy import policy as privacy_policy
+
+    cfg = cfg or config_mod.Config()
+    remaining = list(json_files)
+    while remaining:
+        latest = _latest_capture_path(remaining)
+        remaining.remove(latest)
+        if latest.is_symlink() or not latest.is_file():
+            continue
+        try:
+            data = json.loads(latest.read_bytes())
+        except (OSError, ValueError):
+            continue
+        if (
+            not isinstance(data, dict)
+            or not privacy_policy.evaluate_stored_observation(cfg.capture, observation=data).allowed
+        ):
+            continue
+        meta = data.get("window_meta")
+        if not isinstance(meta, dict):
+            continue
         ts = data.get("timestamp")
-        meta = data.get("window_meta") or {}
         app = meta.get("app_name")
-        return ts, app
-    except (OSError, ValueError):
-        return json_files[-1].stem, None
+        return (
+            ts if isinstance(ts, str) else None,
+            app if isinstance(app, str) else None,
+        )
+    return None, None
+
+
+def _latest_capture_path(files: list[Path]) -> Path:
+    """Return the newest valid capture by absolute time, with a legacy fallback."""
+    from .capture import filenames
+
+    parsed = [
+        (timestamp.timestamp(), path)
+        for path in files
+        if (timestamp := filenames.parse_capture_stem(path.stem)) is not None
+    ]
+    if parsed:
+        return max(parsed, key=lambda item: item[0])[1]
+    return max(files)
 
 
 def _health_status(pid: int | None, last_ts: str | None) -> tuple[str, str]:
@@ -123,10 +202,15 @@ def _health_status(pid: int | None, last_ts: str | None) -> tuple[str, str]:
 
 # ─── commands ─────────────────────────────────────────────────────────────
 
+
 @app.command()
 def start(
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in this terminal."),
-    capture_only: bool = typer.Option(False, "--capture-only", help="Skip the writer loop."),
+    capture_only: bool = typer.Option(
+        False,
+        "--capture-only",
+        help="Capture/session bookkeeping only; disable model processing and MCP.",
+    ),
 ) -> None:
     """Start the OpenChronicle daemon."""
     cfg = _init()
@@ -165,12 +249,14 @@ def start(
 def stop() -> None:
     """Stop the daemon."""
     _init()
-    pid = _read_pid()
-    if not pid:
-        console.print("[yellow]Daemon not running.[/yellow]")
-        raise typer.Exit(1)
-    os.kill(pid, signal.SIGTERM)
-    console.print(f"[green]Sent SIGTERM to pid {pid}.[/green]")
+    from . import daemon
+
+    try:
+        daemon.request_stop()
+    except daemon.DaemonControlError as exc:
+        console.print(f"[yellow]Daemon stop refused: {exc}[/yellow]")
+        raise typer.Exit(1) from None
+    console.print("[green]Authenticated daemon stop request accepted.[/green]")
 
 
 @app.command()
@@ -193,81 +279,116 @@ def resume() -> None:
 def status() -> None:
     """Show daemon status + memory stats."""
     cfg = _init()
-    pid = _read_pid()
-    paused = paths.paused_flag().exists()
+    stages = ("timeline", "reducer", "classifier", "daily_wrap", "compact")
+    # Provider probes are diagnostic network I/O.  They must finish before the
+    # short capture-store fence below so a slow or hung provider cannot pause
+    # ordinary capture persistence.
+    ping_results = _ping_stages(cfg, stages)
+    from .services.snapshot import build_snapshot
 
-    uptime = _daemon_uptime()
-    last_ts, last_app = _last_capture_info()
-    health_label, health_style = _health_status(pid, last_ts)
+    # Rebuild, authorize, and serialize one final canonical status response
+    # under the cleanup fence.  This section is local-only and intentionally
+    # contains no provider calls.
+    with privacy_egress_lock():
+        pid = _read_pid()
+        paused = paths.paused_flag().exists()
+        uptime = _daemon_uptime()
+        with fts.cursor() as conn:
+            visible = build_snapshot(
+                conn,
+                cfg,
+                timeline_limit=0,
+                candidate_limit=0,
+                wrap_limit=1,
+            )
+        capture_snapshot = visible["capture"]
+        last_capture = capture_snapshot.get("last")
+        last_ts = str(last_capture.get("timestamp") or "") if last_capture else None
+        last_app = str(last_capture.get("app_name") or "") if last_capture else None
+        health_label, health_style = _health_status(pid, last_ts)
 
-    table = Table(show_header=False, box=None, padding=(0, 2))
-    table.add_row("Version", __version__)
-    table.add_row("Root", str(paths.root()))
-    table.add_row("Daemon", f"[green]running pid {pid}[/green]" if pid else "[red]stopped[/red]")
-    table.add_row("Uptime", uptime)
-    table.add_row("Health", f"[{health_style}]{health_label}[/{health_style}]")
-    table.add_row("Capture", "[yellow]paused[/yellow]" if paused else "active")
+        table = Table(show_header=False, box=None, padding=(0, 2))
+        table.add_row("Version", __version__)
+        table.add_row("Root", str(paths.root()))
+        table.add_row(
+            "Daemon",
+            f"[green]running pid {pid}[/green]" if pid else "[red]stopped[/red]",
+        )
+        table.add_row("Uptime", uptime)
+        table.add_row("Health", f"[{health_style}]{health_label}[/{health_style}]")
+        table.add_row("Capture", "[yellow]paused[/yellow]" if paused else "active")
 
-    if last_ts:
-        try:
-            last_dt = datetime.fromisoformat(last_ts)
-            age = (datetime.now(last_dt.tzinfo) - last_dt).total_seconds()
-            if age < 60:
-                ago = "just now"
-            elif age < 3600:
-                ago = f"{int(age // 60)}m ago"
-            else:
-                ago = f"{int(age // 3600)}h ago"
-            table.add_row("Last Capture", f"{ago} ({last_app})" if last_app else ago)
-        except (ValueError, TypeError):
-            table.add_row("Last Capture", last_ts)
-    else:
-        table.add_row("Last Capture", "(none)")
+        if last_ts:
+            try:
+                last_dt = datetime.fromisoformat(last_ts)
+                age = (datetime.now(last_dt.tzinfo) - last_dt).total_seconds()
+                if age < 60:
+                    ago = "just now"
+                elif age < 3600:
+                    ago = f"{int(age // 60)}m ago"
+                else:
+                    ago = f"{int(age // 3600)}h ago"
+                table.add_row("Last Capture", f"{ago} ({last_app})" if last_app else ago)
+            except (ValueError, TypeError):
+                table.add_row("Last Capture", last_ts)
+        else:
+            table.add_row("Last Capture", "(none)")
 
-    buf = paths.capture_buffer_dir()
-    if buf.exists():
-        bufs = sorted(p for p in buf.iterdir() if p.suffix == ".json")
-        last = bufs[-1].name if bufs else "(none)"
-        table.add_row("Buffer", f"{len(bufs)} files, last: {last}")
-
-    with fts.cursor() as conn:
-        sess_row = conn.execute(
-            "SELECT COUNT(*), SUM(status='reduced'), SUM(status='ended'), SUM(status='failed')"
-            " FROM sessions"
-        ).fetchone()
-        if sess_row and sess_row[0]:
-            total, reduced, ended, failed = sess_row
+        table.add_row(
+            "Buffer",
+            f"{int(capture_snapshot.get('indexed_count') or 0)} policy-visible capture(s)",
+        )
+        counts = visible["counts"]
+        sessions = counts["sessions"]
+        if sessions["total"]:
             table.add_row(
                 "Sessions",
-                f"{total} total ({reduced or 0} reduced, {ended or 0} ended, "
-                f"{failed or 0} failed)",
+                f"{sessions['total']} policy-visible "
+                f"({sessions['reduced']} reduced, {sessions['ended']} ended, "
+                f"{sessions['failed']} failed)",
             )
         else:
-            table.add_row("Sessions", "(none)")
-        active = fts.list_files(conn, include_dormant=False)
-        dormant = [
-            f for f in fts.list_files(conn, include_dormant=True) if f.status == "dormant"
-        ]
-        total_entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+            table.add_row("Sessions", "(none policy-visible)")
+        table.add_row("Classifier Delivery", "policy-filtered; use memory candidates")
+        memory = counts["memory"]
         table.add_row(
             "Memory",
-            f"{len(active)} active files, {len(dormant)} dormant, {total_entries} entries",
+            f"{memory['active_files']} active files, {memory['dormant_files']} dormant, "
+            f"{memory['entries']} policy-visible entries",
         )
-        tlb_row = conn.execute(
-            "SELECT COUNT(*), MAX(end_time) FROM timeline_blocks"
-        ).fetchone()
-        tlb_count = tlb_row[0] if tlb_row else 0
-        tlb_last = tlb_row[1] if tlb_row and tlb_row[1] else "(none)"
-        table.add_row("Timeline", f"{tlb_count} blocks, last end: {tlb_last}")
+        if cfg.search.semantic_enabled:
+            table.add_row(
+                "Memory Search",
+                f"hybrid_rrf — {cfg.search.embedding_backend}:{cfg.search.embedding_model}",
+            )
+        else:
+            table.add_row("Memory Search", "bm25")
+        table.add_row("Timeline", f"{counts['timeline_blocks']} policy-visible blocks")
+        review = counts["candidates"]
+        review_total = sum(int(value) for value in review.values())
+        table.add_row(
+            "Review Inbox",
+            f"{review_total} policy-visible "
+            f"({review.get('pending', 0)} pending, "
+            f"{review.get('conflict', 0)} conflict)",
+        )
+        wraps = visible["daily_wrap"]["wraps"]
+        if wraps:
+            wrap = wraps[0]
+            table.add_row(
+                "Daily Wrap",
+                f"{wrap['local_date']} {wrap['timezone']} — "
+                f"{wrap['status']}/{wrap['coverage_status']} r{wrap['revision']}",
+            )
+        else:
+            table.add_row("Daily Wrap", "(none policy-visible)")
 
-    stages = ("timeline", "reducer", "classifier", "compact")
-    ping_results = _ping_stages(cfg, stages)
-    for stage in stages:
-        m = cfg.model_for(stage)
-        ping = _format_ping(ping_results.get(stage))
-        table.add_row(f"Model ({stage})", f"{m.model}   {ping}")
+        for stage in stages:
+            m = cfg.model_for(stage)
+            ping = _format_ping(ping_results.get(stage))
+            table.add_row(f"Model ({stage})", f"{m.provider}:{m.model}   {ping}")
 
-    console.print(table)
+        console.print(table)
 
 
 def _ping_stages(cfg: config_mod.Config, stages: tuple[str, ...]) -> dict:
@@ -282,12 +403,18 @@ def _ping_stages(cfg: config_mod.Config, stages: tuple[str, ...]) -> dict:
 
     from .writer.llm import PingResult, ping_stage
 
-    # Dedup by (model, base_url, resolved api key) — common case is one model
-    # for all four stages, which should hit the network once.
-    dedup: dict[tuple[str, str, str], list[str]] = {}
+    # Dedup identical provider configurations so the common single-model case
+    # performs one probe, while a Codex CLI model never aliases a LiteLLM one.
+    dedup: dict[tuple[str, str, str, str, str], list[str]] = {}
     for stage in stages:
         m = cfg.model_for(stage)
-        key = (m.model, m.base_url, config_mod.resolve_api_key(m) or "")
+        key = (
+            m.provider,
+            m.model,
+            m.reasoning_effort,
+            m.base_url,
+            config_mod.resolve_api_key(m) or "",
+        )
         dedup.setdefault(key, []).append(stage)
 
     results: dict = {}
@@ -295,8 +422,7 @@ def _ping_stages(cfg: config_mod.Config, stages: tuple[str, ...]) -> dict:
         return results
     with ThreadPoolExecutor(max_workers=min(4, len(dedup))) as pool:
         future_to_stages = {
-            pool.submit(ping_stage, cfg, members[0]): members
-            for members in dedup.values()
+            pool.submit(ping_stage, cfg, members[0]): members for members in dedup.values()
         }
         for future, members in future_to_stages.items():
             try:
@@ -306,8 +432,11 @@ def _ping_stages(cfg: config_mod.Config, stages: tuple[str, ...]) -> dict:
                 for stage in members:
                     m = cfg.model_for(stage)
                     results[stage] = PingResult(
-                        stage=stage, model=m.model, ok=False,
-                        latency_ms=None, error=err_label,
+                        stage=stage,
+                        model=m.model,
+                        ok=False,
+                        latency_ms=None,
+                        error=err_label,
                     )
                 continue
             for stage in members:
@@ -382,15 +511,22 @@ def install_claude_code(
 
     remove = subprocess.run(
         [claude_bin, "mcp", "remove", "-s", scope, name],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     replaced = remove.returncode == 0
 
     cmd = [
-        claude_bin, "mcp", "add",
-        "-s", scope,
-        "--transport", transport_flag,
-        name, url,
+        claude_bin,
+        "mcp",
+        "add",
+        "-s",
+        scope,
+        "--transport",
+        transport_flag,
+        name,
+        url,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
@@ -406,13 +542,7 @@ def install_claude_code(
 
 
 def _claude_desktop_config_path() -> Path:
-    return (
-        Path.home()
-        / "Library"
-        / "Application Support"
-        / "Claude"
-        / "claude_desktop_config.json"
-    )
+    return Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
 
 
 def _load_claude_desktop_config(path: Path) -> dict:
@@ -527,7 +657,9 @@ def install_codex(
 
     remove = subprocess.run(
         [codex_bin, "mcp", "remove", name],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     replaced = remove.returncode == 0
 
@@ -637,7 +769,8 @@ def install_mcp_json(
     name: str = typer.Option("openchronicle", help="MCP server name written into the config."),
     filename: str = typer.Option("mcp.json", help="Output filename (written to CWD)."),
     http: bool = typer.Option(
-        False, "--http",
+        False,
+        "--http",
         help="Emit a URL-based entry using the configured HTTP endpoint instead of stdio.",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite if the file exists."),
@@ -652,9 +785,7 @@ def install_mcp_json(
     cfg = _init()
     out_path = Path.cwd() / filename
     if out_path.exists() and not force:
-        console.print(
-            f"[red]{out_path} already exists.[/red] Use --force to overwrite."
-        )
+        console.print(f"[red]{out_path} already exists.[/red] Use --force to overwrite.")
         raise typer.Exit(1)
 
     if http:
@@ -706,7 +837,9 @@ def uninstall_claude_code(
 
     result = subprocess.run(
         [claude_bin, "mcp", "remove", "-s", scope, name],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode == 0:
         console.print(f"[green]Removed {name!r} from Claude Code ({scope} scope).[/green]")
@@ -714,9 +847,7 @@ def uninstall_claude_code(
 
     combined = (result.stderr + result.stdout).lower()
     if "no mcp server" in combined or "not found" in combined:
-        console.print(
-            f"[yellow]No {name!r} entry at {scope} scope — nothing to remove.[/yellow]"
-        )
+        console.print(f"[yellow]No {name!r} entry at {scope} scope — nothing to remove.[/yellow]")
         return
 
     console.print(f"[red]claude mcp remove failed:[/red]\n{result.stderr or result.stdout}")
@@ -741,7 +872,9 @@ def uninstall_codex(
 
     result = subprocess.run(
         [codex_bin, "mcp", "remove", name],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode == 0:
         console.print(f"[green]Removed {name!r} from Codex CLI.[/green]")
@@ -767,17 +900,13 @@ def uninstall_opencode(
     """
     cfg_path = _opencode_config_path()
     if not cfg_path.exists():
-        console.print(
-            f"[yellow]No opencode config at {cfg_path} — nothing to remove.[/yellow]"
-        )
+        console.print(f"[yellow]No opencode config at {cfg_path} — nothing to remove.[/yellow]")
         return
 
     data = _load_opencode_config(cfg_path)
     servers = data.get("mcp")
     if not isinstance(servers, dict) or name not in servers:
-        console.print(
-            f"[yellow]No {name!r} entry in opencode config — nothing to remove.[/yellow]"
-        )
+        console.print(f"[yellow]No {name!r} entry in opencode config — nothing to remove.[/yellow]")
         return
 
     del servers[name]
@@ -805,7 +934,9 @@ def uninstall_claude_desktop(
     data = _load_claude_desktop_config(cfg_path)
     servers = data.get("mcpServers")
     if not isinstance(servers, dict) or name not in servers:
-        console.print(f"[yellow]No {name!r} entry in Claude Desktop config — nothing to remove.[/yellow]")
+        console.print(
+            f"[yellow]No {name!r} entry in Claude Desktop config — nothing to remove.[/yellow]"
+        )
         return
 
     del servers[name]
@@ -830,15 +961,28 @@ def timeline_tick_cmd() -> None:
 
 
 @timeline_app.command("list")
+@privacy_egress_fenced
 def timeline_list(
     limit: int = typer.Option(12, "--limit", "-n", help="How many recent blocks to show."),
 ) -> None:
     """Show the most recent timeline blocks (oldest → newest)."""
-    _init()
+    cfg = _init()
+    from .provenance.models import EvidenceRef
+    from .services.context import ContextService
     from .timeline import store as tls
 
+    requested = max(limit, 0)
     with fts.cursor() as conn:
-        blocks = tls.query_recent(conn, limit=limit)
+        context = ContextService(conn, cfg)
+        blocks = (
+            [
+                block
+                for block in tls.query_recent(conn, limit=1_000)
+                if context.evidence_allowed(EvidenceRef(kind="timeline_block", id=block.id))
+            ][-requested:]
+            if requested
+            else []
+        )
     if not blocks:
         console.print("[yellow]No timeline blocks yet.[/yellow]")
         return
@@ -863,14 +1007,508 @@ def writer_run() -> None:
     cfg = _init()
     from .writer import agent
 
-    result = agent.run(cfg)
+    agent.run(cfg)
+    # Crash-recovered classifier receipts can predate the current privacy
+    # policy.  Do not echo model-controlled summaries, artifact IDs, or raw
+    # counts here; the policy-aware review/list commands expose what remains
+    # visible after catch-up.
+    console.print("[green]Writer catch-up completed.[/green]")
+
+
+memory_app = typer.Typer(help="Review and manage proposed durable memories.")
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("explain-recall")
+@privacy_egress_fenced
+def memory_explain_recall(
+    query: str = typer.Argument(..., help="Transient local recall query."),
+    top_k: int = typer.Option(5, "--top-k", "-k", min=1, max=20),
+    json_output: bool = typer.Option(False, "--json", help="Emit deterministic JSON."),
+) -> None:
+    """Explain local durable-memory ranking without returning memory content."""
+    cfg = _init()
+    from .services.memory_recall_explain import explain_memory_recall
+
+    with fts.cursor() as conn:
+        report = explain_memory_recall(conn, cfg, query=query, top_k=top_k)
+    if json_output:
+        typer.echo(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return
+    if error := report.get("error"):
+        console.print(f"[yellow]{error}[/yellow]")
+        return
+    table = Table("Rank", "Memory", "BM25", "Vector", "Similarity", "RRF")
+    for row in report["results"]:
+        table.add_row(
+            str(row["position"]),
+            f"{row['path']}#{row['id']}",
+            str(row["bm25_rank"] or "—"),
+            str(row["vector_rank"] or "—"),
+            "—" if row["vector_similarity"] is None else f"{row['vector_similarity']:.4f}",
+            "—" if row["rrf_score"] is None else f"{row['rrf_score']:.6f}",
+        )
+    console.print(table)
     console.print(
-        f"[bold]reduced={result.reduced} "
-        f"classified={result.classified} "
-        f"written={len(result.written_ids)}[/bold]"
+        f"Mode: {report['retrieval_mode']}; candidates inspected: "
+        f"{report['candidate_count']}; returned: {report['returned_count']}."
     )
-    for s in result.summaries:
-        console.print(f"  - {s}")
+
+
+@memory_app.command("adoptions")
+@privacy_egress_fenced
+def memory_adoptions(
+    limit: int = typer.Option(50, "--limit", "-n", min=1, max=1_000),
+) -> None:
+    """List exact Prompt/Reply Rescue outputs the user marked as used."""
+    _init()
+    from .artifact_adoptions import store as adoption_store
+
+    with fts.cursor() as conn:
+        adoptions = adoption_store.list_recent(conn, limit=limit)
+    table = Table("ID", "Artifact", "Source", "Version", "Edited", "Adopted")
+    for adoption in adoptions:
+        table.add_row(
+            adoption.id,
+            adoption.artifact_kind,
+            adoption.artifact_id,
+            str(adoption.artifact_version),
+            "yes" if adoption.output_edited else "no",
+            adoption.adopted_at,
+        )
+    console.print(table)
+
+
+@memory_app.command("usefulness")
+@privacy_egress_fenced
+def memory_usefulness(
+    json_output: bool = typer.Option(False, "--json", help="Emit deterministic JSON."),
+) -> None:
+    """Report exact memory revisions and Prompt Rescue adoption outcomes."""
+    cfg = _init()
+    from .services.memory_usefulness import memory_usefulness_report
+
+    with fts.cursor() as conn:
+        report = memory_usefulness_report(conn, cfg)
+    if json_output:
+        typer.echo(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return
+
+    summary = report["summary"]
+    table = Table("Memory revision", "Status", "Outputs", "Unedited", "Edited")
+    for row in report["memory_revisions"]:
+        revision = row["memory_revision"]
+        table.add_row(
+            f"{revision['path']}#{revision['id']}",
+            str(row["current_status"]),
+            str(row["conditioned_output_count"]),
+            str(row["unedited_adoption_count"]),
+            str(row["edited_adoption_count"]),
+        )
+    console.print(table)
+    console.print(
+        "Tracked exact revisions: "
+        f"{summary['tracked_exact_revision_binding_count']}/"
+        f"{summary['exact_revision_binding_count']}; "
+        "conditioned output adoption rate: "
+        f"{summary['conditioned_output_unedited_adoption_rate']:.3f} "
+        "(descriptive, unedited artifacts only)."
+    )
+
+
+@memory_app.command("screen-adoption")
+def memory_screen_adoption(adoption_id: str) -> None:
+    """Use the configured classifier to stage, never approve, a procedure candidate."""
+    cfg = _init()
+    from .artifact_adoptions.procedure_screen import stage_adoption
+
+    model = cfg.model_for("classifier")
+    console.print(
+        "Screening the exact adopted text with "
+        f"[bold]{model.provider}:{model.model}[/bold]. "
+        "This explicit command may send that text to the configured provider."
+    )
+    with fts.cursor() as conn:
+        try:
+            result = stage_adoption(conn, cfg, adoption_id)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+    if result.candidate is None:
+        console.print(f"[yellow]Not staged:[/yellow] {result.decision.rationale}")
+        return
+    candidate = result.candidate
+    console.print(
+        f"[green]Staged review-only candidate {candidate.id} "
+        f"({candidate.status}).[/green] Review it with "
+        f"`openchronicle memory show {candidate.id}`; approval remains explicit."
+    )
+
+
+@memory_app.command("candidates")
+@privacy_egress_fenced
+def memory_candidates(
+    status: str = typer.Option(
+        "pending,conflict", "--status", help="Comma-separated candidate statuses."
+    ),
+    limit: int = typer.Option(100, "--limit", "-n"),
+) -> None:
+    """List the local review inbox without exposing it over MCP."""
+    cfg = _init()
+    from .provenance.models import EvidenceRef
+    from .services.evidence import EvidenceResolver
+    from .services.memory import MemoryService
+
+    statuses = [value.strip() for value in status.split(",") if value.strip()]
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
+        service.resume_pending_purges()
+        resolver = EvidenceResolver(conn, cfg)
+        candidates = [
+            candidate
+            for candidate in service.list_candidates(statuses=statuses or None, limit=1000)
+            if resolver.resolve(EvidenceRef(kind="memory_candidate", id=candidate.id))["status"]
+            == "current"
+        ][: max(limit, 0)]
+    table = Table("ID", "Status", "Kind", "Target", "Version", "Content")
+    for candidate in candidates:
+        table.add_row(
+            candidate.id,
+            candidate.status,
+            candidate.kind,
+            candidate.target_path,
+            str(candidate.version),
+            candidate.content.replace("\n", " ")[:80],
+        )
+    console.print(table)
+
+
+@memory_app.command("show")
+@privacy_egress_fenced
+def memory_candidate_show(candidate_id: str) -> None:
+    """Show one proposal and its direct evidence."""
+    cfg = _init()
+    from .provenance import store as provenance_store
+    from .provenance.models import EvidenceRef
+    from .services.evidence import EvidenceResolver
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
+        service.resume_pending_purges()
+        candidate = service.get_candidate(candidate_id)
+        if candidate is None:
+            console.print(f"[red]Candidate not found: {candidate_id}[/red]")
+            raise typer.Exit(1)
+        if (
+            EvidenceResolver(conn, cfg).resolve(
+                EvidenceRef(kind="memory_candidate", id=candidate_id)
+            )["status"]
+            != "current"
+        ):
+            console.print(f"[red]Candidate not found: {candidate_id}[/red]")
+            raise typer.Exit(1)
+        payload = candidate.to_dict()
+        payload["evidence"] = [
+            ref.to_dict()
+            for ref in provenance_store.direct_sources(
+                conn, EvidenceRef(kind="memory_candidate", id=candidate_id)
+            )
+        ]
+    console.print_json(data=payload)
+
+
+@memory_app.command("edit")
+@privacy_egress_fenced
+def memory_candidate_edit(
+    candidate_id: str,
+    content: str = typer.Option(..., "--content"),
+    tags: str = typer.Option("", "--tags", help="Comma-separated tags."),
+    version: int | None = typer.Option(None, "--version"),
+    conflict_key: str | None = typer.Option(None, "--conflict-key"),
+) -> None:
+    """Edit a pending proposal with optimistic version checking."""
+    cfg = _init()
+    from .provenance.models import EvidenceRef
+    from .services.evidence import EvidenceResolver
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
+        service.resume_pending_purges()
+        current = service.get_candidate(candidate_id)
+        if (
+            current is None
+            or EvidenceResolver(conn, cfg).resolve(
+                EvidenceRef(kind="memory_candidate", id=candidate_id)
+            )["status"]
+            != "current"
+        ):
+            raise typer.BadParameter(f"candidate not found: {candidate_id}")
+        updated = service.edit_candidate(
+            candidate_id,
+            expected_version=current.version if version is None else version,
+            content=content,
+            tags=[tag.strip() for tag in tags.split(",") if tag.strip()],
+            conflict_key=conflict_key,
+        )
+    console.print(f"[green]Updated {updated.id} to version {updated.version}.[/green]")
+
+
+@memory_app.command("approve")
+def memory_candidate_approve(
+    candidate_id: str,
+    version: int | None = typer.Option(None, "--version"),
+) -> None:
+    """Approve and idempotently materialize one reviewed proposal."""
+    cfg = _init()
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
+        service.resume_pending_purges()
+        current = service.get_candidate(candidate_id)
+        if current is None:
+            raise typer.BadParameter(f"candidate not found: {candidate_id}")
+        approved = service.approve_candidate(
+            candidate_id,
+            expected_version=current.version if version is None else version,
+        )
+    console.print(
+        f"[green]Accepted {approved.id} as {approved.target_path}#"
+        f"{approved.applied_entry_id}.[/green]"
+    )
+
+
+@memory_app.command("reject")
+@privacy_egress_fenced
+def memory_candidate_reject(
+    candidate_id: str,
+    reason: str = typer.Option("", "--reason"),
+    version: int | None = typer.Option(None, "--version"),
+) -> None:
+    """Reject a proposal while retaining its review history."""
+    cfg = _init()
+    from .provenance.models import EvidenceRef
+    from .services.evidence import EvidenceResolver
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        service = MemoryService(conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg)
+        service.resume_pending_purges()
+        current = service.get_candidate(candidate_id)
+        if (
+            current is None
+            or EvidenceResolver(conn, cfg).resolve(
+                EvidenceRef(kind="memory_candidate", id=candidate_id)
+            )["status"]
+            != "current"
+        ):
+            raise typer.BadParameter(f"candidate not found: {candidate_id}")
+        rejected = service.reject_candidate(
+            candidate_id,
+            expected_version=current.version if version is None else version,
+            reason=reason,
+        )
+    console.print(f"[green]Rejected {rejected.id}.[/green]")
+
+
+@memory_app.command("forget")
+def memory_candidate_forget(
+    candidate_id: str,
+    yes: bool = typer.Option(False, "--yes", help="Confirm permanent cascading purge."),
+) -> None:
+    """Permanently purge a proposal, accepted entry, and derived wraps."""
+    if not yes:
+        confirmed = typer.confirm("Permanently delete this proposal and all accepted/derived data?")
+        if not confirmed:
+            raise typer.Abort()
+    cfg = _init()
+    from .services.memory import MemoryService
+
+    with fts.cursor() as conn:
+        result = MemoryService(
+            conn, soft_limit_tokens=cfg.writer.soft_limit_tokens, cfg=cfg
+        ).purge_candidate(candidate_id)
+    console.print(
+        f"[green]Purged {candidate_id}; entry_removed={result.removed_entry}; "
+        f"files_removed={len(result.removed_files)}; "
+        f"wraps_invalidated={len(result.invalidated_wraps)}.[/green]"
+    )
+
+
+provenance_app = typer.Typer(help="Inspect the local evidence graph.")
+app.add_typer(provenance_app, name="provenance")
+
+
+@provenance_app.command("trace")
+@privacy_egress_fenced
+def provenance_trace(
+    kind: str,
+    artifact_id: str,
+    path: str = typer.Option("", "--path"),
+    depth: int = typer.Option(4, "--depth"),
+) -> None:
+    """Trace direct and transitive sources for a local artifact."""
+    cfg = _init()
+    from .daily_wrap import store as daily_wrap_store
+    from .memory_candidates import store as candidate_store
+    from .provenance import store as provenance_store
+    from .provenance.models import EvidenceRef
+    from .services.context import ContextService
+    from .services.evidence import EvidenceResolver
+
+    with fts.cursor() as conn:
+        ref = EvidenceRef(kind=kind, id=artifact_id, path=path)
+        allowed = False
+        if kind == "daily_wrap_revision":
+            allowed = bool(
+                path
+                and not candidate_store.is_tombstoned(conn, kind="daily_wrap", artifact_id=path)
+                and daily_wrap_store.get_by_id(conn, path) is not None
+                and provenance_store.availability(conn, ref) == "available"
+                and ContextService(conn, cfg).daily_wrap_allowed(
+                    path,
+                    expected_row=daily_wrap_store.get_by_id(conn, path),
+                )
+                and ContextService(conn, cfg).evidence_allowed(ref)
+            )
+        else:
+            canonical = ref
+            if kind in {"observation", "timeline_block", "memory_entry"}:
+                current_hash = provenance_store.current_content_hash(conn, ref)
+                if current_hash:
+                    canonical = EvidenceRef(
+                        kind=ref.kind,
+                        id=ref.id,
+                        path=ref.path,
+                        content_hash=current_hash,
+                    )
+            allowed = EvidenceResolver(conn, cfg).resolve(canonical)["status"] == "current"
+        if not allowed:
+            console.print("[yellow]Provenance subject not found.[/yellow]")
+            raise typer.Exit(1)
+        trace = provenance_store.trace_sources(conn, ref, max_depth=depth)
+    console.print_json(data={"count": len(trace), "sources": trace})
+
+
+daily_wrap_app = typer.Typer(help="Generate and read evidence-backed Daily Wraps.")
+app.add_typer(daily_wrap_app, name="daily-wrap")
+
+
+@daily_wrap_app.command("run")
+def daily_wrap_run(
+    day: str | None = typer.Option(None, "--date", help="Local date (YYYY-MM-DD)."),
+    timezone: str | None = typer.Option(None, "--timezone", help="IANA timezone."),
+) -> None:
+    """Generate or refresh one canonical Daily Wrap."""
+    cfg = _init()
+    from .daily_wrap import worker as daily_wrap_worker
+    from .daily_wrap.service import DailyWrapService
+    from .services.context import ContextService
+
+    try:
+        zone_name = timezone or daily_wrap_worker.local_timezone_name(cfg)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    target_day = _daily_wrap_day(day, zone_name)
+    with fts.cursor() as conn:
+        service = DailyWrapService(conn, cfg)
+        generated = service.run(target_day, zone_name)
+        # Provider latency must not hold the capture-store fence.  Reacquire
+        # both cleanup locks only for the final canonical read, authorization,
+        # and detached response copy.
+        with privacy_egress_lock():
+            row = service.get(target_day, zone_name)
+            if (
+                row is None
+                or row.id != generated.id
+                or not ContextService(conn, cfg).daily_wrap_allowed(
+                    row.id,
+                    expected_row=row,
+                )
+            ):
+                console.print("[yellow]Daily Wrap failed publication validation.[/yellow]")
+                raise typer.Exit(1)
+            payload = row.to_dict()
+    console.print_json(data=payload)
+
+
+@daily_wrap_app.command("show")
+@privacy_egress_fenced
+def daily_wrap_show(
+    day: str | None = typer.Option(None, "--date", help="Local date (YYYY-MM-DD)."),
+    timezone: str | None = typer.Option(None, "--timezone", help="IANA timezone."),
+) -> None:
+    """Show the canonical wrap for one local day."""
+    cfg = _init()
+    from .daily_wrap import worker as daily_wrap_worker
+    from .daily_wrap.service import DailyWrapService
+    from .services.context import ContextService
+
+    try:
+        zone_name = timezone or daily_wrap_worker.local_timezone_name(cfg)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    target_day = _daily_wrap_day(day, zone_name)
+    with fts.cursor() as conn:
+        row = DailyWrapService(conn, cfg).get(target_day, zone_name)
+        if row is not None and not ContextService(conn, cfg).daily_wrap_allowed(
+            row.id, expected_row=row
+        ):
+            row = None
+    if row is None:
+        console.print(f"[yellow]No Daily Wrap for {target_day} ({zone_name}).[/yellow]")
+        raise typer.Exit(1)
+    console.print_json(data=row.to_dict())
+
+
+@daily_wrap_app.command("list")
+@privacy_egress_fenced
+def daily_wrap_list(
+    limit: int = typer.Option(30, "--limit", "-n"),
+) -> None:
+    """List recent canonical wraps across timezones."""
+    cfg = _init()
+    from .daily_wrap.service import DailyWrapService
+    from .services.context import ContextService
+
+    with fts.cursor() as conn:
+        context = ContextService(conn, cfg)
+        rows = [
+            row
+            for row in DailyWrapService(conn, cfg).list(limit=365)
+            if context.daily_wrap_allowed(row.id, expected_row=row)
+        ][: max(limit, 0)]
+    console.print_json(data={"count": len(rows), "wraps": [row.to_dict() for row in rows]})
+
+
+def _local_timezone_name() -> str:
+    configured = os.environ.get("TZ", "").strip()
+    if configured:
+        return configured
+    tzinfo = datetime.now().astimezone().tzinfo
+    key = getattr(tzinfo, "key", "")
+    if key:
+        return str(key)
+    with contextlib.suppress(OSError):
+        resolved = Path("/etc/localtime").resolve()
+        marker = "zoneinfo/"
+        if marker in str(resolved):
+            return str(resolved).split(marker, 1)[1]
+    raise typer.BadParameter("cannot infer IANA timezone; pass --timezone")
+
+
+def _daily_wrap_day(value: str | None, timezone: str) -> date:
+    try:
+        zone = ZoneInfo(timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise typer.BadParameter(f"unknown IANA timezone: {timezone}") from exc
+    if value is None:
+        return datetime.now(zone).date() - timedelta(days=1)
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise typer.BadParameter("date must be YYYY-MM-DD") from exc
 
 
 @app.command("capture-once")
@@ -882,7 +1520,11 @@ def capture_once() -> None:
     provider = ax_capture.create_provider(
         depth=cfg.capture.ax_depth, timeout=cfg.capture.ax_timeout_seconds
     )
-    path = scheduler.capture_once(cfg.capture, provider)
+    path = scheduler.capture_once(
+        cfg.capture,
+        provider,
+        trigger={"event_type": "manual"},
+    )
     if path:
         console.print(f"[green]Wrote {path}[/green]")
     else:
@@ -897,9 +1539,7 @@ def rebuild_index() -> None:
     with fts.cursor() as conn:
         files_count, entry_count = entries_mod.rebuild_index(conn)
         index_md.rebuild(conn)
-    console.print(
-        f"[green]Rebuilt: {files_count} files, {entry_count} entries.[/green]"
-    )
+    console.print(f"[green]Rebuilt: {files_count} files, {entry_count} entries.[/green]")
 
 
 @app.command("rebuild-captures-index")
@@ -911,62 +1551,12 @@ def rebuild_captures_index() -> None:
     (e.g. fresh upgrade onto a populated buffer, or an FTS write the
     capture worker logged but didn't commit).
     """
-    import json
-
     _init()
-    buf = paths.capture_buffer_dir()
-    if not buf.exists():
-        with fts.cursor() as conn:
-            conn.execute("DELETE FROM captures")
-        console.print("[yellow]No capture-buffer directory; nothing to rebuild.[/yellow]")
-        return
-
-    files = sorted(p for p in buf.iterdir() if p.is_file() and p.suffix == ".json")
-    file_ids = {p.stem for p in files}
-    with fts.cursor() as conn:
-        rows = conn.execute("SELECT id FROM captures").fetchall()
-    stale_ids = [row["id"] for row in rows if row["id"] not in file_ids]
-    _delete_capture_rows(stale_ids)
-
-    if not files:
-        console.print("[yellow]capture-buffer is empty; nothing to rebuild.[/yellow]")
-        return
-
-    indexed = 0
-    skipped = 0
-    with fts.cursor() as conn:
-        for p in files:
-            try:
-                data = json.loads(p.read_text())
-            except (OSError, json.JSONDecodeError) as exc:
-                skipped += 1
-                console.print(f"[yellow]skip {p.name}: {exc}[/yellow]")
-                continue
-            meta = data.get("window_meta") or {}
-            focused = data.get("focused_element") or {}
-            try:
-                fts.insert_capture(
-                    conn,
-                    id=p.stem,
-                    timestamp=data.get("timestamp", ""),
-                    app_name=meta.get("app_name") or "",
-                    bundle_id=meta.get("bundle_id") or "",
-                    window_title=meta.get("title") or "",
-                    focused_role=focused.get("role") or "",
-                    focused_value=focused.get("value") or "",
-                    visible_text=data.get("visible_text") or "",
-                    url=data.get("url") or "",
-                )
-                indexed += 1
-            except Exception as exc:  # noqa: BLE001
-                skipped += 1
-                console.print(f"[yellow]skip {p.name}: {exc}[/yellow]")
-            if indexed % 200 == 0 and indexed > 0:
-                console.print(f"  indexed {indexed} / {len(files)}…")
-
+    stats = capture_reconcile.reconcile_capture_index()
     console.print(
-        f"[green]Captures index rebuilt: {indexed} indexed, {skipped} skipped "
-        f"(of {len(files)} files).[/green]"
+        f"[green]Captures index rebuilt: {stats.indexed} indexed, "
+        f"{stats.removed} stale rows removed, {stats.skipped} invalid and "
+        f"{stats.hidden} tombstoned files skipped (of {stats.scanned}).[/green]"
     )
 
 
@@ -998,64 +1588,359 @@ def _warn_if_running() -> None:
         )
 
 
-def _delete_capture_rows(capture_ids: list[str]) -> None:
-    """Delete capture rows in one explicit transaction.
+def _capture_clean_targets() -> list[Path]:
+    buf = paths.capture_buffer_dir()
+    if not buf.exists():
+        return []
+    return [
+        path
+        for path in buf.iterdir()
+        if path.is_file()
+        and (path.suffix == ".json" or capture_filenames.is_capture_temp_name(path.name))
+    ]
 
-    fts.connect uses autocommit mode, so sqlite3's connection context manager
-    does not open a transaction for us here.
-    """
-    if not capture_ids:
-        return
-    with fts.cursor() as conn:
-        conn.execute("BEGIN")
+
+def _memory_clean_targets() -> list[Path]:
+    memory = paths.memory_dir()
+    if not memory.exists():
+        return []
+    return [
+        path
+        for path in memory.rglob("*")
+        if path.is_file() and (path.suffix == ".md" or files_mod.is_memory_temp_name(path.name))
+    ]
+
+
+def _clean_captures() -> int:
+    # Provider calls hold the review fence but release the collection lock
+    # during network I/O so ordinary capture writes continue. Explicit deletion
+    # takes both in canonical order and therefore waits for any in-flight
+    # provider before committing deny markers.
+    with files_mod.review_operation_lock(), capture_store.capture_store_lock():
+        from .capture import scheduler as capture_scheduler
+        from .timeline import store as timeline_store
+
+        captures = _capture_clean_targets()
+        canonical = [path for path in captures if path.suffix == ".json"]
+        canonical_names = {path.name for path in canonical}
+        # Commit deny-read markers and clear every searchable projection before
+        # touching authoritative files. A failed unlink remains hidden from raw
+        # reads and rebuilds, and the command reports failure instead of claiming
+        # the plaintext was removed.
+        with fts.cursor() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for path in canonical:
+                    candidate_store.put_tombstone(conn, kind="capture_file", artifact_id=path.name)
+                conn.execute("DELETE FROM captures")
+                for receipt in timeline_store.window_receipts_in_raw_states(
+                    conn,
+                    "live",
+                ):
+                    manifest_names = {
+                        binding[0]
+                        for binding in timeline_store.capture_bindings_for_window(
+                            conn,
+                            receipt,
+                        )
+                    }
+                    if (
+                        manifest_names
+                        and manifest_names.issubset(canonical_names)
+                        and timeline_store.window_receipt_is_current(conn, receipt)
+                    ):
+                        timeline_store.transition_window_receipt_raw_state(
+                            conn,
+                            receipt,
+                            "retiring",
+                        )
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        removed = 0
+        removed_paths: list[Path] = []
+        failures: list[tuple[Path, OSError]] = []
+        for path in captures:
+            try:
+                path.unlink()
+                removed += 1
+                removed_paths.append(path)
+            except OSError as exc:
+                failures.append((path, exc))
+        capture_scheduler._finish_capture_unlinks(
+            removed=[path for path in removed_paths if path.suffix == ".json"],
+            failures=[(path, exc) for path, exc in failures if path.suffix == ".json"],
+            operation="explicit capture cleanup",
+        )
+        with fts.cursor() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                invalidated_live_proof = False
+                if canonical_names:
+                    remaining_windows = conn.execute(
+                        """
+                        SELECT DISTINCT window_start, window_end
+                          FROM timeline_capture_receipts
+                         WHERE capture_path IN ({})
+                        """.format(",".join("?" for _ in canonical_names)),
+                        tuple(sorted(canonical_names)),
+                    ).fetchall()
+                    for start_raw, end_raw in remaining_windows:
+                        start = end = None
+                        try:
+                            start = datetime.fromisoformat(start_raw)
+                            end = datetime.fromisoformat(end_raw)
+                        except (TypeError, ValueError):
+                            receipt = None
+                        else:
+                            receipt = timeline_store.window_receipt_for(
+                                conn,
+                                start,
+                                end,
+                            )
+                        if receipt is not None and receipt.raw_state == "retiring":
+                            continue
+                        if start is not None and end is not None:
+                            timeline_store.delete_window_receipt_for(conn, start, end)
+                        else:
+                            conn.execute(
+                                "DELETE FROM timeline_window_receipts "
+                                "WHERE window_start=? AND window_end=?",
+                                (start_raw, end_raw),
+                            )
+                        conn.execute(
+                            "DELETE FROM timeline_capture_receipts "
+                            "WHERE window_start=? AND window_end=?",
+                            (start_raw, end_raw),
+                        )
+                        invalidated_live_proof = True
+                if invalidated_live_proof:
+                    # Explicit raw deletion is allowed to create a historical
+                    # evidence gap, but must never leave a live receipt or
+                    # coverage proof claiming the removed bytes still exist.
+                    conn.execute("DELETE FROM timeline_state")
+                    conn.execute("DELETE FROM timeline_replay_state")
+                    fts.bump_content_generation(conn, "timeline")
+                    fts.bump_content_generation(conn, "reducer")
+                for path in removed_paths:
+                    if path.suffix == ".json" and (
+                        conn.execute(
+                            "SELECT 1 FROM timeline_capture_receipts WHERE capture_path=? LIMIT 1",
+                            (path.name,),
+                        ).fetchone()
+                        is None
+                    ):
+                        candidate_store.delete_tombstone(
+                            conn,
+                            kind="capture_file",
+                            artifact_id=path.name,
+                        )
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        if failures:
+            raise RuntimeError(
+                f"capture cleanup incomplete: {len(failures)} file(s) could not be removed"
+            ) from failures[0][1]
+        return removed
+
+
+_TIMELINE_AFFECTED_CANDIDATES_SQL = """
+WITH RECURSIVE descendants(kind, id, path) AS (
+    SELECT subject_kind, subject_id, subject_path
+      FROM provenance_edges
+     WHERE source_kind='timeline_block'
+    UNION
+    SELECT edge.subject_kind, edge.subject_id, edge.subject_path
+      FROM provenance_edges AS edge
+      JOIN descendants AS prior
+        ON edge.source_kind=prior.kind
+       AND edge.source_id=prior.id
+       AND edge.source_path=prior.path
+)
+SELECT DISTINCT candidate.id AS subject_id
+  FROM descendants
+  JOIN memory_candidates AS candidate
+    ON descendants.kind='memory_candidate' AND candidate.id=descendants.id
+ WHERE candidate.status IN ('pending', 'conflict')
+"""
+
+
+def _timeline_clean_counts(conn) -> dict[str, int]:
+    return {
+        "blocks": int(conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]),
+        "wraps": int(conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0]),
+        "revisions": int(conn.execute("SELECT COUNT(*) FROM daily_wrap_revisions").fetchone()[0]),
+        "candidates": len(conn.execute(_TIMELINE_AFFECTED_CANDIDATES_SQL).fetchall()),
+    }
+
+
+def _clean_timeline() -> int:
+    with files_mod.review_operation_lock(), fts.cursor() as conn:
+        n = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
+        conn.execute("BEGIN IMMEDIATE")
         try:
+            if (
+                conn.execute(
+                    "SELECT 1 FROM timeline_window_receipts WHERE raw_state='retiring' LIMIT 1"
+                ).fetchone()
+                is not None
+            ):
+                raise RuntimeError("timeline cleanup blocked by in-progress capture retirement")
+            fts.bump_content_generation(conn, "reducer")
+            fts.bump_content_generation(conn, "timeline")
+            affected_candidates = conn.execute(_TIMELINE_AFFECTED_CANDIDATES_SQL).fetchall()
             conn.executemany(
-                "DELETE FROM captures WHERE id=?",
-                ((capture_id,) for capture_id in capture_ids),
+                """
+                UPDATE memory_candidates
+                   SET status='conflict',
+                       last_error='source timeline was explicitly deleted'
+                 WHERE id=? AND status IN ('pending', 'conflict')
+                """,
+                ((row["subject_id"],) for row in affected_candidates),
             )
+            conn.execute("DELETE FROM daily_wrap_revisions")
+            conn.execute("DELETE FROM daily_wrap_jobs")
+            conn.execute("DELETE FROM classifier_jobs")
+            conn.execute(
+                """
+                UPDATE sessions
+                   SET classified_end=COALESCE(
+                           end_time, flush_end, classified_end, start_time
+                       ),
+                       classifier_terminal_pending=0,
+                       classifier_terminal_entry_id='',
+                       classifier_terminal_path='',
+                       classifier_terminal_noop=0,
+                       updated_at=?
+                """,
+                (datetime.now().astimezone().isoformat(),),
+            )
+            conn.execute(
+                """
+                DELETE FROM provenance_edges
+                 WHERE subject_kind IN (
+                           'timeline_block', 'daily_wrap',
+                           'daily_wrap_item', 'daily_wrap_revision'
+                       )
+                    OR source_kind='timeline_block'
+                """
+            )
+            conn.execute("DELETE FROM timeline_blocks")
+            conn.execute("DELETE FROM timeline_state")
+            conn.execute("DELETE FROM timeline_replay_state")
+            conn.execute("DELETE FROM timeline_window_receipts")
+            conn.execute("DELETE FROM timeline_capture_receipts")
+            conn.execute("DELETE FROM timeline_capture_receipt_state")
+            conn.execute("DELETE FROM timeline_window_receipt_epoch")
+            conn.execute("DELETE FROM timeline_receipt_audit_state")
             conn.execute("COMMIT")
         except Exception:  # noqa: BLE001
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise
-
-
-def _clean_captures() -> int:
-    buf = paths.capture_buffer_dir()
-    if not buf.exists():
-        return 0
-    removed_stems: list[str] = []
-    n = 0
-    for p in buf.iterdir():
-        if p.suffix == ".json" and p.is_file():
-            p.unlink()
-            removed_stems.append(p.stem)
-            n += 1
-    _delete_capture_rows(removed_stems)
-    return n
-
-
-def _clean_timeline() -> int:
-    with fts.cursor() as conn:
-        n = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
-        conn.execute("DELETE FROM timeline_blocks")
     return n
 
 
 def _clean_memory() -> tuple[int, int]:
-    """Delete memory Markdown files + reset entries/files tables. Returns (files, entries)."""
-    mem = paths.memory_dir()
-    files = 0
-    if mem.exists():
-        for p in mem.rglob("*.md"):
-            if p.is_file():
-                p.unlink()
-                files += 1
-    with fts.cursor() as conn:
-        entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
-        conn.execute("DELETE FROM entries")
-        conn.execute("DELETE FROM files")
-    return files, entries
+    """Delete memory files/temp copies and reset indexes. Returns (files, entries)."""
+    # Fence classifier proposal transactions as well as Markdown writers. A
+    # worker holding an old classifier lease cannot recreate a candidate after
+    # this explicit local reset because its job row is deleted atomically.
+    with files_mod.review_operation_lock(), files_mod.store_write_lock():
+        targets = _memory_clean_targets()
+        canonical = [
+            path for path in targets if path.suffix == ".md" and path.parent == paths.memory_dir()
+        ]
+        # File-level deny markers close direct-read and rebuild paths if an
+        # unlink fails after projections have been cleared.
+        with fts.cursor() as conn:
+            from .activity import store as activity_store
+
+            entries = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                fts.bump_content_generation(conn, "reducer")
+                for path in canonical:
+                    candidate_store.put_tombstone(conn, kind="memory_file", artifact_id=path.name)
+                conn.execute("DELETE FROM entries")
+                conn.execute("DELETE FROM files")
+                activity_store.clear(conn)
+                conn.execute("DELETE FROM memory_candidates")
+                conn.execute("DELETE FROM classifier_jobs")
+                conn.execute(
+                    """
+                    UPDATE sessions
+                       SET classified_end=COALESCE(
+                               end_time, flush_end, classified_end, start_time
+                           ),
+                           classifier_terminal_pending=0,
+                           classifier_terminal_entry_id='',
+                           classifier_terminal_path='',
+                           classifier_terminal_noop=0,
+                           updated_at=?
+                    """,
+                    (datetime.now().astimezone().isoformat(),),
+                )
+                conn.execute("DELETE FROM daily_wrap_revisions")
+                conn.execute("DELETE FROM daily_wrap_jobs")
+                conn.execute(
+                    """
+                    DELETE FROM provenance_edges
+                     WHERE subject_kind IN (
+                           'memory_entry', 'memory_candidate',
+                           'daily_wrap', 'daily_wrap_item', 'daily_wrap_revision'
+                     )
+                        OR source_kind IN ('memory_entry', 'memory_candidate')
+                    """
+                )
+                conn.execute("COMMIT")
+            except Exception:  # noqa: BLE001
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        removed = 0
+        removed_paths: list[Path] = []
+        failures: list[OSError] = []
+        for path in targets:
+            try:
+                path.unlink()
+                removed += 1
+                removed_paths.append(path)
+            except OSError as exc:
+                failures.append(exc)
+        with fts.cursor() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for path in removed_paths:
+                    if path in canonical:
+                        candidate_store.delete_tombstone(
+                            conn, kind="memory_file", artifact_id=path.name
+                        )
+                if not failures:
+                    conn.execute(
+                        """
+                        DELETE FROM purge_tombstones
+                         WHERE kind IN (
+                               'memory_candidate', 'memory_entry',
+                               'memory_file', 'daily_wrap'
+                         )
+                        """
+                    )
+                conn.execute("COMMIT")
+            except BaseException:
+                if conn.in_transaction:
+                    conn.execute("ROLLBACK")
+                raise
+        if failures:
+            raise RuntimeError(
+                f"memory cleanup incomplete: {len(failures)} file(s) could not be removed"
+            ) from failures[0]
+        return removed, entries
 
 
 def _clean_writer_state() -> bool:
@@ -1073,7 +1958,7 @@ def clean_captures(
     """Delete all files in the capture buffer."""
     _init()
     buf = paths.capture_buffer_dir()
-    count = sum(1 for p in buf.iterdir() if p.suffix == ".json") if buf.exists() else 0
+    count = len(_capture_clean_targets())
     console.print(f"About to delete {count} capture file(s) under {buf}")
     _warn_if_running()
     if not _confirm("Proceed?", yes):
@@ -1087,11 +1972,17 @@ def clean_captures(
 def clean_timeline(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
-    """Delete all timeline blocks (short-window activity summaries)."""
+    """Delete timeline blocks, derived wraps, and dependent provenance."""
     _init()
     with fts.cursor() as conn:
-        count = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
-    console.print(f"About to delete {count} timeline block(s).")
+        counts = _timeline_clean_counts(conn)
+    console.print(
+        f"About to delete {counts['blocks']} timeline block(s).\n"
+        f"This also permanently deletes {counts['wraps']} Daily Wrap(s), "
+        f"{counts['revisions']} wrap revision(s), their provenance, and marks "
+        f"{counts['candidates']} dependent pending/conflict candidate(s) as conflict."
+    )
+    _warn_if_running()
     if not _confirm("Proceed?", yes):
         console.print("[yellow]Aborted.[/yellow]")
         raise typer.Exit(1)
@@ -1103,16 +1994,22 @@ def clean_timeline(
 def clean_memory(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
 ) -> None:
-    """Delete all memory Markdown files and reset the FTS index."""
+    """Delete Markdown, review candidates, wraps, and memory provenance."""
     _init()
     mem = paths.memory_dir()
-    md_count = sum(1 for _ in mem.rglob("*.md")) if mem.exists() else 0
+    memory_count = len(_memory_clean_targets())
     with fts.cursor() as conn:
         entry_count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         file_count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        candidate_count = conn.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0]
+        wrap_count = conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0]
+        revision_count = conn.execute("SELECT COUNT(*) FROM daily_wrap_revisions").fetchone()[0]
     console.print(
-        f"About to delete {md_count} Markdown file(s) under {mem} "
-        f"and reset {entry_count} entries / {file_count} files in the index."
+        f"About to delete {memory_count} memory file(s) under {mem} "
+        f"and reset {entry_count} entries / {file_count} files in the index.\n"
+        f"This also permanently deletes {candidate_count} review candidate(s), "
+        f"{wrap_count} Daily Wrap(s), {revision_count} wrap revision(s), "
+        "purge intents, and their memory provenance."
     )
     _warn_if_running()
     if not _confirm("Proceed?", yes):
@@ -1120,7 +2017,8 @@ def clean_memory(
         raise typer.Exit(1)
     files, entries = _clean_memory()
     console.print(
-        f"[green]Deleted {files} Markdown file(s); cleared {entries} index entries.[/green]"
+        f"[green]Deleted {files} Markdown file(s); cleared {entries} index entries, "
+        "review candidates, Daily Wraps, and memory provenance.[/green]"
     )
 
 
@@ -1130,19 +2028,20 @@ def clean_all(
 ) -> None:
     """Delete captures, timeline blocks, memory, and writer state. Config is kept."""
     _init()
-    buf = paths.capture_buffer_dir()
-    mem = paths.memory_dir()
-    capture_count = sum(1 for p in buf.iterdir() if p.suffix == ".json") if buf.exists() else 0
-    md_count = sum(1 for _ in mem.rglob("*.md")) if mem.exists() else 0
+    capture_count = len(_capture_clean_targets())
+    memory_count = len(_memory_clean_targets())
     with fts.cursor() as conn:
         entry_count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]
         tlb_count = conn.execute("SELECT COUNT(*) FROM timeline_blocks").fetchone()[0]
+        candidate_count = conn.execute("SELECT COUNT(*) FROM memory_candidates").fetchone()[0]
+        wrap_count = conn.execute("SELECT COUNT(*) FROM daily_wrap_jobs").fetchone()[0]
 
     console.print(
         "[bold red]This will delete:[/bold red]\n"
         f"  - {capture_count} capture file(s)\n"
         f"  - {tlb_count} timeline block(s)\n"
-        f"  - {md_count} memory Markdown file(s) and {entry_count} index entries\n"
+        f"  - {memory_count} memory file(s) and {entry_count} index entries\n"
+        f"  - {candidate_count} review candidate(s) and {wrap_count} Daily Wrap(s)\n"
         f"  - writer state\n"
         "[bold]Config ({}) is kept.[/bold]".format(paths.config_file())
     )

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-retry-prompt-rescue"
+description = "Enables the retry_prompt_rescue command without any pre-configured scope."
+commands.allow = ["retry_prompt_rescue"]
+
+[[permission]]
+identifier = "deny-retry-prompt-rescue"
+description = "Denies the retry_prompt_rescue command without any pre-configured scope."
+commands.deny = ["retry_prompt_rescue"]

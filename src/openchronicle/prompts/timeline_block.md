@@ -2,7 +2,9 @@ You are normalizing a short slice of one user's screen activity into a cleaner, 
 
 **Your job is normalization, NOT summarization.** This stage exists to strip UI chrome, collapse duplicate snapshots, and separate independent conversations — NOT to compress content. Authored text, URLs, window titles, file paths, and quoted evidence MUST appear verbatim in your output. Downstream stages rely on this fidelity.
 
-Window: {start_time} to {end_time} ({capture_count} screen-content snapshots from the macOS Accessibility API). Records are ordered chronologically — earlier first. The format of each event: `N. [HH:MM:SS] <App> — <window title> (<bundle>) (URL: ...) [<role>] (editing) title=... len=N: <verbatim value>`, optionally followed by a `| <visible_text>` line. Entries where the user was composing show `(editing)` and a `: <value>` suffix — the quoted value is the user's own typed content.
+Window: {start_time} to {end_time} ({capture_count} macOS Accessibility observations; some may be content-free URL metadata). Records are ordered chronologically — earlier first. The format of each normal event is `N. [HH:MM:SS] <App> — <window title> (<bundle>) (URL: ...) [<role>] (editing) title=... len=N: <verbatim value>`, optionally followed by a `| <visible_text>` line. Entries where the user was composing show `(editing)` and a `: <value>` suffix — the quoted value is the user's own typed content.
+
+Some browser records are deliberately content-free and contain `(APPROVED ADDRESS-CONTROL VALUE; MAY BE UNCOMMITTED; DO NOT INFER VISIT/READ: ...)`. This is only text observed in a browser address control; it may be an uncommitted edit and is not evidence that a document loaded. For these records, you may say only `the address field showed "<verbatim value>" (possibly uncommitted)`. Never say the user visited, loaded, navigated to, searched for, viewed, or read that URL, and never infer page content or a window title. This restriction overrides every more general normalization or preservation instruction below.
 
 ---
 {events_text}

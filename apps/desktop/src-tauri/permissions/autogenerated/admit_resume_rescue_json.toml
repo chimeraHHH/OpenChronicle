@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-admit-resume-rescue-json"
+description = "Enables the admit_resume_rescue_json command without any pre-configured scope."
+commands.allow = ["admit_resume_rescue_json"]
+
+[[permission]]
+identifier = "deny-admit-resume-rescue-json"
+description = "Denies the admit_resume_rescue_json command without any pre-configured scope."
+commands.deny = ["admit_resume_rescue_json"]

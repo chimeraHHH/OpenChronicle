@@ -11,6 +11,12 @@ build/
 .ruff_cache/
 .mypy_cache/
 
+# Desktop shell
+apps/desktop/node_modules/
+apps/desktop/dist/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/
+
 # Editors / OS
 .DS_Store
 .idea/
@@ -28,3 +34,7 @@ resources/mac-ax-watcher
 # Ad-hoc logs / scratch
 *.log
 scratch/
+/tmp/pdfs/
+
+# Deterministically generated from pinned Google Fonts sources during release builds.
+src/openchronicle/assets/pdf_fonts/*.ttf

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "source_repository": "google/fonts",
+  "source_commit": "2d85e20401920891efb7cd6272d6339685df2820",
+  "build_tool": {
+    "name": "fonttools",
+    "version": "4.63.0"
+  },
+  "fonts": [
+    {
+      "id": "base",
+      "filename": "NotoSans-Regular.ttf",
+      "source_path": "ofl/notosans/NotoSans%5Bwdth,wght%5D.ttf",
+      "source_size_bytes": 2049096,
+      "source_sha256": "bfb7bb691513f12e734dc346c03a03f784912432d7e3fa8e56efcf906fe86b3d",
+      "axes": {"wdth": 100, "wght": 400},
+      "size_bytes": 626220,
+      "sha256": "82d154854e9c223e853625ae9faf7302fdccc02f6bacfd429d6ff311da93d011",
+      "license": "OFL-1.1",
+      "license_file": "NotoSans-OFL.txt"
+    },
+    {
+      "id": "cjk",
+      "filename": "NotoSansSC-Regular.ttf",
+      "source_path": "ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+      "source_size_bytes": 17772300,
+      "source_sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+      "axes": {"wght": 400},
+      "size_bytes": 10595948,
+      "sha256": "56b7235feaf4eeeccaa59289ee95d965ed07fb3b2297251981e5e05b4e21ed27",
+      "license": "OFL-1.1",
+      "license_file": "NotoSansSC-OFL.txt"
+    },
+    {
+      "id": "arabic",
+      "filename": "NotoSansArabic-Regular.ttf",
+      "source_path": "ofl/notosansarabic/NotoSansArabic%5Bwdth,wght%5D.ttf",
+      "source_size_bytes": 844676,
+      "source_sha256": "63111b5b2e074dd48cc67692e0a2726d86ee94c1c37fe8598257b7b4e87e869e",
+      "axes": {"wdth": 100, "wght": 400},
+      "size_bytes": 194336,
+      "sha256": "1a4e20719f69a8b17b80a82d732f1f45f88b662b4213817554b06499eef00c68",
+      "license": "OFL-1.1",
+      "license_file": "NotoSansArabic-OFL.txt"
+    }
+  ]
+}

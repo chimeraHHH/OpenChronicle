@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "memops50-reviewed-lifecycle-v1",
+  "dataset_tier_id": "memops50-adjacent-longitudinal-v1",
+  "primary_metric": "checkpoint_accuracy",
+  "gates": {
+    "repository_clean": true,
+    "scenario_pass_rate_min": 1.0,
+    "operation_success_rate_min": 1.0,
+    "checkpoint_accuracy_min": 1.0,
+    "final_state_accuracy_min": 1.0,
+    "stale_value_rate_max": 0.0,
+    "forget_current_leakage_rate_max": 0.0,
+    "forget_history_leakage_rate_max": 0.0,
+    "over_forget_rate_max": 0.0,
+    "provenance_support_rate_min": 1.0,
+    "trajectory_checkpoint_accuracy_min": 1.0
+  }
+}

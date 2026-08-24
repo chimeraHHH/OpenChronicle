@@ -1,0 +1,104 @@
+\begin{tikzpicture}[
+  x=1cm,
+  y=1cm,
+  root/.style={
+    circle,
+    draw=OCNavy!85,
+    line width=1.2pt,
+    fill=OCNavy,
+    text=white,
+    minimum size=4.4cm,
+    text width=3.8cm,
+    align=center,
+    font=\sffamily\bfseries\fontsize{14}{18}\selectfont
+  },
+  topic/.style={
+    circle,
+    draw=white,
+    line width=1.1pt,
+    text=white,
+    minimum size=3.0cm,
+    text width=2.45cm,
+    align=center,
+    font=\sffamily\bfseries\normalsize
+  },
+  leaf/.style={
+    rounded corners=3mm,
+    draw=white,
+    line width=0.9pt,
+    text=white,
+    minimum width=3.4cm,
+    minimum height=1.15cm,
+    text width=2.9cm,
+    align=center,
+    font=\sffamily\bfseries\scriptsize,
+    inner sep=2.3mm
+  },
+  branch/.style={line width=7pt, line cap=round},
+  twig/.style={line width=3pt, line cap=round},
+]
+
+\node[root] (root) at (0,0) {OpenChronicle\\Vida 公开功能\\Clean-room\\复现};
+
+\node[topic,fill=OCBlue] (product) at (-7,-3) {产品目标};
+\node[leaf,fill=OCBlue] (product-a) at (-10.7,-4.6) {五个公开核心用例};
+\node[leaf,fill=OCBlue] (product-b) at (-10.7,-3.0) {主动理解上下文};
+\node[leaf,fill=OCBlue] (product-c) at (-10.7,-1.4) {可控记忆与操作};
+
+\node[topic,fill=OCTeal] (memory) at (0,-5.1) {Memory Plane\\记忆平面};
+\node[leaf,fill=OCTeal] (memory-a) at (-3.4,-7.45) {AX 观察\\隐私防火墙};
+\node[leaf,fill=OCTeal] (memory-b) at (0,-7.45) {时间线\\会话归约};
+\node[leaf,fill=OCTeal] (memory-c) at (3.4,-7.45) {来源证明\\可审查记忆};
+
+\node[topic,fill=OCGreen] (prepare) at (7,-3) {Prepare / Suggest\\准备型工作流};
+\node[leaf,fill=OCGreen] (prepare-a) at (10.7,-4.6) {Daily Wrap\\Work Resumption};
+\node[leaf,fill=OCGreen] (prepare-b) at (10.7,-3.0) {Prompt Rescue\\Reply Rescue};
+\node[leaf,fill=OCGreen] (prepare-c) at (10.7,-1.4) {Resume Rescue\\精确预览导出};
+
+\node[topic,fill=OCOrange] (action) at (7,3) {Action Plane\\行动平面};
+\node[leaf,fill=OCOrange] (action-a) at (10.7,1.4) {类型化计划\\确定性策略};
+\node[leaf,fill=OCOrange] (action-b) at (10.7,3.0) {精确批准\\即时重检};
+\node[leaf,fill=OCOrange] (action-c) at (10.7,4.6) {执行证明\\审计与撤销};
+
+\node[topic,fill=OCRed] (evidence) at (0,5.1) {证据与交付};
+\node[leaf,fill=OCRed] (evidence-a) at (-3.4,7.45) {版本化夹具\\故障矩阵};
+\node[leaf,fill=OCRed] (evidence-b) at (0,7.45) {Python / TS / Rust\\全栈回归};
+\node[leaf,fill=OCRed] (evidence-c) at (3.4,7.45) {打包审计\\签名公证};
+
+\node[topic,fill=OCPurple] (ecosystem) at (-7,3) {生态参考};
+\node[leaf,fill=OCPurple] (ecosystem-a) at (-10.7,1.4) {Vida 官方公开证据};
+\node[leaf,fill=OCPurple] (ecosystem-b) at (-10.7,3.0) {本地记忆\\桌面 Agent};
+\node[leaf,fill=OCPurple] (ecosystem-c) at (-10.7,4.6) {文件整理\\治理与基准};
+
+\begin{scope}[on background layer]
+  \draw[branch,OCBlue!72] (root) -- (product);
+  \draw[twig,OCBlue!72] (product) -- (product-a);
+  \draw[twig,OCBlue!72] (product) -- (product-b);
+  \draw[twig,OCBlue!72] (product) -- (product-c);
+
+  \draw[branch,OCTeal!72] (root) -- (memory);
+  \draw[twig,OCTeal!72] (memory) -- (memory-a);
+  \draw[twig,OCTeal!72] (memory) -- (memory-b);
+  \draw[twig,OCTeal!72] (memory) -- (memory-c);
+
+  \draw[branch,OCGreen!72] (root) -- (prepare);
+  \draw[twig,OCGreen!72] (prepare) -- (prepare-a);
+  \draw[twig,OCGreen!72] (prepare) -- (prepare-b);
+  \draw[twig,OCGreen!72] (prepare) -- (prepare-c);
+
+  \draw[branch,OCOrange!72] (root) -- (action);
+  \draw[twig,OCOrange!72] (action) -- (action-a);
+  \draw[twig,OCOrange!72] (action) -- (action-b);
+  \draw[twig,OCOrange!72] (action) -- (action-c);
+
+  \draw[branch,OCRed!72] (root) -- (evidence);
+  \draw[twig,OCRed!72] (evidence) -- (evidence-a);
+  \draw[twig,OCRed!72] (evidence) -- (evidence-b);
+  \draw[twig,OCRed!72] (evidence) -- (evidence-c);
+
+  \draw[branch,OCPurple!72] (root) -- (ecosystem);
+  \draw[twig,OCPurple!72] (ecosystem) -- (ecosystem-a);
+  \draw[twig,OCPurple!72] (ecosystem) -- (ecosystem-b);
+  \draw[twig,OCPurple!72] (ecosystem) -- (ecosystem-c);
+\end{scope}
+\end{tikzpicture}

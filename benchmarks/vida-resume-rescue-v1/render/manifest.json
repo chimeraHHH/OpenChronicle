@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "suite_id": "OC-Vida-Resume-Render-v1",
+  "renderer_version": 1,
+  "template_id": "openchronicle-classic-v1",
+  "engine": {
+    "kind": "google-chrome-headless",
+    "version": "Google Chrome 151.0.7922.77"
+  },
+  "tools": {
+    "pdfinfo_version": "pdfinfo version 26.04.0",
+    "pdftotext_version": "pdftotext version 26.04.0",
+    "pdftoppm_version": "pdftoppm version 26.04.0",
+    "pdffonts_version": "pdffonts version 26.04.0"
+  },
+  "limits": {
+    "command_timeout_seconds": 30,
+    "maximum_pdf_bytes": 10485760,
+    "maximum_png_bytes": 52428800,
+    "page_width_points": 595.92,
+    "page_height_points": 841.92,
+    "page_size_tolerance_points": 1.0,
+    "bbox_tolerance_points": 1.0
+  },
+  "required_checks": [
+    "a4_page_size",
+    "bounded_artifacts",
+    "embedded_fonts",
+    "in_bounds_text_boxes",
+    "ordered_text_complete",
+    "page_count_expected",
+    "parseable_pdf",
+    "repeat_layout_stable",
+    "repeat_raster_stable",
+    "repeat_text_stable"
+  ]
+}

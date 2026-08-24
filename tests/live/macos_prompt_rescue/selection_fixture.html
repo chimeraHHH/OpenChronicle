@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenChronicle Prompt Rescue Selection Fixture</title>
+    <style>
+      body { font: 20px system-ui; margin: 3rem; max-width: 60rem; }
+      textarea { box-sizing: border-box; font: inherit; min-height: 12rem; width: 100%; }
+    </style>
+  </head>
+  <body>
+    <h1>OpenChronicle Prompt Rescue Selection Fixture</h1>
+    <label for="selection">Explicit test selection</label>
+    <textarea id="selection">PREFIX SAFARI_EXACT_😀_café_漢字_20260809 SUFFIX</textarea>
+    <script>
+      const field = document.querySelector("#selection");
+      const marker = "SAFARI_EXACT_😀_café_漢字_20260809";
+      const start = field.value.indexOf(marker);
+      function selectFixtureMarker() {
+        field.focus();
+        field.setSelectionRange(start, start + marker.length);
+      }
+      selectFixtureMarker();
+      window.setTimeout(selectFixtureMarker, 250);
+      window.setTimeout(selectFixtureMarker, 1000);
+    </script>
+  </body>
+</html>

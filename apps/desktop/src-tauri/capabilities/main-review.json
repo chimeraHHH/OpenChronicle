@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-review",
+  "description": "Least-privilege access for the single trusted OpenChronicle review window.",
+  "windows": ["main"],
+  "platforms": ["macOS"],
+  "permissions": [
+    "desktop-read",
+    "desktop-review",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}

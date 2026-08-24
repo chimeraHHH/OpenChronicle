@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-record-artifact-adoption"
+description = "Enables the record_artifact_adoption command without any pre-configured scope."
+commands.allow = ["record_artifact_adoption"]
+
+[[permission]]
+identifier = "deny-record-artifact-adoption"
+description = "Denies the record_artifact_adoption command without any pre-configured scope."
+commands.deny = ["record_artifact_adoption"]

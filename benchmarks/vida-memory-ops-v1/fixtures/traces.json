@@ -1,0 +1,186 @@
+{
+  "schema_version": 1,
+  "dataset_id": "OC-Vida-Memory-Operations-v1",
+  "split": "reviewed-lifecycle-dev-v1",
+  "traces": [
+    {
+      "id": "remember-update-preserves-history",
+      "sources": [
+        {
+          "key": "model-old-source",
+          "path": "event-2026-08-20.md",
+          "content": "The user set the timeline model to gpt-5.4-nano.",
+          "tags": ["session", "model"]
+        },
+        {
+          "key": "model-new-source",
+          "path": "event-2026-08-23.md",
+          "content": "The user changed the timeline model to gpt-5.6-luna.",
+          "tags": ["session", "model"]
+        }
+      ],
+      "operations": [
+        {
+          "id": "remember-old-model",
+          "type": "remember",
+          "key": "timeline-model-old",
+          "target_path": "project-openchronicle.md",
+          "content": "The timeline model is gpt-5.4-nano.",
+          "tags": ["project", "model", "timeline"],
+          "source_keys": ["model-old-source"],
+          "subject_key": "project.openchronicle.timeline-model",
+          "assertion_kind": "user_asserted",
+          "valid_from": "2026-08-20",
+          "valid_to": ""
+        },
+        {
+          "id": "update-current-model",
+          "type": "update",
+          "key": "timeline-model-current",
+          "target_key": "timeline-model-old",
+          "target_path": "project-openchronicle.md",
+          "content": "The timeline model is gpt-5.6-luna.",
+          "tags": ["project", "model", "timeline"],
+          "source_keys": ["model-new-source"],
+          "subject_key": "project.openchronicle.timeline-model",
+          "assertion_kind": "user_asserted",
+          "valid_from": "2026-08-23",
+          "valid_to": ""
+        },
+        {
+          "id": "forget-model-lineage",
+          "type": "forget",
+          "target_key": "timeline-model-current"
+        }
+      ],
+      "checkpoints": [
+        {
+          "id": "old-model-is-initially-current",
+          "after_operation": "remember-old-model",
+          "expected_current_keys": ["timeline-model-old"],
+          "forbidden_current_keys": [],
+          "expected_history_keys": ["timeline-model-old"],
+          "forbidden_history_keys": []
+        },
+        {
+          "id": "new-model-is-current-old-remains-history",
+          "after_operation": "update-current-model",
+          "expected_current_keys": ["timeline-model-current"],
+          "forbidden_current_keys": ["timeline-model-old"],
+          "expected_history_keys": ["timeline-model-old", "timeline-model-current"],
+          "forbidden_history_keys": []
+        },
+        {
+          "id": "forget-current-model-removes-complete-lineage",
+          "after_operation": "forget-model-lineage",
+          "expected_current_keys": [],
+          "forbidden_current_keys": ["timeline-model-old", "timeline-model-current"],
+          "expected_history_keys": [],
+          "forbidden_history_keys": ["timeline-model-old", "timeline-model-current"]
+        }
+      ]
+    },
+    {
+      "id": "forget-target-without-over-forget",
+      "sources": [
+        {
+          "key": "editor-source",
+          "path": "event-2026-08-21.md",
+          "content": "The user said Typora is preferred for long-form Markdown.",
+          "tags": ["session", "preference"]
+        },
+        {
+          "key": "report-source",
+          "path": "event-2026-08-22.md",
+          "content": "The user requested concise reports with an action list.",
+          "tags": ["session", "preference"]
+        }
+      ],
+      "operations": [
+        {
+          "id": "remember-editor",
+          "type": "remember",
+          "key": "editor-preference",
+          "target_path": "user-editor-preferences.md",
+          "content": "User prefers Typora for long-form Markdown.",
+          "tags": ["preference", "editor"],
+          "source_keys": ["editor-source"],
+          "subject_key": "user.editor.long-form-markdown",
+          "assertion_kind": "user_asserted",
+          "valid_from": "2026-08-21",
+          "valid_to": ""
+        },
+        {
+          "id": "remember-report-style",
+          "type": "remember",
+          "key": "report-style",
+          "target_path": "user-report-preferences.md",
+          "content": "User prefers concise reports with an action list.",
+          "tags": ["preference", "reporting"],
+          "source_keys": ["report-source"],
+          "subject_key": "user.reporting.style",
+          "assertion_kind": "user_asserted",
+          "valid_from": "2026-08-22",
+          "valid_to": ""
+        },
+        {
+          "id": "forget-editor-only",
+          "type": "forget",
+          "target_key": "editor-preference"
+        }
+      ],
+      "checkpoints": [
+        {
+          "id": "forget-removes-editor-and-retains-report-style",
+          "after_operation": "forget-editor-only",
+          "expected_current_keys": ["report-style"],
+          "forbidden_current_keys": ["editor-preference"],
+          "expected_history_keys": ["report-style"],
+          "forbidden_history_keys": ["editor-preference"]
+        }
+      ]
+    },
+    {
+      "id": "reflect-requires-independent-support",
+      "sources": [
+        {
+          "key": "action-list-source-a",
+          "path": "event-2026-08-18.md",
+          "content": "The user accepted a report ending with a three-item action list.",
+          "tags": ["session", "accepted"]
+        },
+        {
+          "key": "action-list-source-b",
+          "path": "event-2026-08-23.md",
+          "content": "The user again requested the summary to end with concrete next actions.",
+          "tags": ["session", "accepted"]
+        }
+      ],
+      "operations": [
+        {
+          "id": "reflect-action-list-pattern",
+          "type": "reflect",
+          "key": "action-list-pattern",
+          "target_path": "user-report-patterns.md",
+          "content": "Across independent sessions, the user prefers reports to end with concrete next actions.",
+          "tags": ["pattern", "reporting"],
+          "source_keys": ["action-list-source-a", "action-list-source-b"],
+          "subject_key": "user.reporting.next-actions-pattern",
+          "assertion_kind": "inferred",
+          "valid_from": "2026-08-18",
+          "valid_to": ""
+        }
+      ],
+      "checkpoints": [
+        {
+          "id": "reflection-is-current-and-preserves-both-sources",
+          "after_operation": "reflect-action-list-pattern",
+          "expected_current_keys": ["action-list-pattern"],
+          "forbidden_current_keys": [],
+          "expected_history_keys": ["action-list-pattern"],
+          "forbidden_history_keys": []
+        }
+      ]
+    }
+  ]
+}

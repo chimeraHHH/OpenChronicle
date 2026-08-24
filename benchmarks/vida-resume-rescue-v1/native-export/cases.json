@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "dataset_id": "OC-Vida-Resume-Native-Export-v1",
+  "cases": [
+    {"id": "pdf-single-page-exact-text", "format": "pdf", "expected": {"export": "accepted", "pages": [1, 1]}},
+    {"id": "pdf-multilingual-cjk-rtl", "format": "pdf", "expected": {"export": "accepted", "pages": [1, 1]}},
+    {"id": "pdf-automatic-multipage", "format": "pdf", "expected": {"export": "accepted", "pages": [3, 6]}},
+    {"id": "pdf-hostile-markup-is-text", "format": "pdf", "expected": {"export": "accepted", "active_content": false}},
+    {"id": "pdf-unpinned-engine", "format": "pdf", "expected": {"export": "rejected"}},
+    {"id": "docx-single-page-exact-text", "format": "docx", "expected": {"export": "accepted", "ordered_text": true}},
+    {"id": "docx-multilingual-cjk-rtl", "format": "docx", "expected": {"export": "accepted", "ordered_text": true}},
+    {"id": "docx-automatic-multipage", "format": "docx", "expected": {"export": "accepted", "ordered_text": true}},
+    {"id": "docx-hostile-markup-is-text", "format": "docx", "expected": {"export": "accepted", "active_content": false}},
+    {"id": "docx-repeat-bytes", "format": "docx", "expected": {"export": "accepted", "byte_deterministic": true}},
+    {"id": "stale-preview-digest", "format": "pdf", "expected": {"export": "rejected"}},
+    {"id": "stale-projection-binding", "format": "docx", "expected": {"export": "rejected"}},
+    {"id": "existing-target-path", "format": "pdf", "expected": {"export": "rejected_without_overwrite"}},
+    {"id": "webview-byte-injection", "format": "docx", "expected": {"export": "rejected"}}
+  ]
+}

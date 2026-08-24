@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "tier_id": "memops50-evidence-distill-answer-v1",
+  "pipeline": {
+    "settings": [
+      "adjacent_operation",
+      "longitudinal_operation"
+    ],
+    "ranker": "production_activity_sqlite_fts5_bm25",
+    "candidate_top_k": 20,
+    "max_selected_evidence": 7,
+    "distiller_tools": false,
+    "answerer_receives_candidate_pool": false,
+    "judge_receives_uncited_evidence": false,
+    "max_prompt_utf8_bytes": 250000,
+    "workers": 4
+  },
+  "model": {
+    "stage": "classifier",
+    "provider": "codex_cli",
+    "model": "gpt-5.6-sol",
+    "reasoning_effort": "none",
+    "temperature": null,
+    "seed": null,
+    "tools": false
+  },
+  "prompts": {
+    "distiller_system_sha256": "f79c881f06cc9f8d07e8b27640befdf39788df8270310ef320bbd9ea0335884a",
+    "answerer_system_sha256": "133d3c4f2dafea6357a6b0286d5d5d5f88a11514871e43b83d46e9bba54248bd",
+    "faithfulness_judge_system_sha256": "ab34a734e8e09f972d7ed834e34114db0ca07bb4603201a3db98022eb9b53e18",
+    "correctness_judge_system_sha256": "84249ad192182bbdb3a6afe91f1fc5cd571e1f9d0d7998351b2a9514a7919edc",
+    "user_prompt_templates_sha256": "9686697375a57abc7bb3c0b6bd339112d130683a08d4cd765843a1cbeec94efd"
+  },
+  "gates": {
+    "pipeline_valid_rate_min": 1.0,
+    "candidate_turn_recall_macro_at_k_min": 0.98,
+    "candidate_segment_recall_macro_at_k_min": 0.98,
+    "candidate_complete_case_recall_rate_min": 0.94,
+    "selector_oracle_efficiency_macro_min": 0.9,
+    "selected_gold_turn_recall_macro_min": 0.85,
+    "selected_gold_segment_recall_macro_min": 0.9,
+    "selected_evidence_precision_micro_min": 0.6,
+    "selected_budgeted_complete_rate_min": 0.8,
+    "unexpected_empty_selection_rate_max": 0.0,
+    "selected_injected_distractor_turn_share_max": 0.05,
+    "answer_accuracy_min": 0.86,
+    "answer_accuracy_each_operation_min": 0.7,
+    "fully_supported_answer_part_rate_min": 0.95,
+    "fully_faithful_answer_rate_min": 0.9,
+    "citation_entailment_precision_min": 0.95,
+    "citation_completeness_rate_min": 0.9,
+    "harmful_extra_rate_max": 0.0,
+    "forget_leakage_rate_max": 0.0,
+    "forget_leakage_applicable_count_min": 1,
+    "over_forget_rate_max": 0.0,
+    "over_forget_applicable_count_min": 1,
+    "update_stale_value_rate_max": 0.0,
+    "update_stale_value_applicable_count_min": 1,
+    "reflect_precision_rate_min": 0.9,
+    "reflect_precision_applicable_count_min": 1,
+    "reflect_recall_rate_min": 0.9,
+    "reflect_recall_applicable_count_min": 1,
+    "selected_context_reduction_ratio_min": 0.9,
+    "answer_accuracy_drop_max": 0.1,
+    "repository_clean_required": true
+  }
+}

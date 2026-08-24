@@ -1,0 +1,208 @@
+{
+  "dataset": {
+    "case_count": 7,
+    "entry_count": 6,
+    "id": "OC-Vida-Memory-Fixtures-v1",
+    "path": "benchmarks/vida-memory-v1/fixtures/cases.json",
+    "sha256": "90e43900f89158eae09e014b3def6b6ea724ba5cbb6c80b7b2e24d8246305ebb",
+    "split": "retrieval-lifecycle-dev-v1"
+  },
+  "environment": {
+    "implementation": "CPython",
+    "machine": "arm64",
+    "platform": "macOS-26.5.2-arm64-arm-64bit",
+    "python": "3.11.15"
+  },
+  "evaluation_id": "vida-memory-retrieval-v1",
+  "latency_repeats": 5,
+  "metric_contract": {
+    "path": "benchmarks/vida-memory-v1/json/metric_contract.json",
+    "sha256": "a789d080c10fa08c89b7547cf1f71f0182bc6b0ed9253af22392cfb0bd2a06ae"
+  },
+  "repository": {
+    "commit": "d73d074b2cc3d716962d82db65bd632b11a0fd97",
+    "dirty": false,
+    "status_lines": 0
+  },
+  "schema_version": 1,
+  "variant": {
+    "cases": [
+      {
+        "abstained": false,
+        "case_id": "exact-editor-preference",
+        "category": "exact",
+        "expected_keys": [
+          "typora_preference"
+        ],
+        "forbidden_hits": [],
+        "forbidden_keys": [],
+        "latency_ms": 3.039917,
+        "passed": true,
+        "query": "Typora Markdown",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_keys": [
+          "typora_preference"
+        ],
+        "source_identity_valid": true
+      },
+      {
+        "abstained": false,
+        "case_id": "semantic-editor-paraphrase",
+        "category": "semantic",
+        "expected_keys": [
+          "typora_preference"
+        ],
+        "forbidden_hits": [],
+        "forbidden_keys": [],
+        "latency_ms": 2.597375,
+        "passed": true,
+        "query": "long document writing application",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_keys": [
+          "typora_preference"
+        ],
+        "source_identity_valid": true
+      },
+      {
+        "abstained": false,
+        "case_id": "cross-language-local-database",
+        "category": "cross_language",
+        "expected_keys": [
+          "openchronicle_database"
+        ],
+        "forbidden_hits": [],
+        "forbidden_keys": [],
+        "latency_ms": 2.14125,
+        "passed": true,
+        "query": "本地 数据库",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_keys": [
+          "openchronicle_database",
+          "atlas_database",
+          "apollo_database"
+        ],
+        "source_identity_valid": true
+      },
+      {
+        "abstained": false,
+        "case_id": "current-model-excludes-stale",
+        "category": "knowledge_update",
+        "expected_keys": [
+          "timeline_model_current"
+        ],
+        "forbidden_hits": [],
+        "forbidden_keys": [
+          "timeline_model_old"
+        ],
+        "latency_ms": 2.484917,
+        "passed": true,
+        "query": "timeline model",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_keys": [
+          "timeline_model_current"
+        ],
+        "source_identity_valid": true
+      },
+      {
+        "abstained": false,
+        "case_id": "historical-model-opt-in",
+        "category": "history",
+        "expected_keys": [
+          "timeline_model_old"
+        ],
+        "forbidden_hits": [],
+        "forbidden_keys": [],
+        "latency_ms": 2.943333,
+        "passed": true,
+        "query": "gpt-5.4-nano",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_keys": [
+          "timeline_model_old"
+        ],
+        "source_identity_valid": true
+      },
+      {
+        "abstained": false,
+        "case_id": "entity-isolation-atlas",
+        "category": "entity",
+        "expected_keys": [
+          "atlas_database"
+        ],
+        "forbidden_hits": [],
+        "forbidden_keys": [
+          "apollo_database"
+        ],
+        "latency_ms": 2.444833,
+        "passed": true,
+        "query": "Atlas database",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_keys": [
+          "atlas_database"
+        ],
+        "source_identity_valid": true
+      },
+      {
+        "abstained": true,
+        "case_id": "abstain-unrecorded-passport",
+        "category": "abstention",
+        "expected_keys": [],
+        "forbidden_hits": [],
+        "forbidden_keys": [],
+        "latency_ms": 2.287542,
+        "passed": true,
+        "query": "passport number",
+        "recall_at_k": 1.0,
+        "reciprocal_rank": 0.0,
+        "retrieved_keys": [],
+        "source_identity_valid": true
+      }
+    ],
+    "embedding_model": "fastembed:sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "gate_verdict": {
+      "checks": {
+        "abstention_accuracy": true,
+        "forbidden_hit_rate": true,
+        "latency_p95_ms": true,
+        "mean_reciprocal_rank": true,
+        "recall_at_k": true,
+        "semantic_recall_at_k": true,
+        "source_identity_coverage": true
+      },
+      "passed": true
+    },
+    "id": "production_hybrid_rrf",
+    "index_sync": {
+      "indexed": 6,
+      "latency_ms": 32.580709,
+      "model_id": "fastembed:sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "removed": 0,
+      "reused": 0
+    },
+    "metrics": {
+      "abstention_accuracy": 1.0,
+      "case_pass_rate": 1.0,
+      "category_recall_at_k": {
+        "abstention": 1.0,
+        "cross_language": 1.0,
+        "entity": 1.0,
+        "exact": 1.0,
+        "history": 1.0,
+        "knowledge_update": 1.0,
+        "semantic": 1.0
+      },
+      "forbidden_hit_rate": 0.0,
+      "latency_p95_ms": 3.039917,
+      "mean_reciprocal_rank": 1.0,
+      "recall_at_k": 1.0,
+      "semantic_recall_at_k": 1.0,
+      "source_identity_coverage": 1.0
+    },
+    "semantic_min_similarity": 0.3
+  }
+}

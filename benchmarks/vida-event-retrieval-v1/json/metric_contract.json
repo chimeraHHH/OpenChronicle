@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "evaluation_id": "vida-event-retrieval-v1",
+  "gates": {
+    "min_answerable_rate": 1.0,
+    "min_anchor_recall": 1.0,
+    "max_forbidden_anchor_rate": 0.3,
+    "min_anchor_recall_lift_vs_minute": 0.25,
+    "max_context_chars_ratio_vs_session": 0.75,
+    "min_forbidden_anchor_rate_reduction_vs_session": 0.6
+  }
+}

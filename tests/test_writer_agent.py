@@ -8,15 +8,16 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from openchronicle import config as config_mod
+from openchronicle.provenance import store as provenance_store
+from openchronicle.provenance.models import EvidenceRef, content_digest
 from openchronicle.session import store as session_store
+from openchronicle.store import entries as entries_store
+from openchronicle.store import files as files_store
 from openchronicle.store import fts
 from openchronicle.timeline import store as timeline_store
 from openchronicle.writer import agent
 from openchronicle.writer import llm as llm_mod
-
 
 _TZ = timezone(timedelta(hours=8))
 
@@ -39,38 +40,71 @@ def test_writer_run_noop_when_nothing_pending(ac_root: Path) -> None:
     assert result.written_ids == []
 
 
-def test_writer_run_reduces_pending_and_classifies(
-    ac_root: Path, monkeypatch
-) -> None:
+def test_writer_run_reduces_pending_and_classifies(ac_root: Path, monkeypatch) -> None:
     """One stranded `ended` session → reducer runs → classifier runs."""
     start = datetime(2026, 4, 21, 9, 0, tzinfo=_TZ)
     end = start + timedelta(minutes=5)
     with fts.cursor() as conn:
-        timeline_store.insert(
+        block = timeline_store.TimelineBlock(
+            start_time=start,
+            end_time=end,
+            entries=["[Cursor] editing, involving —"],
+            apps_used=["Cursor"],
+            capture_count=1,
+        )
+        timeline_store.insert(conn, block)
+        source_body = "Manual writer agent fixture source."
+        entries_store.create_file(
             conn,
-            timeline_store.TimelineBlock(
-                start_time=start,
-                end_time=end,
-                entries=["[Cursor] editing, involving —"],
-                apps_used=["Cursor"],
-                capture_count=1,
-            ),
+            name="user-writer-agent-source.md",
+            description="test source",
+            tags=["test"],
+        )
+        source_id = entries_store.append_entry(
+            conn,
+            name="user-writer-agent-source.md",
+            content=source_body,
+            tags=["manual"],
+            origin=files_store.MANUAL_ENTRY_ORIGIN,
+        )
+        provenance_store.replace_sources(
+            conn,
+            subject=EvidenceRef(kind="timeline_block", id=block.id),
+            sources=[
+                EvidenceRef(
+                    kind="memory_entry",
+                    id=source_id,
+                    path="user-writer-agent-source.md",
+                    content_hash=content_digest(source_body),
+                )
+            ],
         )
         session_store.insert(
             conn,
             session_store.SessionRow(
-                id="sess_cli", start_time=start, end_time=end, status="ended",
+                id="sess_cli",
+                start_time=start,
+                end_time=end,
+                status="ended",
             ),
         )
 
     # Reducer: one LLM call that returns sub_tasks. Classifier: one commit call.
     reducer_resp = SimpleNamespace(
-        choices=[SimpleNamespace(message=SimpleNamespace(
-            content=json.dumps(
-                {"summary": "cursor work", "sub_tasks": ["[09:00-09:05, Cursor] edit, involving —"]}
-            ),
-            tool_calls=[],
-        ), finish_reason="stop")]
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=json.dumps(
+                        {
+                            "summary": "cursor work",
+                            "sub_tasks": ["[09:00-09:05, Cursor] edit, involving —"],
+                        }
+                    ),
+                    tool_calls=[],
+                ),
+                finish_reason="stop",
+            )
+        ]
     )
     classifier_resp = _choice_response([_tool_call("commit", {"summary": ""}, cid="c1")])
     script = [reducer_resp, classifier_resp]

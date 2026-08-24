@@ -17,6 +17,11 @@ class AXCaptureResult:
     timestamp: str
     apps: list[dict[str, Any]]
     metadata: dict[str, Any] = field(default_factory=dict)
+    # Transport-level proof validated and stripped by MacAXHelperProvider.
+    # This is deliberately separate from provider metadata and raw AX content:
+    # URL policy may require it, but it is never persisted.
+    tree_complete_verified: bool = False
+    effective_max_depth: int | None = None
 
 
 def ax_tree_to_markdown(ax_tree: dict[str, Any]) -> str:
