@@ -10,11 +10,7 @@ from openchronicle.evaluation import memops50_retrieval as retrieval
 
 ROOT = Path(__file__).resolve().parents[1]
 CONTRACT = (
-    ROOT
-    / "benchmarks"
-    / "memops50-lifecycle-v1"
-    / "json"
-    / "evidence_answer_metric_contract.json"
+    ROOT / "benchmarks" / "memops50-lifecycle-v1" / "json" / "evidence_answer_metric_contract.json"
 )
 
 
@@ -84,9 +80,7 @@ def test_prediction_parsers_enforce_exact_evidence_boundaries() -> None:
         evaluation.parse_answer_prediction(
             {
                 "abstained": False,
-                "answer_parts": [
-                    {"part_id": "P1", "text": "blue", "evidence_refs": ["R01-T01"]}
-                ],
+                "answer_parts": [{"part_id": "P1", "text": "blue", "evidence_refs": ["R01-T01"]}],
             },
             selected_refs={"R02-T01"},
         )
@@ -104,11 +98,7 @@ def test_answer_prompt_contains_only_distilled_evidence() -> None:
         evaluation.Candidate(
             2,
             2,
-            (
-                evaluation.CandidateTurn(
-                    "R02-T01", 2, 1, "user", "selected current value"
-                ),
-            ),
+            (evaluation.CandidateTurn("R02-T01", 2, 1, "user", "selected current value"),),
             False,
             "strict_and",
         ),
@@ -120,17 +110,30 @@ def test_answer_prompt_contains_only_distilled_evidence() -> None:
     assert "unselected secret" not in prompt
 
 
+def test_calibrated_system_prompts_freeze_coverage_and_support_rules() -> None:
+    distiller = evaluation.DISTILL_SYSTEM_PROMPT
+    answerer = evaluation.ANSWER_SYSTEM_PROMPT
+    faithfulness = evaluation.FAITHFULNESS_SYSTEM_PROMPT
+
+    assert "Cover every requested subpart and lifecycle boundary" in distiller
+    assert "do not fill unused capacity" in distiller
+    assert '"selected" exactly when the' in distiller
+    assert '"insufficient" exactly when it is empty' in distiller
+    assert "one atomic claim per answer part" in answerer
+    assert "answer every\nquestion subpart" in answerer
+    assert "tentative, one-off" in answerer
+    assert "supported boundary or\ncounterexample" in answerer
+    assert "fully_supported means nonempty" in faithfulness
+    assert "partially_supported means\nnonempty" in faithfulness
+    assert "unsupported or\ncontradicted means empty" in faithfulness
+    assert "fixed abstention" in faithfulness
+
+
 def test_prompt_roles_isolate_gold_and_uncited_evidence() -> None:
     case = _case()
-    cited = evaluation.CandidateTurn(
-        "R01-T01", 1, 1, "user", "CITED_EVIDENCE_CANARY"
-    )
-    uncited = evaluation.CandidateTurn(
-        "R01-T02", 1, 2, "assistant", "UNCITED_EVIDENCE_CANARY"
-    )
-    candidates = (
-        evaluation.Candidate(1, 1, (cited, uncited), False, "strict_and"),
-    )
+    cited = evaluation.CandidateTurn("R01-T01", 1, 1, "user", "CITED_EVIDENCE_CANARY")
+    uncited = evaluation.CandidateTurn("R01-T02", 1, 2, "assistant", "UNCITED_EVIDENCE_CANARY")
+    candidates = (evaluation.Candidate(1, 1, (cited, uncited), False, "strict_and"),)
     answer = evaluation.AnswerPrediction(
         False,
         (evaluation.AnswerPart("P1", "blue", (cited.ref,)),),
@@ -158,9 +161,7 @@ def test_abstention_and_faithfulness_consistency_are_strict() -> None:
         evaluation.parse_answer_prediction(
             {
                 "abstained": True,
-                "answer_parts": [
-                    {"part_id": "P1", "text": "blue", "evidence_refs": []}
-                ],
+                "answer_parts": [{"part_id": "P1", "text": "blue", "evidence_refs": []}],
             },
             selected_refs=set(),
         )
@@ -218,15 +219,13 @@ def test_lifecycle_rates_use_only_applicable_rows() -> None:
         "correctness_judge": {"forget_leakage": None, "reflection_recall": None},
     }
 
-    assert evaluation._lifecycle_error_rate(
-        [applicable, not_applicable], "forget_leakage"
-    ) == 1.0
-    assert evaluation._lifecycle_success_rate(
-        [applicable, not_applicable], "reflection_recall"
-    ) == 1.0
-    assert evaluation._lifecycle_applicable_count(
-        [applicable, not_applicable], "forget_leakage"
-    ) == 1
+    assert evaluation._lifecycle_error_rate([applicable, not_applicable], "forget_leakage") == 1.0
+    assert (
+        evaluation._lifecycle_success_rate([applicable, not_applicable], "reflection_recall") == 1.0
+    )
+    assert (
+        evaluation._lifecycle_applicable_count([applicable, not_applicable], "forget_leakage") == 1
+    )
 
 
 def test_validation_ledger_replays_success_without_second_call(tmp_path: Path) -> None:
@@ -414,8 +413,7 @@ def test_lifecycle_applicability_counts_are_gated() -> None:
             observed[key.removesuffix("_max")] = 0.0
     observed["forget_leakage_applicable_count"] = 0
     observed["answer_accuracy_by_operation"] = {
-        operation: 1.0
-        for operation in ("Remember", "Forget", "Update", "Reflect", "TrajectoryOps")
+        operation: 1.0 for operation in ("Remember", "Forget", "Update", "Reflect", "TrajectoryOps")
     }
 
     verdict = evaluation._gate_verdict(
@@ -490,11 +488,7 @@ def test_evaluate_case_separates_distill_answer_and_judge(
         evaluation.Candidate(
             2,
             2,
-            (
-                evaluation.CandidateTurn(
-                    "R02-T01", 2, 1, "user", "The current value is blue."
-                ),
-            ),
+            (evaluation.CandidateTurn("R02-T01", 2, 1, "user", "The current value is blue."),),
             False,
             "strict_and",
         ),
@@ -597,9 +591,7 @@ def test_metrics_do_not_hide_pipeline_failures() -> None:
         "selected_distractor_turn_refs": [],
         "cited_evidence_refs": ["R02-T01"],
         "cited_gold_turn_refs": ["R02-T01"],
-        "answer_parts": [
-            {"part_id": "P1", "text": "blue", "evidence_refs": ["R02-T01"]}
-        ],
+        "answer_parts": [{"part_id": "P1", "text": "blue", "evidence_refs": ["R02-T01"]}],
         "faithfulness_judge": {
             "part_results": [
                 {
@@ -643,6 +635,65 @@ def test_metrics_do_not_hide_pipeline_failures() -> None:
     assert result["answer_accuracy"] == 0.5
     assert result["fully_faithful_answer_rate"] == 0.5
     assert result["selected_gold_turn_recall_macro"] == 0.5
+    assert result["empty_selection_rate"] == 0.5
+    assert result["unexpected_empty_selection_rate"] == 0.5
+
+
+def test_correct_empty_selection_is_not_unexpected() -> None:
+    row = {
+        "operation_type": "Remember",
+        "setting": "adjacent_operation",
+        "applicable_correctness_fields": [],
+        "pipeline_status": "ok",
+        "gold_turn_count": 1,
+        "gold_segment_ids": [1],
+        "candidate_segment_ids": [1],
+        "candidate_turn_count": 1,
+        "candidate_gold_turn_refs": ["R01-T01"],
+        "candidate_gold_segment_ids": [1],
+        "candidate_complete_recall": True,
+        "candidate_reciprocal_rank": 1.0,
+        "candidate_context_chars": 20,
+        "candidate_distractor_segment_ids": [],
+        "budgeted_gold_turn_target": 1,
+        "selected_evidence_refs": [],
+        "selected_gold_turn_refs": [],
+        "selected_segment_ids": [],
+        "selected_gold_segment_ids": [],
+        "selected_budgeted_complete": False,
+        "selected_context_chars": 0,
+        "selected_distractor_turn_refs": [],
+        "cited_evidence_refs": [],
+        "cited_gold_turn_refs": [],
+        "answer_parts": [
+            {
+                "part_id": "P1",
+                "text": evaluation.ABSTENTION_TEXT,
+                "evidence_refs": [],
+            }
+        ],
+        "faithfulness_judge": {
+            "part_results": [
+                {
+                    "part_id": "P1",
+                    "support": "fully_supported",
+                    "entailed_evidence_refs": [],
+                    "citation_complete": True,
+                }
+            ],
+            "all_parts_faithful": True,
+        },
+        "correctness_judge": {"answer_correct": True, "harmful_extra": False},
+        "distill_prompt_utf8_bytes": 100,
+        "answer_prompt_utf8_bytes": 100,
+        "faithfulness_judge_prompt_utf8_bytes": 100,
+        "correctness_judge_prompt_utf8_bytes": 100,
+    }
+
+    result = evaluation.metrics([row])
+
+    assert result["empty_selection_rate"] == 1.0
+    assert result["unexpected_empty_selection_rate"] == 0.0
 
 
 def test_frozen_evidence_answer_contract_is_valid() -> None:
@@ -655,7 +706,7 @@ def test_frozen_evidence_answer_contract_is_valid() -> None:
         "adjacent_operation",
         "longitudinal_operation",
     ]
-    assert contract["pipeline"]["max_selected_evidence"] == 5
+    assert contract["pipeline"]["max_selected_evidence"] == 7
     assert contract["pipeline"]["answerer_receives_candidate_pool"] is False
     assert contract["model"] == {
         "stage": "classifier",

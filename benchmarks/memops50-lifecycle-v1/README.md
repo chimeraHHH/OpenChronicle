@@ -201,7 +201,7 @@ The production activity ranker returns up to 20 conversation segments. The
 distiller sees their dialogue turns under temporary opaque refs such as
 `R03-T05`; it sees no source filename, original segment index, gold carrier,
 distractor label, operation type, difficulty, expected answer, rubric, or gold
-quote. It can select at most five exact turns and cannot answer.
+quote. It can select at most seven exact turns and cannot answer.
 
 The answer model then receives only those selected turns, never the complete
 segments or the remaining top-20 pool. It emits one to eight atomic answer
@@ -217,7 +217,7 @@ identity; faithfulness is invoked separately for every answer part.
 There is no parse retry, rule-based answer, provider fallback, best-of-N, or
 silent prompt truncation. Invalid output makes the case invalid. Reports retain
 response hashes, prompt byte counts, latency, exact candidate/selection refs,
-turn-level recall, five-turn oracle efficiency, selected-evidence precision,
+turn-level recall, seven-turn oracle efficiency, selected-evidence precision,
 citation entailment/completeness, answer accuracy, and operation-specific
 lifecycle errors with applicability counts, adjacent-to-longitudinal answer
 degradation, and context reduction without copying candidate text. A missing

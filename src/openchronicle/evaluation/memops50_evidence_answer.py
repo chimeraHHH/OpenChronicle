@@ -223,11 +223,7 @@ def retrieve_candidates(
         if setting == "adjacent_operation"
         else case.retrieval.longitudinal_units
     )
-    turns = (
-        case.adjacent_turns
-        if setting == "adjacent_operation"
-        else case.longitudinal_turns
-    )
+    turns = case.adjacent_turns if setting == "adjacent_operation" else case.longitudinal_turns
     with (
         tempfile.TemporaryDirectory(prefix="openchronicle-memops50-answer-") as root,
         fts.cursor(Path(root) / "retrieval.db") as conn,
@@ -252,13 +248,9 @@ def retrieve_candidates(
                     role=turn.role,
                     content=turn.content,
                 )
-                for turn in turns_by_segment[
-                    int(hit.session_id.removeprefix("segment-"))
-                ]
+                for turn in turns_by_segment[int(hit.session_id.removeprefix("segment-"))]
             ),
-            distractor=units_by_segment[
-                int(hit.session_id.removeprefix("segment-"))
-            ].distractor,
+            distractor=units_by_segment[int(hit.session_id.removeprefix("segment-"))].distractor,
             query_mode=hit.query_mode,
         )
         for rank, hit in enumerate(hits, start=1)
@@ -266,31 +258,45 @@ def retrieve_candidates(
 
 
 DISTILL_SYSTEM_PROMPT = """You are an evidence selector, not an answer writer.
-Choose the smallest set of supplied dialogue turns that is sufficient to
-answer the question correctly. Return at most the stated limit. Preserve the
-complete lifecycle boundary: updates may require old, tentative, retracted, and
-confirmed evidence; forget questions may require both the deletion request and
-separate retained facts; reflection questions require evidence for both the
-supported pattern and its limits. Do not answer the question. Do not invent or
-quote evidence. Return only the requested JSON object."""
+Cover every requested subpart and lifecycle boundary with supplied dialogue
+turns, then stop. Return at most the stated limit; do not fill unused capacity
+with keyword-only background. Preserve retained neighbors and all evidence
+needed to distinguish old, tentative, retracted, superseded, and confirmed
+states. Forget questions may require both the deletion request and separate
+retained facts. Reflection questions require both the supported pattern and its
+limits or counterexamples. selection_status must be "selected" exactly when the
+refs list is nonempty, and "insufficient" exactly when it is empty. Do not
+answer the question. Do not invent or quote evidence. Return only the requested
+JSON object."""
 
 
 ANSWER_SYSTEM_PROMPT = """Answer only from the selected evidence turns.
-Every factual answer part must be supported by its cited evidence refs. If the selected
-evidence is insufficient, abstain instead of guessing. Respect lifecycle state:
-do not treat stale, tentative, retracted, or superseded values as current. When
-the user asked to forget a raw value, do not reveal that value; name only the
-safe removed target or category when needed. Return only the requested JSON
-object and perform no action. If you abstain, emit exactly one part whose text is
-"Insufficient selected evidence." and whose evidence_refs is empty."""
+Use one atomic claim per answer part, cite every claim, and answer every
+question subpart that the selected evidence supports. Do not add unsupported
+causal, scheduling, or advisory connective claims. If no supported claim can
+answer the question, abstain instead of guessing; do not replace supported
+partial answers with whole-answer abstention. Respect lifecycle state: do not
+treat stale, tentative, one-off, retracted, or superseded values as current or
+as stable preferences. Reflection answers must state the supported boundary or
+counterexample. When the user asked to forget a raw value, do not reveal that
+value; name only the safe removed target or category when needed. Return only
+the requested JSON object and perform no action. If you abstain, emit exactly
+one part whose text is "Insufficient selected evidence." and whose
+evidence_refs is empty."""
 
 
 FAITHFULNESS_SYSTEM_PROMPT = """Independently grade whether each answer part is
 supported by its cited evidence. You receive no expected answer, gold provenance,
 lifecycle label, or hidden context. Treat only the supplied evidence turns as
 evidence. Each part is paired only with the turns it cited; no other selected turn
-is visible. A fixed abstention has no factual claim and is fully supported with
-no entailed refs. Return only the requested JSON object."""
+is visible. Use this exact consistency table: fully_supported means nonempty
+entailed_evidence_refs and citation_complete=true; partially_supported means
+nonempty entailed_evidence_refs and citation_complete=false; unsupported or
+contradicted means empty entailed_evidence_refs and citation_complete=false. A
+fixed abstention has no factual claim and is fully_supported with empty
+entailed_evidence_refs and citation_complete=true. all_parts_faithful is true
+exactly when every part is fully_supported. Return only the requested JSON
+object."""
 
 
 CORRECTNESS_SYSTEM_PROMPT = """Independently grade semantic correctness and
@@ -537,9 +543,7 @@ def parse_answer_prediction(
             )
         )
     if abstained and (
-        len(parts) != 1
-        or parts[0].evidence_refs
-        or parts[0].text != ABSTENTION_TEXT
+        len(parts) != 1 or parts[0].evidence_refs or parts[0].text != ABSTENTION_TEXT
     ):
         raise ValueError("answerer abstention shape is invalid")
     return AnswerPrediction(abstained=abstained, parts=tuple(parts))
@@ -576,8 +580,7 @@ def parse_faithfulness_prediction(
             raise ValueError("faithfulness part result is invalid")
         entailed = item["entailed_evidence_refs"]
         if not isinstance(entailed, list) or any(
-            not isinstance(ref, str) or ref not in answer_part.evidence_refs
-            for ref in entailed
+            not isinstance(ref, str) or ref not in answer_part.evidence_refs for ref in entailed
         ):
             raise ValueError("faithfulness entailed refs are invalid")
         if len(set(entailed)) != len(entailed) or type(item["citation_complete"]) is not bool:
@@ -712,10 +715,7 @@ def evaluate_case(
         if setting == "adjacent_operation"
         else case.retrieval.longitudinal_gold
     )
-    gold_turns = {
-        (location.segment_index, location.turn_index)
-        for location in locations
-    }
+    gold_turns = {(location.segment_index, location.turn_index) for location in locations}
     base = _base_outcome(
         case,
         setting=setting,
@@ -748,19 +748,14 @@ def evaluate_case(
             exc=exc,
             started=started,
             prompt_bytes=(
-                _prompt_bytes(DISTILL_SYSTEM_PROMPT, distill_user)
-                if distill_user
-                else None
+                _prompt_bytes(DISTILL_SYSTEM_PROMPT, distill_user) if distill_user else None
             ),
             response=raw_distill,
         )
 
     selected_ref_set = set(distill.selected_evidence_refs)
     selected = tuple(
-        turn
-        for item in candidates
-        for turn in item.turns
-        if turn.ref in selected_ref_set
+        turn for item in candidates for turn in item.turns if turn.ref in selected_ref_set
     )
     selection = _with_selection(
         base,
@@ -922,9 +917,7 @@ def _base_outcome(
     candidate_ids = [item.segment_id for item in candidates]
     candidate_turns = [turn for item in candidates for turn in item.turns]
     candidate_gold_refs = [
-        turn.ref
-        for turn in candidate_turns
-        if (turn.segment_id, turn.turn_index) in gold_turns
+        turn.ref for turn in candidate_turns if (turn.segment_id, turn.turn_index) in gold_turns
     ]
     candidate_gold_segments = sorted(
         {
@@ -939,10 +932,7 @@ def _base_outcome(
         (
             item.rank
             for item in candidates
-            if any(
-                (turn.segment_id, turn.turn_index) in gold_turns
-                for turn in item.turns
-            )
+            if any((turn.segment_id, turn.turn_index) in gold_turns for turn in item.turns)
         ),
         None,
     )
@@ -953,9 +943,7 @@ def _base_outcome(
         "operation_type": case.retrieval.operation_type,
         "evaluation_type": case.retrieval.evaluation_type,
         "difficulty": case.retrieval.difficulty,
-        "applicable_correctness_fields": sorted(
-            _applicable_correctness_fields(case)
-        ),
+        "applicable_correctness_fields": sorted(_applicable_correctness_fields(case)),
         "query_sha256": hashlib.sha256(case.retrieval.query.encode()).hexdigest(),
         "gold_turn_count": len(gold_turns),
         "gold_segment_ids": sorted(gold_segments),
@@ -1015,16 +1003,10 @@ def _with_selection(
 ) -> dict[str, Any]:
     result = dict(outcome)
     selected_gold = [
-        turn.ref
-        for turn in selected
-        if (turn.segment_id, turn.turn_index) in gold_turns
+        turn.ref for turn in selected if (turn.segment_id, turn.turn_index) in gold_turns
     ]
     selected_gold_segments = sorted(
-        {
-            turn.segment_id
-            for turn in selected
-            if (turn.segment_id, turn.turn_index) in gold_turns
-        }
+        {turn.segment_id for turn in selected if (turn.segment_id, turn.turn_index) in gold_turns}
     )
     distractor_segments = set(outcome["candidate_distractor_segment_ids"])
     result.update(
@@ -1057,9 +1039,7 @@ def _with_answer(
     response: object,
 ) -> dict[str, Any]:
     result = dict(outcome)
-    cited = list(
-        dict.fromkeys(ref for part in answer.parts for ref in part.evidence_refs)
-    )
+    cited = list(dict.fromkeys(ref for part in answer.parts for ref in part.evidence_refs))
     selected_gold_refs = set(outcome["selected_gold_turn_refs"])
     result.update(
         cited_evidence_refs=cited,
@@ -1183,9 +1163,7 @@ def _validate_correctness_applicability(
     }
     for output_field, value in values.items():
         if (output_field in applicable_fields) != isinstance(value, bool):
-            raise ValueError(
-                f"correctness judge applicability is invalid: {output_field}"
-            )
+            raise ValueError(f"correctness judge applicability is invalid: {output_field}")
 
 
 def _applicable_correctness_fields(case: EvidenceAnswerCase) -> set[str]:
@@ -1219,13 +1197,9 @@ def metrics(outcomes: Sequence[dict[str, Any]]) -> dict[str, Any]:
     gold_turn_count = sum(int(row["gold_turn_count"]) for row in outcomes)
     gold_segment_count = sum(len(row["gold_segment_ids"]) for row in outcomes)
     candidate_gold_turns = sum(len(row["candidate_gold_turn_refs"]) for row in outcomes)
-    candidate_gold_segments = sum(
-        len(row["candidate_gold_segment_ids"]) for row in outcomes
-    )
+    candidate_gold_segments = sum(len(row["candidate_gold_segment_ids"]) for row in outcomes)
     selected_gold_turns = sum(len(row["selected_gold_turn_refs"]) for row in outcomes)
-    selected_gold_segments = sum(
-        len(row["selected_gold_segment_ids"]) for row in outcomes
-    )
+    selected_gold_segments = sum(len(row["selected_gold_segment_ids"]) for row in outcomes)
     cited_gold_turns = sum(len(row["cited_gold_turn_refs"]) for row in outcomes)
     candidate_chars = sum(int(row["candidate_context_chars"]) for row in outcomes)
     selected_chars = sum(int(row["selected_context_chars"]) for row in outcomes)
@@ -1240,16 +1214,11 @@ def metrics(outcomes: Sequence[dict[str, Any]]) -> dict[str, Any]:
         if isinstance(row.get("faithfulness_judge"), dict)
     ]
     faith_parts = [
-        part
-        for judge in faithfulness
-        for part in judge["part_results"]
-        if isinstance(part, dict)
+        part for judge in faithfulness for part in judge["part_results"] if isinstance(part, dict)
     ]
     entailed_citations = sum(len(part["entailed_evidence_refs"]) for part in faith_parts)
     part_citations = sum(
-        len(part["evidence_refs"])
-        for row in outcomes
-        for part in row["answer_parts"]
+        len(part["evidence_refs"]) for row in outcomes for part in row["answer_parts"]
     )
     forget_rows = [row for row in outcomes if row["operation_type"] == "Forget"]
     update_rows = [row for row in outcomes if row["operation_type"] == "Update"]
@@ -1262,10 +1231,7 @@ def metrics(outcomes: Sequence[dict[str, Any]]) -> dict[str, Any]:
             count,
         ),
         "candidate_turn_recall_macro_at_k": round(
-            sum(
-                len(row["candidate_gold_turn_refs"]) / row["gold_turn_count"]
-                for row in outcomes
-            )
+            sum(len(row["candidate_gold_turn_refs"]) / row["gold_turn_count"] for row in outcomes)
             / count,
             6,
         ),
@@ -1294,10 +1260,7 @@ def metrics(outcomes: Sequence[dict[str, Any]]) -> dict[str, Any]:
             6,
         ),
         "selected_gold_turn_recall_macro": round(
-            sum(
-                len(row["selected_gold_turn_refs"]) / row["gold_turn_count"]
-                for row in outcomes
-            )
+            sum(len(row["selected_gold_turn_refs"]) / row["gold_turn_count"] for row in outcomes)
             / count,
             6,
         ),
@@ -1337,11 +1300,20 @@ def metrics(outcomes: Sequence[dict[str, Any]]) -> dict[str, Any]:
             sum(not row["selected_evidence_refs"] for row in outcomes),
             count,
         ),
-        "citation_gold_turn_recall_macro": round(
+        "unexpected_empty_selection_rate": _ratio(
             sum(
-                len(row["cited_gold_turn_refs"]) / row["gold_turn_count"]
+                not row["selected_evidence_refs"]
+                and (
+                    row.get("pipeline_status") != "ok"
+                    or not isinstance(row.get("correctness_judge"), dict)
+                    or row["correctness_judge"].get("answer_correct") is not True
+                )
                 for row in outcomes
-            )
+            ),
+            count,
+        ),
+        "citation_gold_turn_recall_macro": round(
+            sum(len(row["cited_gold_turn_refs"]) / row["gold_turn_count"] for row in outcomes)
             / count,
             6,
         ),
@@ -1469,7 +1441,13 @@ def metrics(outcomes: Sequence[dict[str, Any]]) -> dict[str, Any]:
         ),
         "answer_accuracy_by_operation": {
             operation: _operation_answer_accuracy(outcomes, operation)
-            for operation in ("Remember", "Forget", "Update", "Reflect", "TrajectoryOps")
+            for operation in (
+                "Remember",
+                "Forget",
+                "Update",
+                "Reflect",
+                "TrajectoryOps",
+            )
         },
         "answer_accuracy_when_candidate_complete": _conditional_answer_accuracy(
             outcomes,
@@ -1547,9 +1525,7 @@ def _conditional_answer_accuracy(
     *,
     candidate_complete: bool,
 ) -> float | None:
-    selected = [
-        row for row in rows if bool(row["candidate_complete_recall"]) is candidate_complete
-    ]
+    selected = [row for row in rows if bool(row["candidate_complete_recall"]) is candidate_complete]
     if not selected:
         return None
     return _ratio(
@@ -1663,8 +1639,7 @@ class _ValidationLedger:
                     conn.execute("PRAGMA synchronous=FULL")
                     conn.executescript(self._SCHEMA)
                     conn.execute(
-                        "INSERT INTO validation_run VALUES "
-                        "(1, ?, 'AUTHORIZED', ?, NULL, NULL)",
+                        "INSERT INTO validation_run VALUES (1, ?, 'AUTHORIZED', ?, NULL, NULL)",
                         (self.run_id, encoded),
                     )
                 descriptor = os.open(initializing, os.O_RDONLY)
@@ -1689,23 +1664,17 @@ class _ValidationLedger:
                 _acquire_validation_lock(path)
                 with self._connect() as conn:
                     row = conn.execute(
-                        "SELECT run_id, state, frozen_json FROM validation_run "
-                        "WHERE singleton=1"
+                        "SELECT run_id, state, frozen_json FROM validation_run WHERE singleton=1"
                     ).fetchone()
                     if row is None or row[0] != self.run_id or row[2] != encoded:
                         raise ValueError("validation ledger frozen inputs changed")
                     if row[1] == "INVALID":
-                        raise ValueError(
-                            "validation ledger is invalid and cannot be resumed"
-                        )
+                        raise ValueError("validation ledger is invalid and cannot be resumed")
                     dispatched = conn.execute(
-                        "SELECT COUNT(*) FROM validation_stage "
-                        "WHERE status='DISPATCHED'"
+                        "SELECT COUNT(*) FROM validation_stage WHERE status='DISPATCHED'"
                     ).fetchone()[0]
                     if dispatched:
-                        conn.execute(
-                            "UPDATE validation_run SET state='INVALID' WHERE singleton=1"
-                        )
+                        conn.execute("UPDATE validation_run SET state='INVALID' WHERE singleton=1")
                         conn.commit()
                         raise ValueError(
                             "validation ledger contains an ambiguous dispatched model call"
@@ -1721,9 +1690,7 @@ class _ValidationLedger:
 
     def state(self) -> str:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT state FROM validation_run WHERE singleton=1"
-            ).fetchone()
+            row = conn.execute("SELECT state FROM validation_run WHERE singleton=1").fetchone()
         if row is None:
             raise ValueError("validation ledger run is missing")
         return str(row[0])
@@ -1738,8 +1705,7 @@ class _ValidationLedger:
     def completed_report(self) -> dict[str, Any] | None:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT state, report_sha256, report_json FROM validation_run "
-                "WHERE singleton=1"
+                "SELECT state, report_sha256, report_json FROM validation_run WHERE singleton=1"
             ).fetchone()
         if row is None or row[0] not in {"REPORT_READY", "COMPLETE"}:
             return None
@@ -1792,9 +1758,7 @@ class _ValidationLedger:
                     if row[0] == "SUCCEEDED":
                         return _decode_ledger_response(str(row[2]))
                     if row[0] == "FAILED":
-                        raise RuntimeError(
-                            f"recorded validation provider failure: {row[3]}"
-                        )
+                        raise RuntimeError(f"recorded validation provider failure: {row[3]}")
                     raise ValueError("validation stage has an ambiguous status")
                 conn.execute(
                     "INSERT INTO validation_stage "
@@ -1859,16 +1823,17 @@ class _ValidationLedger:
             ).fetchone()
             if row != ("REPORT_READY", digest):
                 raise ValueError("validation report differs from the ledger")
-            conn.execute(
-                "UPDATE validation_run SET state='COMPLETE' WHERE singleton=1"
-            )
+            conn.execute("UPDATE validation_run SET state='COMPLETE' WHERE singleton=1")
 
 
 def _encode_ledger_response(response: object) -> str:
     if not isinstance(response, (str, dict)):
         raise ValueError("validation provider response type cannot be recorded")
     return json.dumps(
-        {"kind": "string" if isinstance(response, str) else "object", "value": response},
+        {
+            "kind": "string" if isinstance(response, str) else "object",
+            "value": response,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -1904,21 +1869,13 @@ def run_evaluation(
     manifest = memops50._load_json(manifest_bytes, label="MemOps manifest")
     if not isinstance(manifest, dict):
         raise ValueError("MemOps manifest is invalid")
-    validation_tier = (
-        manifest.get("tier_id") == "memops50-validation-adjacent-longitudinal-v1"
-    )
+    validation_tier = manifest.get("tier_id") == "memops50-validation-adjacent-longitudinal-v1"
     ignored_validation_artifacts: tuple[Path, ...] = ()
     if validation_tier:
         if prepare_validation == resume_validation:
-            raise ValueError(
-                "validation requires exactly one of prepare or resume validation"
-            )
-        canonical_ledger, canonical_output = _canonical_validation_artifact_paths(
-            repository_root
-        )
-        if validation_ledger_path is None or validation_ledger_path.resolve() != (
-            canonical_ledger
-        ):
+            raise ValueError("validation requires exactly one of prepare or resume validation")
+        canonical_ledger, canonical_output = _canonical_validation_artifact_paths(repository_root)
+        if validation_ledger_path is None or validation_ledger_path.resolve() != (canonical_ledger):
             raise ValueError("validation ledger path is not the canonical tier path")
         if output_path is None or output_path.resolve() != canonical_output:
             raise ValueError("validation output path is not the canonical tier path")
@@ -2006,8 +1963,7 @@ def run_evaluation(
             setting, index = pending[future]
             outcomes[setting][index] = future.result()
     completed = {
-        setting: [row for row in rows if row is not None]
-        for setting, rows in outcomes.items()
+        setting: [row for row in rows if row is not None] for setting, rows in outcomes.items()
     }
     if any(len(rows) != len(cases) for rows in completed.values()):
         raise RuntimeError("evidence-answer evaluation lost a setting-specific case")
@@ -2092,9 +2048,7 @@ def _validation_frozen_inputs(
             (repository_root / "scripts/run_memops50_evidence_answer.py").read_bytes()
         ),
         "provider": provider_identity,
-        "validation_ledger_path": str(
-            validation_ledger_path.relative_to(repository_root)
-        ),
+        "validation_ledger_path": str(validation_ledger_path.relative_to(repository_root)),
         "output_path": str(output_path.relative_to(repository_root)),
         "settings": list(_SETTINGS),
         "row_count": 100,
@@ -2104,12 +2058,7 @@ def _validation_frozen_inputs(
 def _canonical_validation_artifact_paths(
     repository_root: Path,
 ) -> tuple[Path, Path]:
-    result_root = (
-        repository_root.resolve()
-        / "benchmarks"
-        / "memops50-validation-v1"
-        / "results"
-    )
+    result_root = repository_root.resolve() / "benchmarks" / "memops50-validation-v1" / "results"
     return (
         result_root / "evidence-answer-v1.ledger.sqlite",
         result_root / "evidence-answer-v1.json",
@@ -2150,8 +2099,7 @@ def _setting_comparisons(
             6,
         ),
         "fully_faithful_answer_rate_drop": round(
-            adjacent["fully_faithful_answer_rate"]
-            - longitudinal["fully_faithful_answer_rate"],
+            adjacent["fully_faithful_answer_rate"] - longitudinal["fully_faithful_answer_rate"],
             6,
         ),
     }
@@ -2189,7 +2137,7 @@ def _validate_contract(contract: object) -> None:
         pipeline["settings"] != list(_SETTINGS)
         or pipeline["ranker"] != "production_activity_sqlite_fts5_bm25"
         or pipeline["candidate_top_k"] != 20
-        or pipeline["max_selected_evidence"] != 5
+        or pipeline["max_selected_evidence"] != 7
         or pipeline["distiller_tools"] is not False
         or pipeline["answerer_receives_candidate_pool"] is not False
         or pipeline["judge_receives_uncited_evidence"] is not False
@@ -2214,12 +2162,8 @@ def _validate_contract(contract: object) -> None:
         raise ValueError("evidence-answer model execution contract changed")
     prompts = contract["prompts"]
     expected_prompts = {
-        "distiller_system_sha256": hashlib.sha256(
-            DISTILL_SYSTEM_PROMPT.encode()
-        ).hexdigest(),
-        "answerer_system_sha256": hashlib.sha256(
-            ANSWER_SYSTEM_PROMPT.encode()
-        ).hexdigest(),
+        "distiller_system_sha256": hashlib.sha256(DISTILL_SYSTEM_PROMPT.encode()).hexdigest(),
+        "answerer_system_sha256": hashlib.sha256(ANSWER_SYSTEM_PROMPT.encode()).hexdigest(),
         "faithfulness_judge_system_sha256": hashlib.sha256(
             FAITHFULNESS_SYSTEM_PROMPT.encode()
         ).hexdigest(),
@@ -2241,7 +2185,7 @@ def _validate_contract(contract: object) -> None:
         "selected_gold_segment_recall_macro_min",
         "selected_evidence_precision_micro_min",
         "selected_budgeted_complete_rate_min",
-        "empty_selection_rate_max",
+        "unexpected_empty_selection_rate_max",
         "selected_injected_distractor_turn_share_max",
         "answer_accuracy_min",
         "answer_accuracy_each_operation_min",
@@ -2341,31 +2285,20 @@ def _repository_state(
                 f"{relative}-wal",
                 f"{relative}.lock",
                 str(relative_path.with_name(f".{relative_path.name}.initializing")),
-                str(
-                    relative_path.with_name(
-                        f".{relative_path.name}.initializing-journal"
-                    )
-                ),
-                str(
-                    relative_path.with_name(f".{relative_path.name}.initializing-shm")
-                ),
-                str(
-                    relative_path.with_name(f".{relative_path.name}.initializing-wal")
-                ),
+                str(relative_path.with_name(f".{relative_path.name}.initializing-journal")),
+                str(relative_path.with_name(f".{relative_path.name}.initializing-shm")),
+                str(relative_path.with_name(f".{relative_path.name}.initializing-wal")),
                 str(relative_path.with_name(f".{relative_path.name}.publishing")),
             }
         )
     status_lines = [
-        line
-        for line in raw_status.splitlines()
-        if len(line) < 4 or line[3:] not in ignored
+        line for line in raw_status.splitlines() if len(line) < 4 or line[3:] not in ignored
     ]
     return {
         "commit": git("rev-parse", "HEAD"),
         "dirty": bool(status_lines),
         "status_lines": len(status_lines),
-        "ignored_artifact_status_lines": len(raw_status.splitlines())
-        - len(status_lines),
+        "ignored_artifact_status_lines": len(raw_status.splitlines()) - len(status_lines),
     }
 
 
@@ -2409,9 +2342,7 @@ def _publish_validation_report(output: Path, encoded: str) -> None:
             os.link(publishing, output)
         except FileExistsError:
             if output.read_text(encoding="utf-8") != encoded:
-                raise ValueError(
-                    "validation output appeared with other bytes"
-                ) from None
+                raise ValueError("validation output appeared with other bytes") from None
         _fsync_directory(output.parent)
     finally:
         publishing.unlink(missing_ok=True)
@@ -2422,8 +2353,7 @@ def _complete_validation_ledger(path: Path, encoded_report: str) -> None:
     try:
         with sqlite3.connect(path, timeout=30) as conn:
             row = conn.execute(
-                "SELECT state, report_sha256, report_json FROM validation_run "
-                "WHERE singleton=1"
+                "SELECT state, report_sha256, report_json FROM validation_run WHERE singleton=1"
             ).fetchone()
             if row is None or row[1] != digest or row[2] != encoded_report:
                 raise ValueError("validation report differs from its ledger")
@@ -2443,9 +2373,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--contract",
         type=Path,
-        default=Path(
-            "benchmarks/memops50-lifecycle-v1/json/evidence_answer_metric_contract.json"
-        ),
+        default=Path("benchmarks/memops50-lifecycle-v1/json/evidence_answer_metric_contract.json"),
     )
     parser.add_argument("--config", type=Path)
     parser.add_argument("--output", type=Path)

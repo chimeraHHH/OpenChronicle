@@ -548,7 +548,7 @@ held-out claim. Reproduction details live in
    overlap against the first 100 cases. Its dataset structure is verified, but
    its retrieval, distillation, answer, and judge results remain unobserved.
 4. The development evaluator now implements `candidate top-20 -> tools-free
-   turn selector -> at most five opaque exact turn refs -> cited answer` for
+   turn selector -> at most seven opaque exact turn refs -> cited answer` for
    both adjacent and longitudinal settings (50 logical pairs, 100 rows). The
    answer model cannot see complete selected segments or the discarded pool.
 5. Faithfulness and correctness are deliberately split: the faithfulness judge
@@ -557,7 +557,7 @@ held-out claim. Reproduction details live in
    retrieved evidence. Both are isolated passes of the frozen Sol identity.
    Gold-absent candidate pools score zero selector efficiency, lifecycle rates
    use only applicable rows and report those counts, and abstention has one
-   exact machine-checkable form. Gate turn/segment recall, five-turn oracle
+   exact machine-checkable form. Gate turn/segment recall, seven-turn oracle
    efficiency, selected precision, answer accuracy, citation
    entailment/completeness, stale/forget leakage, adjacent-to-longitudinal
    accuracy drop, context bytes, and per-stage latency together. Codex CLI
