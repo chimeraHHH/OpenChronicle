@@ -25,7 +25,7 @@
   },
   "selector": {
     "type": "local_exact_turn_cross_encoder",
-    "model_artifact_manifest_sha256": "a819bd6ba1b527fd64947ba9282d00f2009ff7285257f167be9e768d1b74191f",
+    "model_artifact_manifest_sha256": "83442e51ef942743cbe7880da5ddc2ab01bdffc96560f7662201651ac1295c93",
     "provider_calls": 0,
     "remote_io": 0,
     "fallback_calls": 0,
