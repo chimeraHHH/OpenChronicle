@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "canonicalization": "sorted-source-file-list-json-v1",
+  "tiers": [
+    {
+      "tier_id": "memops50-adjacent-longitudinal-v1",
+      "source_file_count": 50,
+      "source_ids_sha256": "5b343a2322a2af42f5ba102d94a0283bcd2edf8fe52d6a28c5cf645d2ad4026f",
+      "source_files": [
+        "A02_forget.json", "A02_trajectory_ops.json", "A05_reflect.json", "A06_update.json", "A16_reflect.json",
+        "A16_remember.json", "A19_remember.json", "A30_forget.json", "A32_forget.json", "B01_forget.json",
+        "B01_update.json", "B05_trajectory_ops.json", "B06_update.json", "B10_update.json", "B14_forget.json",
+        "B23_remember.json", "B26_trajectory_ops.json", "B28_update.json", "C02_remember.json", "C04_update.json",
+        "C11_remember.json", "C22_forget.json", "C28_remember.json", "C30_forget.json", "C30_remember.json",
+        "C31_remember.json", "D05_reflect.json", "D11_trajectory_ops.json", "D16_trajectory_ops.json", "D17_reflect.json",
+        "D24_reflect.json", "D25_forget.json", "D25_reflect.json", "D25_trajectory_ops.json", "E01_remember.json",
+        "E03_forget.json", "E03_remember.json", "E07_update.json", "E08_trajectory_ops.json", "E10_trajectory_ops.json",
+        "E11_update.json", "E12_reflect.json", "F01_forget.json", "F01_reflect.json", "F01_trajectory_ops.json",
+        "F07_reflect.json", "F08_update.json", "F11_update.json", "F16_reflect.json", "F16_trajectory_ops.json"
+      ]
+    },
+    {
+      "tier_id": "memops50-heldout-adjacent-longitudinal-v1",
+      "source_file_count": 50,
+      "source_ids_sha256": "836ea3b525fe3210b188263f063c17be49bf561006b540a9e0bbf64ac044887d",
+      "source_files": [
+        "A05_forget.json", "A06_remember.json", "A07_reflect.json", "A07_remember.json", "A14_trajectory_ops.json",
+        "A16_update.json", "A20_reflect.json", "A29_forget.json", "A29_update.json", "B01_reflect.json",
+        "B02_reflect.json", "B02_remember.json", "B02_update.json", "B04_trajectory_ops.json", "B14_reflect.json",
+        "B21_reflect.json", "B24_reflect.json", "B27_update.json", "C05_update.json", "C10_forget.json",
+        "C10_update.json", "C16_trajectory_ops.json", "C23_remember.json", "C27_remember.json", "C27_trajectory_ops.json",
+        "C29_trajectory_ops.json", "D05_update.json", "D11_forget.json", "D14_remember.json", "D16_forget.json",
+        "D17_remember.json", "D18_update.json", "D21_trajectory_ops.json", "D23_update.json", "E01_trajectory_ops.json",
+        "E07_forget.json", "E07_remember.json", "E08_forget.json", "E14_forget.json", "E14_remember.json",
+        "E14_trajectory_ops.json", "E15_remember.json", "F06_reflect.json", "F06_trajectory_ops.json", "F12_forget.json",
+        "F12_trajectory_ops.json", "F13_update.json", "F14_reflect.json", "F17_forget.json", "F17_reflect.json"
+      ]
+    },
+    {
+      "tier_id": "memops50-validation-adjacent-longitudinal-v1",
+      "source_file_count": 50,
+      "source_ids_sha256": "24fbfd50e43f629bb3326f138cffaa98cd41e1fd39773ffb308f684ec8edfea8",
+      "source_files": [
+        "A01_update.json", "A04_trajectory_ops.json", "A05_remember.json", "A13_forget.json", "A26_remember.json",
+        "A27_reflect.json", "A30_update.json", "A31_update.json", "A33_reflect.json", "B01_remember.json",
+        "B01_trajectory_ops.json", "B03_trajectory_ops.json", "B04_remember.json", "B11_reflect.json", "B11_trajectory_ops.json",
+        "B12_update.json", "B24_update.json", "B30_trajectory_ops.json", "C01_forget.json", "C03_reflect.json",
+        "C05_remember.json", "C21_reflect.json", "C29_reflect.json", "C31_reflect.json", "C31_trajectory_ops.json",
+        "C32_update.json", "D02_remember.json", "D05_forget.json", "D16_remember.json", "D18_reflect.json",
+        "D19_forget.json", "D20_forget.json", "D22_trajectory_ops.json", "D22_update.json", "E03_trajectory_ops.json",
+        "E03_update.json", "E10_forget.json", "E12_remember.json", "E12_trajectory_ops.json", "E13_reflect.json",
+        "E13_update.json", "E14_reflect.json", "F07_forget.json", "F07_trajectory_ops.json", "F08_remember.json",
+        "F13_remember.json", "F14_forget.json", "F15_forget.json", "F16_forget.json", "F16_update.json"
+      ]
+    }
+  ],
+  "union_source_file_count": 150,
+  "union_source_ids_sha256": "d920f4b40d22eb7cbff86af6019099475789c732079793ac644159535701fd1c"
+}

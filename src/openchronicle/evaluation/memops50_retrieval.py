@@ -254,6 +254,22 @@ def _verify_tier_manifest(
         if expected != memops50_validation.RETRIEVAL_EXPECTED:
             raise ValueError("validation MemOps-50 retrieval expectations changed")
         return tier_id, dict(memops50_validation.RETRIEVAL_EXPECTED)
+    if tier_id == "memops50-selector-dev-v2-adjacent-longitudinal-v1":
+        if len(exclusion_paths) != 1:
+            raise ValueError(
+                "selector-dev-v2 verification requires one source-only --exclusion"
+            )
+        from . import memops50_selector_dev_v2
+
+        memops50_selector_dev_v2.verify_manifest(
+            manifest_path=manifest_path,
+            source_exclusions_path=exclusion_paths[0],
+            memops_root=memops_root,
+        )
+        expected = manifest.get("retrieval_expected")
+        if expected != memops50_selector_dev_v2.RETRIEVAL_EXPECTED:
+            raise ValueError("selector-dev-v2 retrieval expectations changed")
+        return tier_id, dict(memops50_selector_dev_v2.RETRIEVAL_EXPECTED)
     raise ValueError(f"unsupported MemOps-50 retrieval tier: {tier_id!r}")
 
 
