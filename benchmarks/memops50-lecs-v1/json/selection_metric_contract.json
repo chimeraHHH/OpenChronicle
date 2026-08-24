@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "architecture_id": "memops50-lecs-selection-v1",
+  "dataset_policy": {
+    "tier_id": "memops50-selector-dev-v2-adjacent-longitudinal-v1",
+    "tier_role": "source_disjoint_non_validation_development",
+    "logical_pairs": 50,
+    "settings": [
+      "adjacent_operation",
+      "longitudinal_operation"
+    ],
+    "rows": 100,
+    "one_pair_per_source": true,
+    "excluded_source_count": 150,
+    "excluded_source_ids_sha256": "d920f4b40d22eb7cbff86af6019099475789c732079793ac644159535701fd1c",
+    "source_overlap_required": 0,
+    "one_shot": true
+  },
+  "retrieval": {
+    "ranker": "production_activity_sqlite_fts5_bm25",
+    "candidate_segment_top_k": 20,
+    "indexed_fields": "dialogue_text_only",
+    "query": "exact_benchmark_question",
+    "model_calls": 0
+  },
+  "selector": {
+    "type": "local_exact_turn_cross_encoder",
+    "model_artifact_manifest_sha256": "a819bd6ba1b527fd64947ba9282d00f2009ff7285257f167be9e768d1b74191f",
+    "provider_calls": 0,
+    "remote_io": 0,
+    "fallback_calls": 0,
+    "retries": 0,
+    "score_type": "native_single_relevance_logit_float32",
+    "score_operator": ">",
+    "score_threshold": 0.0,
+    "sigmoid_or_softmax": false,
+    "max_selected_turns": 7,
+    "score_every_candidate_turn_once": true,
+    "model_left_input": "exact_question",
+    "model_right_input": "exact_role_newline_exact_turn_content",
+    "selection_order": [
+      "raw_score_desc",
+      "bm25_rank_asc",
+      "turn_index_asc",
+      "opaque_ref_asc"
+    ],
+    "answer_presentation_order": [
+      "bm25_rank_asc",
+      "turn_index_asc"
+    ],
+    "empty_positive_set": "insufficient",
+    "nonfinite_score": "pipeline_error",
+    "overlength_pair": "pipeline_error",
+    "raw_score_trace": "ieee754_float32_hex"
+  },
+  "gates": {
+    "pipeline_valid_rate_min": 1.0,
+    "model_artifact_match_rate_min": 1.0,
+    "scored_candidate_turn_rate_min": 1.0,
+    "selector_trace_replay_rate_min": 1.0,
+    "selector_provider_call_count_max": 0,
+    "selector_remote_io_count_max": 0,
+    "selector_fallback_count_max": 0,
+    "missing_or_duplicate_score_count_max": 0,
+    "nonfinite_score_count_max": 0,
+    "truncated_pair_count_max": 0,
+    "selected_nonpositive_count_max": 0,
+    "cap_violation_count_max": 0,
+    "candidate_turn_recall_macro_at_k_min": 0.98,
+    "candidate_segment_recall_macro_at_k_min": 0.98,
+    "candidate_complete_case_recall_rate_min": 0.94,
+    "selector_oracle_efficiency_macro_min": 0.9,
+    "selected_gold_turn_recall_macro_min": 0.85,
+    "selected_gold_segment_recall_macro_min": 0.9,
+    "selected_evidence_precision_micro_min": 0.6,
+    "selected_budgeted_complete_rate_min": 0.8,
+    "selected_injected_distractor_turn_share_max": 0.05,
+    "selected_context_reduction_ratio_min": 0.9,
+    "repository_clean_required": true,
+    "repository_head_pushed_required": true
+  }
+}
